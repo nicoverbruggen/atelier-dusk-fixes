@@ -139,6 +139,21 @@ struct Counters {
   // a clean 512x512 concentration. Read it before trusting any count above.
   std::unordered_map<uint32_t, uint64_t> dimensions;
 
+  // Wall time actually spent inside the hooked entry points, measured across the
+  // whole hook body so a cache-served lock is charged its real (small) cost
+  // rather than being invisible. Without these the out-of-drain traffic had
+  // counts but no cost, and neither remaining fix could be sized: scaling the
+  // in-drain per-lock rate implied ~14 ms/frame against an observed 12.3 ms
+  // frame interval, i.e. the extrapolation was unsound and had to be replaced by
+  // direct measurement.
+  //
+  // renderNanos is inclusive of the locks made beneath it, so
+  // (renderNanos - lockNanos) is the CPU-side glyph and layout work above the
+  // atlas -- exactly the part a text-bitmap replay cache would remove and this
+  // atlas cache cannot.
+  uint64_t lockNanos = 0;
+  uint64_t renderNanos = 0;
+
   void reset() {
     *this = Counters();
   }
@@ -197,7 +212,10 @@ thread_local std::vector<SyntheticAtlasLock> syntheticAtlasLocks;
 // and do not invalidate the snapshot.
 thread_local std::vector<uintptr_t> realCandidateAtlasLocks;
 
-void logCounters(const char* scope, const Counters& c, uint64_t micros) {
+// `timeLabel` names what `micros` measures: the drain's own duration for an
+// in-drain report, the Present-to-Present interval for a per-frame one.
+void logCounters(const char* scope, const Counters& c, const char* timeLabel,
+                 uint64_t micros) {
   // Distinct textures and the worst repeat count are the two numbers that
   // decide whether a cache would pay: the Arland saving came from thousands of
   // reads collapsing onto three atlases.
@@ -209,8 +227,18 @@ void logCounters(const char* scope, const Counters& c, uint64_t micros) {
       worstTexture = entry.first;
     }
   }
+  // renderNanos is inclusive of the locks beneath it; the difference is the
+  // CPU-side glyph and layout work above the atlas, which no atlas cache can
+  // remove and a replay cache would.
+  const uint64_t lockMicros = c.lockNanos / 1000;
+  const uint64_t renderMicros = c.renderNanos / 1000;
+  const uint64_t aboveAtlasMicros =
+    c.renderNanos > c.lockNanos ? (c.renderNanos - c.lockNanos) / 1000 : 0;
   log(scope,
-    ": micros=", micros,
+    ": ", timeLabel, "=", micros,
+    " lockMicros=", lockMicros,
+    " renderMicros=", renderMicros,
+    " aboveAtlasMicros=", aboveAtlasMicros,
     " renderText=", c.renderTextCalls,
     " candidateLocks=", c.candidateLocks,
     " (read=", c.readLocks, " write=", c.writeLocks, ")",
@@ -229,8 +257,8 @@ void logCounters(const char* scope, const Counters& c, uint64_t micros) {
 // Hooks
 // ---------------------------------------------------------------------------
 
-uintptr_t statsAtlasLock(uintptr_t texture, uintptr_t output,
-                         uintptr_t level, uintptr_t mode) {
+uintptr_t atlasLockBody(uintptr_t texture, uintptr_t output,
+                        uintptr_t level, uintptr_t mode) {
   uint16_t width = 0;
   uint16_t height = 0;
   if (texture) {
@@ -347,15 +375,48 @@ uintptr_t statsAtlasUnlock(uintptr_t texture, uintptr_t b, uintptr_t c,
   return originalAtlasUnlock(texture, b, c, d);
 }
 
+// Accumulate `nanos` into whichever scope this call belongs to. Kept separate
+// from the body so the timing is charged once, at the hook boundary.
+void chargeNanos(uint64_t Counters::*field, uint64_t nanos) {
+  std::lock_guard lock(countersMutex);
+  (queueDrainDepth ? inDrain : outOfDrain).*field += nanos;
+}
+
+uintptr_t statsAtlasLock(uintptr_t texture, uintptr_t output,
+                         uintptr_t level, uintptr_t mode) {
+  if (!statsActive)
+    return atlasLockBody(texture, output, level, mode);
+  const auto started = std::chrono::steady_clock::now();
+  const uintptr_t result = atlasLockBody(texture, output, level, mode);
+  chargeNanos(&Counters::lockNanos, uint64_t(
+    std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now() - started).count()));
+  return result;
+}
+
 uintptr_t statsRenderText(uintptr_t a, uintptr_t b, uintptr_t c,
                           uintptr_t d) {
-  if (statsActive) {
+  if (!statsActive) {
+    ++renderTextDepth;
+    const uintptr_t result = originalRenderText(a, b, c, d);
+    --renderTextDepth;
+    return result;
+  }
+  {
     std::lock_guard lock(countersMutex);
     (queueDrainDepth ? inDrain : outOfDrain).renderTextCalls++;
   }
+  // Only the outermost renderText is timed: nested calls would double-count into
+  // the same total.
+  const bool outermost = renderTextDepth == 0;
+  const auto started = std::chrono::steady_clock::now();
   ++renderTextDepth;
   const uintptr_t result = originalRenderText(a, b, c, d);
   --renderTextDepth;
+  if (outermost)
+    chargeNanos(&Counters::renderNanos, uint64_t(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - started).count()));
   return result;
 }
 
@@ -394,7 +455,7 @@ void statsQueueDrain(void* self) {
   // one of those would bury the menu-construction drains that matter.
   if (inDrain.candidateLocks || inDrain.renderTextCalls) {
     log("drain #", index);
-    logCounters("  inDrain", inDrain, micros);
+    logCounters("  inDrain", inDrain, "drainMicros", micros);
   }
 }
 
@@ -542,6 +603,9 @@ bool initializeAtlasFix() {
   return installed;
 }
 
+// Previous Present, for the frame interval. Only read under countersMutex.
+std::chrono::steady_clock::time_point g_lastPresent;
+
 void atlasFixFrameTick() {
   if (cacheActive) {
     // The frame boundary IS the cache lifetime. Discarding every snapshot here
@@ -556,10 +620,19 @@ void atlasFixFrameTick() {
   if (!statsActive)
     return;
   std::lock_guard lock(countersMutex);
+  const auto now = std::chrono::steady_clock::now();
+  // Frame interval, so the per-frame text cost can be read as a share of the
+  // frame budget instead of in isolation. Zero on the first frame.
+  const uint64_t frameMicros =
+    g_lastPresent == std::chrono::steady_clock::time_point{}
+      ? 0
+      : uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
+          now - g_lastPresent).count());
+  g_lastPresent = now;
   // Locks outside any drain. In Ayesha this is the majority of them, which is
   // what selected the frame-scoped lifetime over the queue-scoped one.
   if (outOfDrain.candidateLocks || outOfDrain.renderTextCalls) {
-    logCounters("outOfDrain (frame)", outOfDrain, 0);
+    logCounters("outOfDrain (frame)", outOfDrain, "frameMicros", frameMicros);
     if (cacheActive)
       log("    cache: hits=", atlasCacheHits.load(std::memory_order_relaxed),
           " realReads=", atlasRealReads.load(std::memory_order_relaxed));

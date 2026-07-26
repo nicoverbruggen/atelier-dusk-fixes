@@ -11,7 +11,14 @@ This file tracks work in progress and ideas under consideration.
   is what caught the Arland version out, and is the case this port has never
   exercised. `DUSK_ATLAS_CACHE=0` is the escape hatch if a report arrives.
   See `TECHNICAL.md` §4.2 for the residual risk being carried.
-- **Fix the main-menu per-frame re-render.** Measured but unaddressed: the main
+- **Reduce out-of-drain snapshot churn (best remaining win).** Steady state does
+  27 real atlas reads per frame where 3 should do, each a ~1 MB snapshot rebuild,
+  costing ~3 ms of a ~4 ms frame (`TECHNICAL.md` §2.5). Understand the write-lock
+  pairing first — the 2:1 write-to-read ratio is the probable cause and is still
+  unexplained. Do **not** simply relax the unmatched-unlock invalidation: that rule
+  is what stops stale glyphs, and glyph correctness is unvalidated (§4.2).
+- **Fix the main-menu per-frame re-render** (smaller than it looked: only ~6% of
+  steady-state text cost is above the atlas, §2.5). Measured but unaddressed: the main
   menu re-renders two unchanged strings every frame for as long as it is open
   (`TECHNICAL.md` §2.3). Needs the Arland text-bitmap replay cache, but
   `BalloonBucMode` is the wrong scope signal for a menu (§3) — the open question
@@ -32,12 +39,13 @@ This file tracks work in progress and ideas under consideration.
   Done — they do not (§1.3). Menu work is Ayesha-only.
 - ~~Decide the atlas cache lifetime.~~ Done by measurement: frame-scoped, because
   72% of candidate locks fall outside the queue drain (§2.3).
-- Add out-of-drain and Present-to-Present timing to the diagnostic. Currently only
-  the drain is timed, so the per-frame drip has counts but no cost, and neither
-  remaining fix can be sized properly (§2.4).
-- Explain the 2:1 write-to-read lock ratio. Arland documented one write plus one
-  read per glyph; Ayesha issues two writes per read (§2.1). The cache is correct
-  either way, but the extra write mapping is unaccounted for.
+- ~~Add out-of-drain and Present-to-Present timing to the diagnostic.~~ Done:
+  reports now carry `frameMicros`, `lockMicros`, `renderMicros` and
+  `aboveAtlasMicros` (§2.4). Not yet run — a `DUSK_ATLAS_STATS=1` session is what
+  sizes the main-menu re-render fix and says how much the cache left behind.
+- Explain the 2:1 write-to-read lock ratio (§2.1). No longer cosmetic: it is the
+  probable cause of the snapshot churn above, because the cache's LIFO
+  lock/unlock pairing assumes Arland's one-write-plus-one-read per glyph.
 - ~~Resolve the `BalloonBucMode` destructor.~~ Done: `0x20cdc0` EN / `0x211b90`
   ML, resolved from vtable cross-references after the homologue vote came back
   MISMATCH, with the method validated against Meruru first (§3).

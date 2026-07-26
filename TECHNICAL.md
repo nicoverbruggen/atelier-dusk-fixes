@@ -309,15 +309,85 @@ correctness question about invalidation, not just a lifetime constant.
 The largest single event in the log is a frame boundary with `renderText=115`
 and 5151 candidate locks, 1,146 ms after the preceding Present.
 
-### 2.4 What this run still does not measure
+### 2.4 Timing added after those runs
 
-Every out-of-drain line reports `micros=0`: only the queue drain is timed. So
-there are lock *counts* outside the drain but no *cost*, and it remains unproven
-that the 132-locks-per-frame drip consumes meaningful frame time. Scaling the
-in-drain per-lock rate would imply ~14 ms per frame, which exceeds the observed
-12.3 ms frame interval and is therefore unsound — the out-of-drain per-lock cost
-must differ. Direct timing of the out-of-drain path, plus the Present-to-Present
-interval, is needed before sizing either fix.
+Both runs above reported `micros=0` outside the drain: only the queue drain was
+timed, so out-of-drain traffic had counts but no cost. That could not be resolved
+by arithmetic — scaling the in-drain per-lock rate implied ~14 ms per frame
+against an observed 12.3 ms frame interval, so the extrapolation was unsound and
+the per-lock cost outside the drain had to differ.
+
+The diagnostic now measures it directly. Every report carries:
+
+| Field | Meaning |
+|---|---|
+| `drainMicros` / `frameMicros` | the drain's own duration, or the Present-to-Present interval |
+| `lockMicros` | wall time inside the atlas-lock hook, whole body, so cache-served locks are charged their real cost rather than vanishing |
+| `renderMicros` | wall time inside the text renderer, outermost call only |
+| `aboveAtlasMicros` | `renderMicros - lockMicros`: the CPU-side glyph and layout work *above* the atlas |
+
+`aboveAtlasMicros` is the number that sizes the remaining work. It is precisely
+what the atlas cache cannot touch and a text-bitmap replay cache would remove, so
+comparing it against `frameMicros` says whether the per-frame re-render is worth
+fixing and how much is left on the table.
+
+### 2.5 Timed run: the cache holds, and the remaining cost is not where expected
+
+English build, cache on (shipping configuration), `DUSK_ATLAS_STATS=1`.
+
+Menu construction, in-drain:
+
+| Candidate locks | `drainMicros` | `lockMicros` | `aboveAtlasMicros` |
+|---:|---:|---:|---:|
+| 342 | 8.7 ms | 0.05 ms | 0.55 ms |
+| 1527 | 25.0 ms | 2.7 ms | 2.6 ms |
+| 2385 | 38.5 ms | 3.0 ms | 4.2 ms |
+
+Steady state, per frame, main menu open and unchanging (132 candidate locks,
+`renderText=2`, the class that made up 84 of 95 frames in §2.3):
+
+| `frameMicros` | `lockMicros` | `renderMicros` | `aboveAtlasMicros` |
+|---:|---:|---:|---:|
+| ~3.9–4.7 ms | ~3.0 ms | ~3.2 ms | ~0.20 ms |
+
+**The cache holds up.** Menu drains match the untimed run (38.5 ms against 37.6 ms,
+so the instrumentation costs about 1 ms over 2385 locks). More striking, the
+steady-state frame interval fell from the ~12.3 ms measured without the cache
+(§2.3) to ~4 ms — roughly 81 fps to 250 fps while sitting in the main menu.
+
+**But the remaining cost is not above the atlas.** `aboveAtlasMicros` is only
+~0.20 ms of a ~3.2 ms text-render cost — about 6%. The CPU-side glyph and layout
+work is *not* the bottleneck in steady state, which contradicts the expectation
+recorded in §3 that a text-bitmap replay cache is the main remaining win. Almost
+all the cost is inside the atlas-lock path itself.
+
+**Why: the cache is churning out of drain.** Per steady-state frame it serves 105
+hits against **27 real reads** — an 80% hit rate, against 95.5% across the whole
+session. Three atlases with a frame-scoped lifetime should need at most three real
+reads per frame, so 27 means snapshots are being dropped and rebuilt roughly nine
+times per atlas per frame. Every rebuild is a fresh ~1 MB copy of a 512×512
+B8G8R8A8 surface, which is what makes an out-of-drain lock cost ~23 µs against
+~1.25 µs in-drain — the same diagnostic overhead applies to both, so that 18×
+contrast is real work, not measurement.
+
+The likely mechanism ties back to the **2:1 write-to-read ratio** flagged as
+unexplained in §2.1. The invalidation rule drops a snapshot on any unmatched real
+unlock, and the LIFO lock/unlock pairing it relies on was derived from Arland's
+one-write-plus-one-read-per-glyph pattern. Ayesha issues two writes per read, so
+that pairing does not hold and unmatched unlocks — hence invalidations — are
+expected. The anomaly and the churn are probably the same fact.
+
+This is the highest-value remaining lead: taking 27 real reads per frame down
+toward 3 addresses ~75% of the frame time in a static menu, and it is a larger
+prize than the replay cache. It must not be pursued by weakening the invalidation
+rule blindly, though — that rule is what prevents stale glyphs, and glyph
+correctness is still unvalidated (§4.2). The first step is understanding the
+write-lock pairing, not relaxing the response to it.
+
+Caveat on absolute values: `lockMicros` spans the whole hook body, including the
+diagnostic's own mutex and two hash-map updates per lock, so treat it as an upper
+bound. The in-drain/out-of-drain contrast is the sound signal, since that overhead
+is identical on both sides.
 
 ---
 

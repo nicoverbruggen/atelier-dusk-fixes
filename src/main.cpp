@@ -11,7 +11,7 @@
 #include <array>
 #include <cstring>
 
-#include "atlas_stats.h"
+#include "atlas_fix.h"
 #include "game.h"
 #include "log.h"
 #include "util.h"
@@ -84,7 +84,7 @@ D3D11Proc loadSystemD3D11() {
     reinterpret_cast<PFN_D3D11CreateDeviceAndSwapChain>(
       GetProcAddress(libD3D11, "D3D11CreateDeviceAndSwapChain"));
 
-  dusk::initializeAtlasStats();
+  dusk::initializeAtlasFix();
   return d3d11Proc;
 }
 
@@ -96,7 +96,7 @@ PFN_IDXGISwapChain_Present originalPresent = nullptr;
 HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* swapChain,
                                         UINT syncInterval, UINT flags) {
   // The frame boundary the diagnostic attributes out-of-drain locks to.
-  dusk::atlasStatsFrameTick();
+  dusk::atlasFixFrameTick();
   return originalPresent(swapChain, syncInterval, flags);
 }
 
@@ -104,7 +104,7 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* swapChain,
 // instance exists. Called after each successful device/swapchain creation.
 void hookPresent(IDXGISwapChain* swapChain) {
   static bool done = false;
-  if (done || !swapChain || !dusk::initializeAtlasStats())
+  if (done || !swapChain || !dusk::initializeAtlasFix())
     return;
   auto** vtable = *reinterpret_cast<void***>(swapChain);
   // IDXGISwapChain::Present is slot 8 (IUnknown 0-2, IDXGIObject 3-6,
@@ -117,6 +117,64 @@ void hookPresent(IDXGISwapChain* swapChain) {
     return;
   done = true;
   log("Present hook installed");
+}
+
+using PFN_IDXGIFactory_CreateSwapChain = HRESULT (STDMETHODCALLTYPE *) (
+  IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**);
+
+PFN_IDXGIFactory_CreateSwapChain originalCreateSwapChain = nullptr;
+
+HRESULT STDMETHODCALLTYPE hookedCreateSwapChain(
+    IDXGIFactory* factory, IUnknown* device,
+    DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** swapChain) {
+  const HRESULT result = originalCreateSwapChain(factory, device, desc, swapChain);
+  if (SUCCEEDED(result) && swapChain && *swapChain)
+    hookPresent(*swapChain);
+  return result;
+}
+
+// Ayesha reaches its swap chain through D3D11CreateDevice followed by
+// IDXGIFactory::CreateSwapChain, not D3D11CreateDeviceAndSwapChain, so hooking
+// only the latter leaves Present unhooked and the frame boundary never fires.
+// The first diagnostic run hit exactly that: out-of-drain counters accumulated
+// and were never flushed, which reads as "no out-of-drain locks" when it
+// actually means "never looked". The Arland proxy hooks both routes for the same
+// reason.
+void hookFactoryForSwapChain(ID3D11Device* device) {
+  if (!device || originalCreateSwapChain || !dusk::initializeAtlasFix())
+    return;
+  IDXGIDevice* dxgiDevice = nullptr;
+  IDXGIAdapter* adapter = nullptr;
+  IDXGIFactory* factory = nullptr;
+  HRESULT result = device->QueryInterface(
+    IID_IDXGIDevice, reinterpret_cast<void**>(&dxgiDevice));
+  if (SUCCEEDED(result))
+    result = dxgiDevice->GetAdapter(&adapter);
+  if (SUCCEEDED(result))
+    result = adapter->GetParent(
+      IID_IDXGIFactory, reinterpret_cast<void**>(&factory));
+  if (FAILED(result) || !factory) {
+    log("Failed to obtain DXGI factory for the frame boundary");
+  } else {
+    // IDXGIFactory::CreateSwapChain is slot 10.
+    void** vtable = *reinterpret_cast<void***>(factory);
+    MH_STATUS status = MH_CreateHook(vtable[10],
+      reinterpret_cast<void*>(&hookedCreateSwapChain),
+      reinterpret_cast<void**>(&originalCreateSwapChain));
+    if (!status || status == MH_ERROR_ALREADY_CREATED)
+      status = MH_EnableHook(vtable[10]);
+    if (status)
+      log("Failed to hook IDXGIFactory::CreateSwapChain: ",
+        MH_StatusToString(status));
+    else
+      log("CreateSwapChain hook installed");
+  }
+  if (factory)
+    factory->Release();
+  if (adapter)
+    adapter->Release();
+  if (dxgiDevice)
+    dxgiDevice->Release();
 }
 
 }  // namespace atfix
@@ -139,9 +197,15 @@ DLLEXPORT HRESULT __stdcall D3D11CreateDevice(
   if (!proc.D3D11CreateDevice)
     return E_FAIL;
 
-  return (*proc.D3D11CreateDevice)(pAdapter, DriverType, Software, Flags,
+  HRESULT hr = (*proc.D3D11CreateDevice)(pAdapter, DriverType, Software, Flags,
     pFeatureLevels, FeatureLevels, SDKVersion, ppDevice, pFeatureLevel,
     ppImmediateContext);
+
+  // Ayesha's route: the swap chain arrives later, via the DXGI factory.
+  if (SUCCEEDED(hr) && ppDevice && *ppDevice)
+    atfix::hookFactoryForSwapChain(*ppDevice);
+
+  return hr;
 }
 
 DLLEXPORT HRESULT __stdcall D3D11CreateDeviceAndSwapChain(

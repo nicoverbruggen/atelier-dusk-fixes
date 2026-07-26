@@ -4,22 +4,46 @@ This file tracks work in progress and ideas under consideration.
 
 ## Live
 
-- **Run the Ayesha atlas diagnostic.** Build, deploy `d3d11.dll` next to the
-  game executable, launch with `DUSK_ATLAS_STATS=1` on the English build, open
-  Status and Synthesis, and read `dusk-fix.log`. This decides whether the Arland
-  atlas cache is worth porting and, if so, which lifetime it needs (queue-scoped
-  as Totori/Meruru, or frame-scoped as Rorona). Everything below it is blocked on
-  this. See `TECHNICAL.md` §1.8 and §2.
-- After that run: port the atlas cache if the numbers justify it, or record the
-  negative result in `TECHNICAL.md` and close the item.
+- **Glyph-check the atlas cache before release.** It now ships ON by default, so
+  this is the one gate left between it and users. Play through and confirm **no
+  glyph is wrong or missing** — the cache's failure mode is corrupted text.
+  Include text the atlas has to page in; uncommon kanji on the multilingual build
+  is what caught the Arland version out, and is the case this port has never
+  exercised. `DUSK_ATLAS_CACHE=0` is the escape hatch if a report arrives.
+  See `TECHNICAL.md` §4.2 for the residual risk being carried.
+- **Fix the main-menu per-frame re-render.** Measured but unaddressed: the main
+  menu re-renders two unchanged strings every frame for as long as it is open
+  (`TECHNICAL.md` §2.3). Needs the Arland text-bitmap replay cache, but
+  `BalloonBucMode` is the wrong scope signal for a menu (§3) — the open question
+  is what scope to key it on, not how to write the cache.
+
+- **Validate the field-jitter port (Ayesha).** First confirm the symptom exists:
+  run at a high refresh rate and stand on a step or ledge. Then
+  `DUSK_FIELD_TRACE=1` to confirm the controller offsets read as plausible values
+  on this build, then `DUSK_FIELD_ENGINE_FIX=1`, and only then add
+  `DUSK_FIELD_STABILIZER=1`. The stabilizer writes into live game state at
+  unconfirmed offsets, so the trace step is not optional (`TECHNICAL.md` §5).
 
 ## Investigation
 
-- ~~Ayesha DX: locate the queue-drain / text-renderer / atlas lock–unlock
-  homologs.~~ Done — both builds mapped and corroborated, `TECHNICAL.md` §1.7.
+- ~~Locate Ayesha's queue-drain / text-renderer / atlas lock–unlock homologs.~~
+  Done, both builds, corroborated (`TECHNICAL.md` §1.7).
 - ~~Determine whether Escha & Logy and Shallie share the menu-hitch pattern.~~
-  Done — they do not; their text-rendering layer diverged and only the shared
-  middleware lock stub survives (`TECHNICAL.md` §1.3). Menu work is Ayesha-only.
+  Done — they do not (§1.3). Menu work is Ayesha-only.
+- ~~Decide the atlas cache lifetime.~~ Done by measurement: frame-scoped, because
+  72% of candidate locks fall outside the queue drain (§2.3).
+- Add out-of-drain and Present-to-Present timing to the diagnostic. Currently only
+  the drain is timed, so the per-frame drip has counts but no cost, and neither
+  remaining fix can be sized properly (§2.4).
+- Explain the 2:1 write-to-read lock ratio. Arland documented one write plus one
+  read per glyph; Ayesha issues two writes per read (§2.1). The cache is correct
+  either way, but the extra write mapping is unaccounted for.
+- ~~Resolve the `BalloonBucMode` destructor.~~ Done: `0x20cdc0` EN / `0x211b90`
+  ML, resolved from vtable cross-references after the homologue vote came back
+  MISMATCH, with the method validated against Meruru first (§3).
+- Port the Meruru conversation fix for Ayesha's field conversations. Both ctor and
+  dtor are now verified, so this is a direct port. Unmeasured though — no run so
+  far had a conversation on screen, so confirm the symptom first.
 - Fingerprint the remaining four Dusk executables (Escha EN + ML, Shallie EN +
   ML): SHA-256, `.text` sizes, CRT generation, launcher relationship. Ayesha's
   two are done.
@@ -37,7 +61,10 @@ This file tracks work in progress and ideas under consideration.
 
 ## Notes for whoever picks this up
 
-- Ayesha is an incremental-link build: `callsites` on a real function reports
-  only its jump thunk. Re-run `callsites` on the thunk address. This has already
-  produced one wrong-looking negative during the mapping above — see
-  `TECHNICAL.md` §1.4.
+- Ayesha is an incremental-link build: a call-site search on a real function
+  reports only its jump thunk. Search the thunk address instead. This has already
+  produced one wrong-looking negative — see `TECHNICAL.md` §1.4.
+- Ayesha creates its swap chain via `D3D11CreateDevice` +
+  `IDXGIFactory::CreateSwapChain`, not `D3D11CreateDeviceAndSwapChain`. Hooking
+  only the latter silently costs you the frame boundary, and the resulting log
+  looks like a measurement rather than a gap (§2.2).

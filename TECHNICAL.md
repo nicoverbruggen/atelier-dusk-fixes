@@ -4,9 +4,11 @@ Authoritative record of what has been established about the Dusk DX ports and
 what this repository does about it. Same policy as the Arland project: this file
 stays in sync with the code, and every address pack records how it was derived.
 
-Status: no runtime-validated fix ships yet. The menu-hitch investigation below
-has a complete, corroborated **static** mapping for Ayesha; the diagnostic pass
-exists to decide whether the Arland fix applies before any cache is ported.
+Status: the Ayesha menu hitch is mapped statically (§1), **measured** (§2), and
+fixed by the font-atlas read cache in §4, which ships **on by default** — the one
+shipping fix in this repository. A second, distinct problem, the main menu
+re-rendering its text every frame, is measured and partly mitigated by that cache
+but not properly fixed (§2.3, §3). Everything else here is opt-in and unvalidated.
 
 ---
 
@@ -165,26 +167,25 @@ unlock's callers were enumerated through their jump thunks (§1.4). The Arland
 source addresses used were Meruru's queue drain, text renderer and atlas lock,
 and Rorona's atlas unlock implementation.
 
-### 1.8 What is NOT established
+### 1.8 What the static mapping did and did not settle
 
-The static mapping proves the *code path* exists in the same shape. It does
-**not** prove the hitch has the same *cause* in Ayesha, and nothing here has
-been observed at runtime.
+The mapping proves the *code path* exists in the same shape. On its own it did
+**not** prove the hitch has the same *cause* in Ayesha: how many candidate reads
+occur, whether they are redundant, what they cost, and whether Ayesha's drain
+brackets menu construction the way Totori's and Meruru's do were all open.
 
-Specifically unmeasured: how many candidate atlas reads Ayesha issues per
-queue drain, whether they are redundant, how much wall time they cost, and
-whether Ayesha's drain brackets menu construction the way Totori's and
-Meruru's do. The Arland investigation repeatedly disproved plausible static
-hypotheses with a single instrumented run — Rorona's out-of-drain batch, which
-forced the frame-scoped lifetime, was found that way and would not have been
-predicted from addresses.
+That mattered, because the Arland investigation repeatedly disproved plausible
+static hypotheses with a single instrumented run — Rorona's out-of-drain batch,
+which forced the frame-scoped lifetime, was found that way and could not have
+been predicted from addresses.
 
-The atlas cache is therefore **not** ported yet. §2 ships the measurement
-instead.
+§2 answered these by measurement, and the answer was not the one the static
+picture suggested: Ayesha turned out to be the frame-scoped case, and to have a
+second problem the Arland menu fix does not address at all.
 
 ---
 
-## 2. Diagnostic pass (what ships now)
+## 2. Diagnostic pass
 
 `DUSK_ATLAS_STATS=1` installs the four verified hooks on a recognized Ayesha
 build in **counting mode only**: no snapshot is taken, no read is served from
@@ -207,9 +208,302 @@ elsewhere and the port is not worth doing.
 Reproduction: open Status and Synthesis on the English build, which are the
 operations the Arland numbers were measured on, so the two are comparable.
 
+### 2.1 First measured run (English build)
+
+The pattern reproduces, and Ayesha is worse than any Arland game.
+
+| Drain | Wall time | renderText | Candidate locks | read / write | Distinct textures |
+|---|---:|---:|---:|---:|---:|
+| #658 | 39.2 ms | 18 | 342 | 114 / 228 | 3 |
+| #762 | 266.7 ms | 262 | 2385 | 795 / 1590 | 3 |
+| #943 | 248.4 ms | 262 | 2385 | 795 / 1590 | 3 |
+
+Findings:
+
+- **The dimension offsets hold.** 100% of candidate locks report 512×512, so the
+  `+0x40/+0x42` reads carried over from the Arland middleware are correct in
+  Ayesha and the counts above are trustworthy.
+- **Three atlases, thousands of locks.** 2385 locks land on 3 distinct
+  middleware textures, split almost evenly (worst repeat 798). This is the
+  Arland shape exactly — Totori made 2,331 candidate reads against 3 atlases,
+  Meruru 3,030 — so the same collapse to three real reads is available.
+- **The cost is larger here.** Arland's worst comparable drains were 82–117 ms;
+  Ayesha's repeated drain is 248–267 ms. #762 and #943 are the same operation
+  repeated with byte-identical counts, which is the signature of work that does
+  not depend on changing state.
+- **Locks and unlocks balance exactly** (2385 + 262 = 2647), confirming the
+  unlock stub hook observes the same population as the lock hook.
+- **The read/write ratio differs from Arland.** Ayesha issues two write-mode
+  locks per read-mode lock, where the Arland text renderer was documented as one
+  write (rasterize) plus one read (blit back) per glyph. Both modes are served
+  from a snapshot in the Arland design, so a port would still collapse them, but
+  the extra write mapping is unexplained and should be understood before relying
+  on that.
+- **Exactly one non-candidate lock per renderText call** (18/18, 262/262),
+  most likely a probe call with a null output pointer. Harmless, but the 1:1
+  correlation is too clean to be coincidence and may identify a size-query
+  entry point worth knowing about.
+
+### 2.2 Why the first run could not settle the lifetime
+
+The first run produced **no out-of-drain report at all**, which looks like
+evidence for the queue-scoped (Totori/Meruru) lifetime. It is not.
+
+Ayesha reaches its swap chain through `D3D11CreateDevice` followed by
+`IDXGIFactory::CreateSwapChain`, not `D3D11CreateDeviceAndSwapChain`. The first
+build hooked only the latter, so Present was never hooked, the frame tick never
+fired, and the out-of-drain counters accumulated without ever being flushed or
+logged. The absence of those lines means "never looked", not "nothing there" —
+and out-of-drain locks are precisely what decides between the queue-scoped
+lifetime and Rorona's frame-scoped one.
+
+Both routes are hooked as of the follow-up build (the log now reports
+`CreateSwapChain hook installed`). This question stays open until a run with that
+build reports the out-of-drain line.
+
+### 2.3 Second run: the lifetime is settled, and there are two problems
+
+With both swap-chain routes hooked, the frame boundary fires and the picture
+changes substantially. Session: main menu only, opened repeatedly.
+
+| Scope | Frames / drains | Candidate locks | Share |
+|---|---:|---:|---:|
+| Out of drain | 95 frames | 18,876 | 72% |
+| In drain | 4 drains | 7,497 | 28% |
+
+**The cache lifetime is decided: Ayesha needs Rorona's frame-scoped lifetime.**
+Most font-atlas traffic happens outside the queue drain, so the queue-scoped
+Totori/Meruru lifetime would miss the majority of the work. The first run's
+apparent absence of out-of-drain activity was the unhooked-Present artifact
+described in §2.2, not a measurement.
+
+The in-drain figures reproduced exactly across both runs — three drains at 2385
+candidate locks and 248 ms — so that operation is deterministic and the two
+sessions are comparable on it.
+
+**The out-of-drain traffic is not menu construction.** 84 of the 95 frames carry
+*identical* counts: 132 candidate locks, `renderText=2`, at ~12.3 ms intervals
+(~81 fps). That is two strings re-rendered from scratch every frame, unchanged,
+for as long as the menu is on screen — 66 candidate locks per string per frame.
+The maintainer confirmed the session was the main menu only, with no field-map
+conversation involved.
+
+This is mechanically the same defect the Arland project found in Meruru's
+conversation balloon — a per-frame re-entry into the text-render path for text
+that has not changed — but the trigger here is the **main menu itself**, which
+makes it a far more commonly hit path than Meruru's balloon was.
+
+So Ayesha has two separable problems, needing the two different Arland
+mechanisms:
+
+| Problem | Evidence | Arland mechanism that applies |
+|---|---|---|
+| Menu *construction* cost | 2385 locks / 248 ms per drain, 3 atlases | Atlas read cache, **frame-scoped** |
+| Menu *steady-state* re-render | 132 locks/frame, 2 unchanged strings, every frame | Text-bitmap replay cache (`cachedRenderText`), lifetime extended across frames |
+
+The second one needs more than a lift-and-shift: Arland's replay cache was
+queue-scoped and had to be widened for Meruru's balloon. Here it must survive
+across frames for as long as the menu displays unchanged text, which is a
+correctness question about invalidation, not just a lifetime constant.
+
+The largest single event in the log is a frame boundary with `renderText=115`
+and 5151 candidate locks, 1,146 ms after the preceding Present.
+
+### 2.4 What this run still does not measure
+
+Every out-of-drain line reports `micros=0`: only the queue drain is timed. So
+there are lock *counts* outside the drain but no *cost*, and it remains unproven
+that the 132-locks-per-frame drip consumes meaningful frame time. Scaling the
+in-drain per-lock rate would imply ~14 ms per frame, which exceeds the observed
+12.3 ms frame interval and is therefore unsound — the out-of-drain per-lock cost
+must differ. Direct timing of the out-of-drain path, plus the Present-to-Present
+interval, is needed before sizing either fix.
+
 ---
 
-## 3. Hook boundaries
+## 3. Is the Meruru dialog fix transferable?
+
+Partly — the mechanism yes, the trigger no.
+
+The Arland project fixed Meruru's field-map conversation slowdown by widening its
+text-bitmap replay cache (`cachedRenderText`, keyed on renderer, font, atlas,
+style and the exact string) from queue-scoped to cross-frame, scoped by hooking
+the `BalloonBucMode` constructor and destructor so the wider lifetime applies
+only while a balloon is live.
+
+**Ayesha has the same class, and both entry points are now resolved.** RTTI
+confirms a full balloon family, including `BalloonBucMode` (primary vtable RVA
+`0x00bdf0d0` EN, `0x00c1ba08` ML):
+
+| Entry point | Meruru EN | Ayesha EN | Ayesha ML |
+|---|---:|---:|---:|
+| `BalloonBucMode` ctor | `0x1e8c40` | `0x20cc60` | `0x211a30` |
+| `BalloonBucMode` dtor | `0x1e8d30` | `0x20cdc0` | `0x211b90` |
+
+The ctor came from homologue matching (MATCH, prologue byte-identical). The dtor
+did **not**: its homologue vote was a reverse MISMATCH, because Ayesha's codegen
+pushes `rdi` where Meruru pushes `rbx` (`40 57` vs `40 53`), which is enough to
+break the body comparison.
+
+It was resolved instead from **RIP-relative references to the class vtable**,
+which is the right discriminator for a constructor/destructor pair: both load
+their class's vtable, and nothing else does. Every build has exactly **two** such
+references. The method was validated before being trusted — on Meruru it returns
+`0x1e8c40` and `0x1e8d30`, precisely the two addresses the Arland project hooks.
+
+Note that a vtable *slot* read would have been the wrong recipe: the hooked
+destructor is not virtual, and it is not in the vtable in Meruru either. Ayesha's
+vtable slots additionally point at incremental-link thunks (§1.4) rather than
+real functions.
+
+Prologues, 24 bytes, **shared across both builds** — the window ends exactly at
+the vtable `lea` and so excludes its displacement. (Arland needs per-build arrays
+here; Ayesha does not.)
+
+```
+ctor  48 89 4c 24 08 57 48 83 ec 30 48 c7 44 24 20 fe ff ff ff 48 89 5c 24 48
+dtor  40 57 48 83 ec 30 48 c7 44 24 20 fe ff ff ff 48 89 5c 24 40 48 8b d9 48
+```
+
+Both are verified `.pdata` function starts: ctor `0x117` bytes, dtor `0x91`, and
+identical sizes in both builds.
+
+Two separate pieces of work, then:
+
+1. **A replay cache for the main menu.** The mechanism transfers directly, but it
+   needs a scope signal, and `BalloonBucMode` is the wrong one. Simply making the
+   replay cache permanent is not acceptable: the cache key includes the string, so
+   stale entries survive only as long as invalidation is provably complete.
+2. **The Meruru conversation fix proper.** Both addresses are now resolved and
+   verified, so this is implementable as a direct port. Independent of the above,
+   and probably a real win on Ayesha's conversations, but still unmeasured — no
+   run in this investigation had a field conversation on screen, so the symptom
+   is assumed rather than observed.
+
+Note that the atlas cache in §4 already reduces the steady-state cost without
+either of these: it collapses the per-frame 132 candidate locks to at most three
+real reads per frame. What it does not remove is the CPU-side glyph work above
+the atlas, which is what a replay cache would eliminate.
+
+---
+
+## 4. The atlas read cache (ships on by default)
+
+`DUSK_ATLAS_CACHE=1` on Ayesha. Opt-in, off by default, capability-gated to
+Ayesha; Escha and Shallie are hard-off.
+
+Structure follows the Arland implementation, with the **frame-scoped** lifetime
+(Rorona's), chosen because 72% of Ayesha's candidate locks fall outside the queue
+drain (§2.3). The queue drain deliberately neither arms nor clears the cache;
+Present owns both, so snapshots survive across drains within a frame and never
+across a frame boundary.
+
+Rules carried over from Arland, each for a reason that was paid for there:
+
+- A lock is eligible only while the verified text renderer is on the stack, with
+  a real output pointer, on a 512×512 middleware texture.
+- **Snapshots are created only from read-mode locks.** A write mapping is
+  discard-mapped and its contents undefined on entry; snapshotting one captures
+  uninitialized memory and poisons the read that follows. The first candidate lock
+  of each atlas is a write, so this is the difference between working and a
+  corrupted glyph.
+- **Both modes are served** from an existing snapshot. Writer and reader name the
+  same middleware object, so one snapshot stands in for the whole
+  rasterize-then-read-back round trip; serving reads only would forfeit most of
+  the saving.
+- Synthetic locks are tracked per thread and each holds its snapshot alive by
+  `shared_ptr`, so a clear or invalidation on another thread cannot free a buffer
+  a caller is still reading. Only a matching synthetic unlock is suppressed.
+- **Any unmatched real unlock invalidates that texture's snapshot.** The glyph
+  atlas is a single mutable, demand-paged surface; without this, a glyph paged in
+  after the snapshot is served stale and blits blank. This is the Arland
+  missing-kanji bug.
+- Hooks arm behaviour only after all four install, so a partial install is
+  pass-through rather than half-caching.
+
+### 4.1 Measured effect
+
+English build, same operations with the cache off and on:
+
+| Menu build | Cache off | Cache on | Reduction |
+|---|---:|---:|---:|
+| 2385 candidate locks | 248.4 ms | 38.2 ms | 85% |
+| 1527 candidate locks | — | 24.1 ms | — |
+| 342 candidate locks | 39.0 ms | 8.8 ms | 78% |
+
+Session totals: 63,517 cache hits against 3,029 real reads, a 95.5% hit rate. For
+comparison the Arland cache reduced its equivalent drains by 34–48%; the larger
+gain here reflects Ayesha's greater redundancy, not a better cache.
+
+The residual ~38 ms is CPU-side glyph and layout construction above the atlas,
+which this cache cannot reach. Arland reached the same conclusion by measurement
+there: its remaining drain time was construction, not GPU transfer.
+
+### 4.2 Risk accepted in shipping it on by default
+
+The failure mode is wrong or missing glyphs, and it has **not** been validated by
+a playthrough. The decision to ship it on is deliberate and the maintainer's; what
+follows is the residual risk it accepts.
+
+The specific untested case is a glyph the atlas must page in mid-frame. The
+invalidation rule in §4 exists for it — any unmatched real unlock drops that
+texture's snapshot — and it is the rule that fixed the equivalent Arland
+missing-kanji bug, so the design anticipates the case. What is missing is
+confirmation that Ayesha's write path routes through the same unlock, which is a
+runtime question. The multilingual build is the higher-risk one, since uncommon
+kanji page in far more often than Latin.
+
+Mitigation if a report arrives: `DUSK_ATLAS_CACHE=0` restores the game's own
+behaviour without a rebuild, and the log records the cache's hit/real-read split
+for any run.
+
+---
+
+## 5. High-refresh field jitter (ported, unvalidated)
+
+Arland's field-map jitter fix — above roughly 115 fps the character buzzes
+vertically while standing on a step or ledge, because a collision-resolver
+constant means a per-frame *distance* that was only ever right at 60 fps — ports
+cleanly on addresses. Whether the symptom exists in Ayesha has **not** been
+measured.
+
+All three anchors resolved, and the threshold check is the strong one:
+
+| Anchor | Ayesha EN | Ayesha ML | How |
+|---|---:|---:|---|
+| Controller `Update` | `0x739fa0` | `0x75c4a0` | MATCH from Meruru, 33 votes, prologue byte-identical |
+| Collision resolver | `0x738670` | `0x75ab70` | MATCH from Meruru, 13/19 votes |
+| Move threshold (data) | `0x1627f20` | `0x17bf8e0` | data-section scan for the shipped bit pattern |
+
+The threshold was found by scanning the writable data section for `0x3c0b4396`
+(0.0085f). Exactly one occurrence per build, and the method was validated by
+reproducing Meruru's known address first. Crucially it has **exactly one
+reference in the image**, from inside the prologue-verified resolver
+(resolver+`0x5fb`; Meruru's sits at +`0x5d3`), and no writer — which is what makes
+rescaling it safe.
+
+Ayesha's resolver prologue differs from the Arland one in its final byte
+(`8d a8 d8` vs `8d a8 e8`, a larger frame), so it carries its own expected array.
+
+Both halves ship **OptIn**, unlike Arland where both are on by default, and the
+asymmetry between them matters:
+
+- **The rescale** writes one constant whose single reader is verified. Low risk.
+- **The stabilizer** writes into the live controller object at offsets
+  (`kVelYOffset`, `kAirTimerOffset`) carried over from the Arland builds. Those
+  are justified there by the six Update bodies being instruction-for-instruction
+  identical. Ayesha's Update matches on prologue and homologue vote, but its
+  object layout is **not confirmed**, and a wrong offset corrupts live game state
+  rather than failing cleanly.
+
+`DUSK_FIELD_TRACE=1` validates the layout cheaply before anything writes: it
+reads the same offsets, so plausible `posY`/`velY`/`grounded` values mean the
+layout holds and garbage means it does not. Run that before
+`DUSK_FIELD_STABILIZER=1`.
+
+---
+
+## 6. Hook boundaries
 
 Same rules as the Arland project. Hooks install only after the process is
 recognized as one of the two fingerprinted Ayesha executables by name and

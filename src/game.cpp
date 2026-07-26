@@ -44,14 +44,17 @@ struct Descriptor {
 
 const Descriptor& descriptor(Feature f) {
   static const Descriptor table[static_cast<int>(Feature::Count)] = {
-    /* AtlasStats */ { "DUSK_ATLAS_STATS" },
-    /* AtlasCache */ { "DUSK_ATLAS_CACHE" },
+    /* AtlasStats      */ { "DUSK_ATLAS_STATS" },
+    /* AtlasCache      */ { "DUSK_ATLAS_CACHE" },
+    /* FieldEngineFix  */ { "DUSK_FIELD_ENGINE_FIX" },
+    /* FieldStabilizer */ { "DUSK_FIELD_STABILIZER" },
   };
   return table[static_cast<int>(f)];
 }
 
 constexpr Support U = Support::Unsupported;
 constexpr Support O = Support::OptIn;
+constexpr Support X = Support::OnByDefault;
 
 // The capability matrix. Rows are Ayesha / Escha & Logy / Shallie, columns
 // follow the Feature enum. KEEP IN SYNC with README.md's feature table.
@@ -61,18 +64,24 @@ constexpr Support O = Support::OptIn;
 // text-rendering layer has no homolog of the hooked entry points
 // (TECHNICAL.md 1.3).
 //
-// AtlasCache is Unsupported everywhere, including Ayesha. That is deliberate,
-// not an oversight: the addresses are mapped and corroborated, but no runtime
-// evidence yet shows the redundant-read pattern actually manifests in Ayesha,
-// so there is nothing to justify a cache and no basis for choosing its
-// lifetime. Unsupported keeps DUSK_ATLAS_CACHE=1 a hard no rather than
-// silently enabling an unvalidated path. Flip this cell to OptIn in the same
-// change that lands the implementation.
+// AtlasCache is Ayesha-only and ships ON BY DEFAULT: it is the shipping fix.
+// The pattern it addresses is measured, not assumed -- 2385 candidate locks onto
+// 3 atlases per 248 ms drain, plus a per-frame steady-state drip -- and the
+// measured effect is an 85% reduction in menu-build time at a 95.5% hit rate
+// (TECHNICAL.md §2.1, §2.3, §4.1). `DUSK_ATLAS_CACHE=0` turns it off, which is
+// what an A/B or a bug report wants.
+//
+// The two field-jitter halves are Ayesha-only and stay OptIn. They are ported
+// from Arland (where both are on by default) but nothing has been measured on
+// Ayesha: no run has confirmed the high-refresh jitter is present here. The
+// stabilizer additionally writes into the controller object at offsets not yet
+// confirmed for this build -- see the comment on stabilizerEnabled in
+// field_physics.cpp. They must not be promoted alongside the cache.
 constexpr Support kMatrix[3][static_cast<int>(Feature::Count)] = {
-  //                Stats Cache
-  /* Ayesha  */   {   O,    U },
-  /* Escha   */   {   U,    U },
-  /* Shallie */   {   U,    U },
+  //                Stats Cache Field Stab
+  /* Ayesha  */   {   O,    X,    O,    O },
+  /* Escha   */   {   U,    U,    U,    U },
+  /* Shallie */   {   U,    U,    U,    U },
 };
 
 int titleRow(Title t) {

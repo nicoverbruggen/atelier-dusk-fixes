@@ -1,12 +1,21 @@
 // SPDX-License-Identifier: MIT
 //
-// Ayesha font-atlas diagnostic. Counting only: every hook forwards to the
-// original immediately, nothing is cached, nothing is suppressed. The purpose is
-// to decide whether the Arland menu-hitch fix is worth porting to Ayesha, and if
-// so which cache lifetime it needs -- see TECHNICAL.md 1.8 and 2.
+// Ayesha font-atlas read cache, plus the diagnostic that justified it.
 //
-// The four hooked entry points and how their addresses were derived are recorded
-// in TECHNICAL.md 1.7. Do not change an RVA here without updating that table.
+// Both ride the same four hooked entry points; the addresses and how they were
+// derived are recorded in TECHNICAL.md 1.7. Do not change an RVA here without
+// updating that table.
+//
+// DUSK_ATLAS_CACHE (the fix) serves repeated 512x512 font-atlas locks from a CPU
+// snapshot. DUSK_ATLAS_STATS (the diagnostic) counts without changing behaviour;
+// the two are independent and can run together, which is how a run shows the
+// collapse rather than just asserting it.
+//
+// Lifetime is FRAME-SCOPED, i.e. the Arland Rorona path rather than the
+// Totori/Meruru one. That is a measured choice, not a default: 72% of Ayesha's
+// candidate locks arrive outside the resource-event queue drain (TECHNICAL.md
+// 2.3), so a queue-scoped cache would miss most of the work. Snapshots are
+// therefore discarded at Present, and never held across a frame boundary.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
@@ -17,9 +26,12 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <unordered_map>
+#include <vector>
 
-#include "atlas_stats.h"
+#include "atlas_fix.h"
+#include "field_physics.h"
 #include "game.h"
 #include "hook_util.h"
 #include "log.h"
@@ -143,10 +155,47 @@ Counters outOfDrain;   // accumulated since the last Present, outside any drain
 std::atomic<uint64_t> drainsObserved{0};
 
 bool statsActive = false;
+bool cacheActive = false;
+
+// Cache hit/miss counters, reported alongside the diagnostic so a run shows the
+// collapse instead of asserting it.
+std::atomic<uint64_t> atlasCacheHits{0};
+std::atomic<uint64_t> atlasRealReads{0};
 
 uint32_t packDims(uint16_t w, uint16_t h) {
   return (uint32_t(w) << 16) | uint32_t(h);
 }
+
+// ---------------------------------------------------------------------------
+// The cache
+// ---------------------------------------------------------------------------
+
+struct AtlasRead {
+  uint32_t pitch = 0;
+  std::vector<uint8_t> bytes;
+};
+
+atfix::mutex atlasMutex;
+std::unordered_map<uintptr_t, std::shared_ptr<AtlasRead>> atlasReads;
+
+// True while snapshots may be created and served. Frame-scoped: raised at
+// Present and never lowered by the drain, so locks outside the drain -- 72% of
+// them in Ayesha -- are covered too.
+std::atomic<bool> atlasCacheArmed{false};
+
+// A lock we satisfied from a snapshot without calling the middleware. Its
+// matching unlock must be suppressed, since no real mapping exists to release.
+// Per-thread, and each entry keeps its snapshot alive by shared_ptr so a
+// concurrent clear or invalidation on another thread cannot free the buffer the
+// caller is still reading.
+struct SyntheticAtlasLock {
+  uintptr_t texture = 0;
+  std::shared_ptr<AtlasRead> snapshot;
+};
+thread_local std::vector<SyntheticAtlasLock> syntheticAtlasLocks;
+// Real candidate locks we let through, so their unlocks are recognized as ours
+// and do not invalidate the snapshot.
+thread_local std::vector<uintptr_t> realCandidateAtlasLocks;
 
 void logCounters(const char* scope, const Counters& c, uint64_t micros) {
   // Distinct textures and the worst repeat count are the two numbers that
@@ -190,6 +239,11 @@ uintptr_t statsAtlasLock(uintptr_t texture, uintptr_t output,
     std::memcpy(&height, bytes + 0x42, sizeof(height));
   }
 
+  // Eligibility is the Arland rule: a 512x512 middleware texture, locked with a
+  // real output pointer, while the verified text renderer is on the stack.
+  const bool candidate = renderTextDepth && output &&
+    width == 512 && height == 512;
+
   if (statsActive) {
     std::lock_guard lock(countersMutex);
     Counters& c = queueDrainDepth ? inDrain : outOfDrain;
@@ -211,16 +265,86 @@ uintptr_t statsAtlasLock(uintptr_t texture, uintptr_t output,
     }
   }
 
-  return originalAtlasLock(texture, output, level, mode);
+  const bool cacheable = candidate && cacheActive &&
+    atlasCacheArmed.load(std::memory_order_acquire);
+
+  // Serve from an existing snapshot -- in BOTH access modes. The text renderer
+  // maps the atlas for writing to rasterize a glyph and then maps a staging copy
+  // for reading to blit it back, and both name the same middleware object, so one
+  // snapshot is a coherent stand-in for the whole round trip. That is where the
+  // saving comes from; serving only reads would leave most of it on the table.
+  if (cacheable) {
+    std::lock_guard lock(atlasMutex);
+    const auto found = atlasReads.find(texture);
+    if (found != atlasReads.end() && found->second &&
+        !found->second->bytes.empty()) {
+      atlasCacheHits.fetch_add(1, std::memory_order_relaxed);
+      *reinterpret_cast<void**>(output) = found->second->bytes.data();
+      syntheticAtlasLocks.push_back({ texture, found->second });
+      return found->second->pitch;
+    }
+  }
+
+  if (cacheable)
+    atlasRealReads.fetch_add(1, std::memory_order_relaxed);
+
+  const uintptr_t pitch = originalAtlasLock(texture, output, level, mode);
+
+  // Snapshot only from a READ lock. A write mapping is discard-mapped, so its
+  // contents are undefined on entry; snapshotting one captures uninitialized
+  // memory and the read that follows is served that garbage. The Arland project
+  // hit exactly this as a striped glyph, and the first candidate lock of each
+  // atlas is a write, so the poisoning would happen at snapshot birth.
+  const bool isReadLock = uint32_t(mode) == 0;
+  if (cacheable && isReadLock && pitch && pitch <= 16384) {
+    const void* mapped = *reinterpret_cast<void* const*>(output);
+    const size_t size = size_t(pitch) * height;
+    if (mapped && size <= 8 * 1024 * 1024) {
+      auto entry = std::make_shared<AtlasRead>();
+      entry->pitch = uint32_t(pitch);
+      entry->bytes.resize(size);
+      std::memcpy(entry->bytes.data(), mapped, size);
+      std::lock_guard lock(atlasMutex);
+      atlasReads[texture] = std::move(entry);
+    }
+  }
+  if (cacheable && pitch)
+    realCandidateAtlasLocks.push_back(texture);
+
+  return pitch;
 }
 
-uintptr_t statsAtlasUnlock(uintptr_t a, uintptr_t b, uintptr_t c,
+uintptr_t statsAtlasUnlock(uintptr_t texture, uintptr_t b, uintptr_t c,
                            uintptr_t d) {
   if (statsActive) {
     std::lock_guard lock(countersMutex);
     (queueDrainDepth ? inDrain : outOfDrain).unlocks++;
   }
-  return originalAtlasUnlock(a, b, c, d);
+
+  if (cacheActive) {
+    // Our own synthetic lock: there is no real mapping to release, so suppress
+    // the call entirely rather than handing the middleware a pointer it never
+    // issued.
+    if (!syntheticAtlasLocks.empty() &&
+        syntheticAtlasLocks.back().texture == texture) {
+      syntheticAtlasLocks.pop_back();
+      return 0;
+    }
+    if (!realCandidateAtlasLocks.empty() &&
+        realCandidateAtlasLocks.back() == texture) {
+      realCandidateAtlasLocks.pop_back();
+    } else if (texture) {
+      // Any unlock that is not one of ours may be releasing a WRITE. The glyph
+      // atlas is a single mutable, demand-paged surface, so the game rasterizes
+      // fresh glyph pages into it mid-frame. Drop the snapshot on every such
+      // unlock, or a glyph paged in after the snapshot is served from the stale
+      // copy and blits blank -- the Arland missing-kanji bug.
+      std::lock_guard lock(atlasMutex);
+      atlasReads.erase(texture);
+    }
+  }
+
+  return originalAtlasUnlock(texture, b, c, d);
 }
 
 uintptr_t statsRenderText(uintptr_t a, uintptr_t b, uintptr_t c,
@@ -236,6 +360,10 @@ uintptr_t statsRenderText(uintptr_t a, uintptr_t b, uintptr_t c,
 }
 
 void statsQueueDrain(void* self) {
+  // The drain deliberately does NOT arm or clear the cache. In the frame-scoped
+  // lifetime that Ayesha measured into, the frame boundary owns both, and having
+  // the drain also clear would throw away snapshots mid-frame -- discarding
+  // exactly the reuse the out-of-drain majority depends on.
   if (!statsActive) {
     originalQueueDrain(self);
     return;
@@ -316,14 +444,19 @@ const Game* recognizeExecutable(BYTE*& baseOut) {
     baseOut = base;
     return &game;
   }
-  log("atlas stats: unrecognized executable ", name,
+  log("atlas fix: unrecognized executable ", name,
       " .text=", reinterpret_cast<void*>(uintptr_t(textSize)));
   return nullptr;
 }
 
-bool installHooks() {
-  BYTE* base = nullptr;
-  const Game* game = recognizeExecutable(base);
+// Resolved once by initializeAtlasFix. Shared so the field-physics install can
+// reuse the same verified identity instead of recognizing the executable again.
+BYTE* g_base = nullptr;
+const Game* g_game = nullptr;
+
+bool installAtlasHooks() {
+  BYTE* base = g_base;
+  const Game* game = g_game;
   if (!game)
     return false;
 
@@ -336,7 +469,7 @@ bool installHooks() {
       !matches(render, kRenderTextExpected) ||
       !matches(lock, kAtlasLockExpected) ||
       !matches(unlock, game->unlockExpected)) {
-    log("atlas stats: prologue verification failed, installing nothing");
+    log("atlas fix: prologue verification failed, installing nothing");
     return false;
   }
 
@@ -356,7 +489,7 @@ bool installHooks() {
                             reinterpret_cast<void**>(&originalQueueDrain)))
     return false;
 
-  log("atlas stats: installed on ", game->executable,
+  log("atlas fix: installed on ", game->executable,
       " base=", reinterpret_cast<void*>(base),
       " queueDrain=", reinterpret_cast<void*>(uintptr_t(game->queueDrainRva)),
       " renderText=", reinterpret_cast<void*>(uintptr_t(game->renderTextRva)),
@@ -369,30 +502,68 @@ bool installHooks() {
 
 namespace dusk {
 
-bool initializeAtlasStats() {
+bool initializeAtlasFix() {
   static bool installed = [] {
-    if (!atfix::featureEnabled(atfix::Feature::AtlasStats))
+    const bool wantCache = atfix::featureEnabled(atfix::Feature::AtlasCache);
+    const bool wantStats = atfix::featureEnabled(atfix::Feature::AtlasStats);
+    const bool wantField =
+      atfix::featureEnabled(atfix::Feature::FieldEngineFix) ||
+      atfix::featureEnabled(atfix::Feature::FieldStabilizer);
+    if (!wantCache && !wantStats && !wantField)
       return false;
     if (MH_Initialize() != MH_OK) {
-      log("atlas stats: MH_Initialize failed");
+      log("atlas fix: MH_Initialize failed");
       return false;
     }
-    const bool ok = installHooks();
-    statsActive = ok;
-    return ok;
+
+    // One recognition for every Ayesha-specific fix in this DLL.
+    g_game = recognizeExecutable(g_base);
+    if (!g_game)
+      return false;
+
+    if (wantCache || wantStats) {
+      const bool ok = installAtlasHooks();
+      // Only arm behaviour once every hook is in. A partial install leaves both
+      // flags false, so the hooks that did land stay pass-through.
+      statsActive = ok && wantStats;
+      cacheActive = ok && wantCache;
+      log("atlas fix: ", ok ? "installed" : "FAILED",
+          " cache=", cacheActive ? 1 : 0,
+          " stats=", statsActive ? 1 : 0, " lifetime=frame");
+    }
+
+    // Independent of the atlas hooks: the field fix has its own addresses and
+    // its own prologue checks, so it installs (or declines) on its own terms.
+    if (wantField)
+      atfix::installFieldPhysics(g_base, *g_game);
+
+    return true;
   }();
   return installed;
 }
 
-void atlasStatsFrameTick() {
+void atlasFixFrameTick() {
+  if (cacheActive) {
+    // The frame boundary IS the cache lifetime. Discarding every snapshot here
+    // is what keeps a mutable atlas from being served stale indefinitely, and it
+    // is the deliberate safety limit the Arland project settled on rather than
+    // trying to prove invalidation coverage across frames.
+    std::lock_guard lock(atlasMutex);
+    atlasReads.clear();
+    atlasCacheArmed.store(true, std::memory_order_release);
+  }
+
   if (!statsActive)
     return;
   std::lock_guard lock(countersMutex);
-  // Locks that happened this frame but outside any drain. Rorona's pre-drain
-  // batch showed up exactly here, and it is what forced the frame-scoped cache
-  // lifetime, so a nonzero count on Ayesha changes which port is correct.
-  if (outOfDrain.candidateLocks || outOfDrain.renderTextCalls)
+  // Locks outside any drain. In Ayesha this is the majority of them, which is
+  // what selected the frame-scoped lifetime over the queue-scoped one.
+  if (outOfDrain.candidateLocks || outOfDrain.renderTextCalls) {
     logCounters("outOfDrain (frame)", outOfDrain, 0);
+    if (cacheActive)
+      log("    cache: hits=", atlasCacheHits.load(std::memory_order_relaxed),
+          " realReads=", atlasRealReads.load(std::memory_order_relaxed));
+  }
   outOfDrain.reset();
 }
 

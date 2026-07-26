@@ -22,12 +22,13 @@ const char* titleName(Title t);
 // Enhancements the mod can apply. Order must match the matrix columns and the
 // descriptor rows in game.cpp.
 //
-// Only AtlasStats is implemented today. The rest are declared so the matrix
-// records what is known to apply where (TECHNICAL.md), and so adding an
-// implementation does not also mean redesigning the gate.
+// All four are implemented; all four are OptIn, because nothing in this project
+// has been validated in-game yet.
 enum class Feature : uint8_t {
-  AtlasStats,    // Ayesha font-atlas diagnostic counters (measurement only)
-  AtlasCache,    // Ayesha atlas read caching -- NOT IMPLEMENTED, see TECHNICAL.md 1.8
+  AtlasStats,       // Ayesha font-atlas diagnostic counters (measurement only)
+  AtlasCache,       // Ayesha atlas read caching (frame-scoped)
+  FieldEngineFix,   // Ayesha high-refresh field jitter: rescale the move threshold
+  FieldStabilizer,  // Ayesha high-refresh field jitter: hold the character at rest
   Count,
 };
 

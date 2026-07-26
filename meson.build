@@ -33,7 +33,8 @@ dxguid_dep = cpp.find_library('dxguid')
 sources = files(
   'src/main.cpp',
   'src/game.cpp',
-  'src/atlas_stats.cpp',
+  'src/atlas_fix.cpp',
+  'src/field_physics.cpp',
   'src/hook_util.cpp',
   'vendor/minhook/src/hde/hde64.c',
   'vendor/minhook/src/hook.c',

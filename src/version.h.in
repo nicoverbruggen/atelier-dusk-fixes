@@ -1,0 +1,4 @@
+// SPDX-License-Identifier: MIT
+#pragma once
+
+#define DUSK_FIX_VERSION @VERSION_SHORT@

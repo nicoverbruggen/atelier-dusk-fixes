@@ -1,0 +1,8 @@
+/builds/
+/out/
+/build64/
+/build32/
+/d3d11.dll
+/dusk-fix.log
+*.log
+/HANDOFF.md

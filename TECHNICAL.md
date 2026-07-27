@@ -260,6 +260,53 @@ The real locks that remain in such a frame are write mappings, which a cache of
 read snapshots cannot serve: a write mapping is discard-mapped, so its contents
 are undefined on entry and it can never be the source of a snapshot.
 
+### Why serving a stale glyph is not possible
+
+The cache's one failure mode is serving a snapshot after something else has
+written the atlas. That was closed by enumeration rather than by playtesting,
+because "we did not see it happen" is not an argument.
+
+**Every unmap routes through the hooked unlock.** The unlock implementation
+(`0x581470` EN) has exactly one entry, thunk `0x136b`, whose only user is
+`0x581465` inside the hooked stub. There is no path that releases an atlas
+mapping without the mod seeing it, so the invalidation rule cannot be bypassed.
+
+**Only two callers touch an atlas, on one thread.** A census keyed on (caller
+RVA, thread, access mode) over every 512×512 lock — deliberately *not* filtered
+by the cache's own eligibility rule, so that it would see the callers that rule
+excludes — recorded 41,368 locks across ~10,500 frames of the multilingual
+build. Three callers appeared, all on a single thread:
+
+| Caller (ML) | Function | Mode | Locks | Textures |
+|---|---|---|---:|---|
+| `0x5cc029` | `0x5cbfe0`, the write-begin helper | 3, write | 27,568 | the 3 atlases |
+| `0x76e525` | `0x76e290`, `renderText` | 0, read | 13,784 | the 3 atlases |
+| `0x63c78b` | `0x63c680` (EN `0x61a180`) | 3, write | 16 | 16 others, no atlas |
+
+The third caller is one of the nine lock callers that are not reachable from
+`renderText`; it touches sixteen unrelated 512×512 textures once each and never
+an atlas.
+
+The write-to-read ratio also resolves here: 27,568 / 13,784 is exactly 2.000, and
+it comes from **one** write call site invoked twice per read, not from two
+different writers.
+
+**Nothing writes an atlas behind the middleware's back.** A probe on
+`ID3D11DeviceContext::Map`, `UpdateSubresource`, `CopyResource` and
+`CopySubresourceRegion` recorded 4,908 writes to 512×512 textures from exactly
+two call sites, `0x5a3576` and `0x5a3746`. Both lie inside `0x5a3490`, which is
+the atlas lock's own implementation: the hooked lock `0x5a3920` calls thunk
+`0x151db`, which jumps to `0x5a3490`. Every D3D11-level write to a 512×512
+texture therefore originated inside the code the mod already intercepts.
+
+**Single-threadedness is what makes this sufficient.** The cache serves only
+while the text renderer is on the stack *of the calling thread*. With all atlas
+traffic on one thread there is no concurrency, so a write from outside the text
+renderer cannot execute during a serve; it can only run between serves, and its
+unlock then invalidates the snapshot before the next one. The argument does not
+depend on having enumerated every possible writer — it holds even if an
+unobserved caller exists.
+
 ### Risk accepted in shipping it on by default
 
 The failure mode is wrong or missing glyphs, and it has **not** been validated by

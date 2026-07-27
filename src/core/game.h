@@ -19,13 +19,33 @@ enum class Title : uint8_t { Unknown, Ayesha, Escha, Shallie };
 Title currentTitle();
 const char* titleName(Title t);
 
+// Which rendering/text engine the current title runs on. This is the axis the
+// source tree is split along, because the two share almost nothing that a fix
+// can reach: Ayesha is the PhyreEngine-derived, old-MSVC-CRT build whose
+// font-atlas and text-rendering path is the same code as the Arland games'
+// (TECHNICAL.md "The engine triage"), while
+// Escha & Logy and Shallie are UCRT builds on LTGL/KTGL whose text layer has no
+// homolog of it at all.
+//
+// One DLL still covers all three: the engine is resolved from the executable at
+// startup and only that engine's module installs anything. See `core/engine.h`.
+enum class Engine : uint8_t { Unknown, Phyre, Ktgl };
+Engine currentEngine();
+const char* engineName(Engine e);
+
 // Enhancements the mod can apply. Order must match the matrix columns and the
 // descriptor rows in game.cpp.
 //
-// All four are implemented; all four are OptIn, because nothing in this project
-// has been validated in-game yet.
+// All eight are implemented, and all are Ayesha-only. AtlasCache is the one that
+// ships on by default; the rest are OptIn, two of them because they are
+// diagnostics and two because nothing about the field-jitter port has been
+// validated in-game yet.
 enum class Feature : uint8_t {
   AtlasStats,       // Ayesha font-atlas diagnostic counters (measurement only)
+  AtlasTrace,       // Ayesha font-atlas lock/unlock sequence trace (one frame)
+  AtlasVerify,      // Ayesha font-atlas snapshot-vs-real comparison (slow)
+  AtlasCensus,      // Ayesha font-atlas writer census (enumerates every caller)
+  D3D11WriteProbe,  // Ayesha D3D11-level writes to a font atlas, if any exist
   AtlasCache,       // Ayesha atlas read caching (frame-scoped)
   FieldEngineFix,   // Ayesha high-refresh field jitter: rescale the move threshold
   FieldStabilizer,  // Ayesha high-refresh field jitter: hold the character at rest

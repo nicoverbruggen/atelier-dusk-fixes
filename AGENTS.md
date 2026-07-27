@@ -2,9 +2,25 @@
 
 ## Project scope
 
-Fixes for the Steam Dusk-trilogy DX ports: Atelier Ayesha DX, Atelier Escha & Logy DX, Atelier Shallie DX. Early investigation stage — no releases, no shipped code yet.
+Fixes for the Steam Dusk-trilogy DX ports: Atelier Ayesha DX, Atelier Escha & Logy DX, Atelier Shallie DX. Early stage — no releases; one fix ships (the Ayesha font-atlas cache), everything else is opt-in and unvalidated.
 
-This is the sibling of `../atelier-arland-fixes`. Read that repository's `AGENTS.md`, `TECHNICAL.md`, and `TODO.md` first: its architecture (d3d11 proxy, capability matrix, hook idioms, documentation rules) is the template for this project, and its "Beyond the Arland trilogy" TODO section carries the Dusk-related decisions made so far (e.g. Ayesha gets an atlas-only fix without the Arland `.PSSG` cache).
+## Source layout
+
+Split by engine, because the trilogy spans two and they share nothing a fix can reach:
+
+- `src/core/` — engine-agnostic: the D3D11 proxy (`main.cpp`), engine dispatch (`engine.cpp`), the capability matrix (`game.cpp`), hook installation, logging.
+- `src/phyre/` — Ayesha (PhyreEngine, old MSVC CRT). Arland ports live here: the atlas cache, field physics.
+- `src/ktgl/` — Escha & Logy and Shallie (LTGL/KTGL, UCRT). Fingerprinting only so far.
+
+One `d3d11.dll` covers all three games. Do not add a second build target: fixes are already gated on both the capability matrix and an executable fingerprint. See `TECHNICAL.md`, "Two engines, one DLL".
+
+Neither engine module may include the other's headers, and no address pack belongs in `src/core`.
+
+This is the sibling of `../atelier-arland-fixes`. Read that repository's `AGENTS.md` and `TECHNICAL.md` first: its architecture (d3d11 proxy, capability matrix, hook idioms, documentation rules) is the template for this project.
+
+## Documentation policy
+
+`TECHNICAL.md` records **shipped, measured behaviour only** — the same policy as the Arland repository. Work in progress, open questions, unvalidated ports and investigation narrative do not go in it, and neither repository carries a `TODO.md`; the task lists are maintained outside these repositories. If a fix is not finished, it does not get a `TECHNICAL.md` section, however interesting the investigation was.
 
 ## Game copies
 

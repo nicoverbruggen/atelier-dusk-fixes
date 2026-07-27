@@ -8,17 +8,19 @@ This project is the Dusk-trilogy sibling of [atelier-arland-fixes](https://githu
 
 The Dusk DX ports share the Gust PSSG/KTGL engine family with the Arland DX ports, but differ in ways that matter for the fixes:
 
-- Ayesha DX uses the old-MSVC-CRT/NLS runtime like the Arland games. Its font-atlas and text-rendering code path is the **same code**, function for function, as the one behind the Arland menu hitch — see `TECHNICAL.md` §1.
+- Ayesha DX uses the old-MSVC-CRT/NLS runtime like the Arland games. Its font-atlas and text-rendering code path is the **same code**, function for function, as the one behind the Arland menu hitch — see `TECHNICAL.md`, "The engine triage".
 - Escha & Logy and Shallie are UCRT builds with fast menus. Their text-rendering layer has diverged and shares no homolog of that path, so the menu work does not apply to them.
 - The upstream `atelier-sync-fix` targets the newer engine revisions directly; which games need which synchronization treatment is still open.
 
 ## Feature support by game
 
-Mirrors the capability matrix in `src/game.cpp`, which is the source of truth.
+Mirrors the capability matrix in `src/core/game.cpp`, which is the source of truth.
 
 | Feature | Ayesha | Escha & Logy | Shallie |
 |---|---|---|---|
 | Font-atlas diagnostic (`DUSK_ATLAS_STATS`) | opt-in | — | — |
+| Font-atlas sequence trace (`DUSK_ATLAS_TRACE`) | opt-in | — | — |
+| Font-atlas cache verifier (`DUSK_ATLAS_VERIFY`) | opt-in | — | — |
 | Much faster menus (font-atlas read cache) | ✓ | — | — |
 | High-refresh field jitter, threshold rescale (`DUSK_FIELD_ENGINE_FIX`) | opt-in | — | — |
 | High-refresh field jitter, resting stabilizer (`DUSK_FIELD_STABILIZER`) | opt-in | — | — |
@@ -37,19 +39,28 @@ Ported from Arland, where above roughly 115 fps the field-map character buzzes v
 
 `DUSK_FIELD_ENGINE_FIX=1` rescales the constant with frame time. `DUSK_FIELD_STABILIZER=1` additionally holds the character while it is genuinely at rest, and needs the rescale.
 
-Run `DUSK_FIELD_TRACE=1` before enabling the stabilizer. The stabilizer writes into the live controller object at offsets carried over from the Arland builds, and Ayesha's object layout is not confirmed; the trace reads those same offsets, so it tells you cheaply whether they hold. See `TECHNICAL.md` §5.
+Run `DUSK_FIELD_TRACE=1` before enabling the stabilizer. The stabilizer writes into the live controller object at offsets carried over from the Arland builds, and Ayesha's object layout is not confirmed; the trace reads those same offsets, so it tells you cheaply whether they hold.
 
 ## The diagnostic
 
 Set `DUSK_ATLAS_STATS=1` and run Ayesha. The mod installs four verified hooks in counting mode only — nothing is cached, nothing is suppressed, every hook forwards straight to the original — and writes per-menu-build counters to `dusk-fix.log`.
 
-It answered the question the fix needed: Ayesha issues 2385 candidate atlas locks against just 3 atlases per 248 ms menu drain, and 72% of all such locks fall outside the resource queue drain — which is why the cache is frame-scoped. See `TECHNICAL.md` §2.
+It answered the question the fix needed: Ayesha issues 2385 candidate atlas locks against just 3 atlases per 248 ms menu drain, and 72% of all such locks fall outside the resource queue drain — which is why the cache is frame-scoped. See `TECHNICAL.md`, "Repeated font-atlas reads".
+
+`DUSK_ATLAS_VERIFY=1` is the cache's correctness check. It compares each snapshot against the real atlas for as long as that snapshot is supposed to match, and separately reports any write to an atlas that the cache did not serve — the two ways a stale glyph could reach the screen. It makes the game slow and is meant to be run, not shipped. It reports a running tally every few hundred frames regardless of the other switches: a clean session is one where `checks` is large and `mismatches` and `foreignWrites` are both zero, and a session where `checks` never leaves zero has proved nothing. It exists because a wrong glyph in Japanese is not something a reader can reliably spot, so the check has to be machine-made.
+
+Adding `DUSK_ATLAS_TRACE=1` alongside the diagnostic dumps the raw lock/unlock sequence of a single steady-state frame as a token stream. That is aimed at the one open question the counters cannot answer — why the cache rebuilds its snapshots nine times per atlas per frame — and it prints once, then stops. See `TECHNICAL.md`, "Diagnostics".
+
+## Source layout
+
+The trilogy spans two engines, and the source follows that split: `src/core` is engine-agnostic, `src/phyre` is Ayesha (PhyreEngine), `src/ktgl` is Escha & Logy and Shallie (LTGL/KTGL). They still build into one `d3d11.dll` that covers all three games — every fix is gated on both the capability matrix and an executable fingerprint, so the module for the wrong engine installs nothing. `TECHNICAL.md`, "Two engines, one DLL", has the reasoning.
+
+`src/ktgl` implements no fix yet. It fingerprints and logs, which is how the four remaining executables' identities get collected.
 
 ## Documentation
 
-- `TECHNICAL.md` — what has been established, with evidence, and the verified address packs.
+- `TECHNICAL.md` — what the mod does, with the evidence and the verified address packs behind it.
 - `BUILDING.md` — build and deploy.
-- `TODO.md` — current work and backlog.
 
 ## Licence
 

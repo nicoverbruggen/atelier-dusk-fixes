@@ -4,7 +4,9 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-#include "hook_util.h"
+#include <cstdint>
+
+#include "../core/hook_util.h"
 
 namespace atfix {
 
@@ -51,6 +53,16 @@ namespace atfix {
 // residual sawtooth being large enough for a range check to cross; with the
 // stabilizer as well it was steady, and standing still produced no ground-
 // contact changes at all.
-bool installFieldPhysics(BYTE* base, const Game& game);
+// `exeBuild` selects the address pack (BuildEnglish / BuildMultilingual); the
+// caller has already fingerprinted the executable. Nothing else about the Phyre
+// descriptor is relevant here -- the field fix shares no address with the atlas
+// path, only the executable identity behind both.
+bool installFieldPhysics(BYTE* base, uint8_t exeBuild);
+
+// Whether DUSK_FIELD_TRACE is set. Exposed because the trace is useful on its
+// own -- it is the cheap layout check that must precede the stabilizer, whose
+// object offsets are unconfirmed on this build -- so the module has to install
+// for it even when neither half of the fix is enabled.
+bool fieldTraceEnabled();
 
 }  // namespace atfix

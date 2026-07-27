@@ -2,9 +2,13 @@
 #pragma once
 //
 // Shared low-level hook-installation infrastructure, mirroring the Arland
-// project's hook_util.h: the per-executable hook descriptor, the prologue-match
-// helper, and the two detour installers. Non-inline definitions live in
-// hook_util.cpp.
+// project's hook_util.h: the prologue-match helper, the two detour installers,
+// and the loaded-module identity every engine module gates on. Non-inline
+// definitions live in hook_util.cpp.
+//
+// Engine-specific hook descriptors do NOT live here. The Dusk trilogy spans two
+// engines with disjoint address packs, so each engine module owns its own table:
+// see `phyre/phyre.h` (Ayesha) and `ktgl/ktgl.h` (Escha & Logy, Shallie).
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
@@ -15,26 +19,6 @@
 
 namespace atfix {
 
-// Per-executable hook descriptor: the executable identity (name, .text size)
-// and the RVAs of the hooked engine functions.
-//
-// atlasUnlockRva names the two-instruction *stub* at lock+0x40, not the
-// implementation behind it. Both are mapped (TECHNICAL.md 1.6); the stub is
-// hooked so the hook sees the same argument convention as the Arland
-// Totori/Meruru path. Because the stub's prologue window contains a jmp rel32
-// displacement it is not portable across builds, hence unlockExpected being
-// per-row rather than a single shared constant.
-struct Game {
-  const char* executable;
-  DWORD textSize;
-  uintptr_t queueDrainRva;
-  uintptr_t renderTextRva;
-  uintptr_t atlasLockRva;
-  uintptr_t atlasUnlockRva;
-  std::array<BYTE, 16> unlockExpected;
-  uint8_t exeBuild;
-};
-
 // Each Dusk game ships an English build and a multilingual build (separate
 // compiles, distinct RVAs). Rows whose RVAs are known for only one build stay
 // gated on that build.
@@ -42,6 +26,22 @@ enum : uint8_t {
   BuildEnglish,
   BuildMultilingual,
 };
+
+// The running executable, as the fingerprint gate sees it. `textSize` is .text's
+// VirtualSize read from the *loaded* headers rather than the file, so a build
+// that is packed on disk still matches once its stub has decrypted the section
+// (not currently a factor for Ayesha, but the Arland project hit it with
+// Meruru's SteamStub wrapper).
+struct ModuleIdentity {
+  BYTE* base = nullptr;
+  const char* name = nullptr;   // base name, points into `path`
+  DWORD textSize = 0;
+  char path[MAX_PATH] = {};
+};
+
+// Fills `out` for the current process image. False if the headers cannot be
+// read, in which case nothing in `out` is meaningful.
+bool currentModuleIdentity(ModuleIdentity& out);
 
 // True if `target`'s bytes match `expected`, a verified prologue window.
 template <size_t N>

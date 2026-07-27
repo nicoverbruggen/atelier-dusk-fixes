@@ -1,9 +1,13 @@
 // Derived from Philip Rebohle's atelier-sync-fix; see LICENSE (zlib).
 //
 // D3D11 proxy entry point. Deliberately thin compared to the Arland project's
-// main.cpp: this repository ships no rendering features yet, so the proxy exists
-// to forward Direct3D, to hook Present as a frame boundary, and to give the
-// diagnostic in atlas_stats.cpp a place to install itself.
+// main.cpp: this repository ships no rendering features of its own, so the proxy
+// exists to forward Direct3D, to hook Present as a frame boundary, and to give
+// the engine modules a point at which the game image is certainly unpacked.
+//
+// It knows nothing about either engine. Everything past initializeEngineFixes()
+// is dispatched in core/engine.cpp -- see that header for why the two engines
+// are split but the DLL is not.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <d3d11.h>
@@ -11,12 +15,13 @@
 #include <array>
 #include <cstring>
 
-#include "atlas_fix.h"
+#include "d3d11_probe.h"
+#include "engine.h"
 #include "game.h"
 #include "log.h"
 #include "util.h"
 #include "version.h"
-#include "../vendor/minhook/include/MinHook.h"
+#include "../../vendor/minhook/include/MinHook.h"
 
 #ifdef _MSC_VER
   #define DLLEXPORT
@@ -84,7 +89,7 @@ D3D11Proc loadSystemD3D11() {
     reinterpret_cast<PFN_D3D11CreateDeviceAndSwapChain>(
       GetProcAddress(libD3D11, "D3D11CreateDeviceAndSwapChain"));
 
-  dusk::initializeAtlasFix();
+  dusk::initializeEngineFixes();
   return d3d11Proc;
 }
 
@@ -95,8 +100,10 @@ PFN_IDXGISwapChain_Present originalPresent = nullptr;
 
 HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* swapChain,
                                         UINT syncInterval, UINT flags) {
-  // The frame boundary the diagnostic attributes out-of-drain locks to.
-  dusk::atlasFixFrameTick();
+  // The frame boundary. For the Phyre module this is the atlas cache's entire
+  // lifetime, not just where the diagnostic attributes out-of-drain locks.
+  dusk::engineFrameTick();
+  d3d11WriteProbeFrameTick();
   return originalPresent(swapChain, syncInterval, flags);
 }
 
@@ -104,7 +111,7 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* swapChain,
 // instance exists. Called after each successful device/swapchain creation.
 void hookPresent(IDXGISwapChain* swapChain) {
   static bool done = false;
-  if (done || !swapChain || !dusk::initializeAtlasFix())
+  if (done || !swapChain || !dusk::initializeEngineFixes())
     return;
   auto** vtable = *reinterpret_cast<void***>(swapChain);
   // IDXGISwapChain::Present is slot 8 (IUnknown 0-2, IDXGIObject 3-6,
@@ -141,7 +148,7 @@ HRESULT STDMETHODCALLTYPE hookedCreateSwapChain(
 // actually means "never looked". The Arland proxy hooks both routes for the same
 // reason.
 void hookFactoryForSwapChain(ID3D11Device* device) {
-  if (!device || originalCreateSwapChain || !dusk::initializeAtlasFix())
+  if (!device || originalCreateSwapChain || !dusk::initializeEngineFixes())
     return;
   IDXGIDevice* dxgiDevice = nullptr;
   IDXGIAdapter* adapter = nullptr;
@@ -205,6 +212,9 @@ DLLEXPORT HRESULT __stdcall D3D11CreateDevice(
   if (SUCCEEDED(hr) && ppDevice && *ppDevice)
     atfix::hookFactoryForSwapChain(*ppDevice);
 
+  if (SUCCEEDED(hr) && ppImmediateContext && *ppImmediateContext)
+    atfix::initializeD3D11WriteProbe(*ppImmediateContext);
+
   return hr;
 }
 
@@ -232,6 +242,9 @@ DLLEXPORT HRESULT __stdcall D3D11CreateDeviceAndSwapChain(
 
   if (SUCCEEDED(hr) && ppSwapChain && *ppSwapChain)
     atfix::hookPresent(*ppSwapChain);
+
+  if (SUCCEEDED(hr) && ppImmediateContext && *ppImmediateContext)
+    atfix::initializeD3D11WriteProbe(*ppImmediateContext);
 
   return hr;
 }

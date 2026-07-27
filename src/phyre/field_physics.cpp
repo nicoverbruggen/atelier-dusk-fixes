@@ -25,8 +25,8 @@
 #include <cstring>
 
 #include "field_physics.h"
-#include "log.h"
-#include "mem.h"
+#include "../core/log.h"
+#include "../core/mem.h"
 
 namespace atfix {
 
@@ -77,10 +77,10 @@ struct FieldPhysicsAddrs {
 constexpr FieldPhysicsAddrs kAyeshaEn    { 0x739fa0, 0x738670, 0x1627f20 };
 constexpr FieldPhysicsAddrs kAyeshaMulti { 0x75c4a0, 0x75ab70, 0x17bf8e0 };
 
-const FieldPhysicsAddrs* addressesFor(const Game& game) {
-  // Ayesha only. Escha & Logy and Shallie are not mapped for this fix and the
-  // capability matrix hard-offs it for them.
-  return game.exeBuild == BuildEnglish ? &kAyeshaEn : &kAyeshaMulti;
+const FieldPhysicsAddrs* addressesFor(uint8_t exeBuild) {
+  // Ayesha only. Escha & Logy and Shallie are on KTGL, are not mapped for this
+  // fix, and the capability matrix hard-offs it for them.
+  return exeBuild == BuildEnglish ? &kAyeshaEn : &kAyeshaMulti;
 }
 
 float* g_moveThreshold = nullptr;   // null unless verified and made writable
@@ -125,14 +125,6 @@ bool engineFixEnabled() {
 bool stabilizerEnabled() {
   static const bool enabled = [] {
     const char* value = std::getenv("DUSK_FIELD_STABILIZER");
-    return value && value[0] != '0';
-  }();
-  return enabled;
-}
-
-bool fieldTraceEnabled() {
-  static const bool enabled = [] {
-    const char* value = std::getenv("DUSK_FIELD_TRACE");
     return value && value[0] != '0';
   }();
   return enabled;
@@ -388,7 +380,15 @@ bool prepareThreshold(BYTE* base, const FieldPhysicsAddrs& addrs) {
 
 }  // namespace
 
-bool installFieldPhysics(BYTE* base, const Game& game) {
+bool fieldTraceEnabled() {
+  static const bool enabled = [] {
+    const char* value = std::getenv("DUSK_FIELD_TRACE");
+    return value && value[0] != '0';
+  }();
+  return enabled;
+}
+
+bool installFieldPhysics(BYTE* base, uint8_t exeBuild) {
   const bool wantFix = engineFixEnabled();
   // The stabilizer holds the character only while it is grounded, and without
   // the rescale that precondition can drop while the character is still
@@ -405,7 +405,7 @@ bool installFieldPhysics(BYTE* base, const Game& game) {
     log("FIXES field_physics=off");
     return false;
   }
-  const FieldPhysicsAddrs* addrs = addressesFor(game);
+  const FieldPhysicsAddrs* addrs = addressesFor(exeBuild);
   if (!addrs) {
     log("FIXES field_physics=failed (unsupported executable)");
     return false;

@@ -45,6 +45,10 @@ struct Descriptor {
 const Descriptor& descriptor(Feature f) {
   static const Descriptor table[static_cast<int>(Feature::Count)] = {
     /* AtlasStats      */ { "DUSK_ATLAS_STATS" },
+    /* AtlasTrace      */ { "DUSK_ATLAS_TRACE" },
+    /* AtlasVerify     */ { "DUSK_ATLAS_VERIFY" },
+    /* AtlasCensus     */ { "DUSK_ATLAS_CENSUS" },
+    /* D3D11WriteProbe */ { "DUSK_D3D11_WRITE_PROBE" },
     /* AtlasCache      */ { "DUSK_ATLAS_CACHE" },
     /* FieldEngineFix  */ { "DUSK_FIELD_ENGINE_FIX" },
     /* FieldStabilizer */ { "DUSK_FIELD_STABILIZER" },
@@ -62,14 +66,32 @@ constexpr Support X = Support::OnByDefault;
 // AtlasStats is Ayesha-only and OptIn: it is a diagnostic, so it must never be
 // on by default, and it is meaningless on the other two games because their
 // text-rendering layer has no homolog of the hooked entry points
-// (TECHNICAL.md 1.3).
+// (TECHNICAL.md "The engine triage").
+//
+// AtlasTrace is the same, and additionally implies AtlasStats: it records the
+// raw atlas lock/unlock sequence of one steady-state frame and prints it, which
+// is how the write-to-read pairing gets settled rather than guessed
+// (TECHNICAL.md "Diagnostics"). It costs a mutex acquisition per lock, so it is
+// strictly a bring-your-own-question switch.
+//
+// AtlasVerify is the correctness check for the cache, and is Ayesha-only and
+// OptIn for a stronger reason than the others: it makes the game slow on purpose
+// (a real atlas lock plus a ~1 MB comparison per verified read). It answers the
+// one question a playthrough cannot, since a stale glyph in Japanese is not
+// something a reader can reliably spot.
+//
+// AtlasCensus and D3D11WriteProbe are enumeration diagnostics rather than
+// sampling ones: they exist to close the question of who can write a font atlas
+// by listing every writer, which is a stronger result than any playthrough can
+// give. Both are Ayesha-only and OptIn.
 //
 // AtlasCache is Ayesha-only and ships ON BY DEFAULT: it is the shipping fix.
 // The pattern it addresses is measured, not assumed -- 2385 candidate locks onto
 // 3 atlases per 248 ms drain, plus a per-frame steady-state drip -- and the
 // measured effect is an 85% reduction in menu-build time at a 95.5% hit rate
-// (TECHNICAL.md §2.1, §2.3, §4.1). `DUSK_ATLAS_CACHE=0` turns it off, which is
-// what an A/B or a bug report wants.
+// (TECHNICAL.md "Repeated font-atlas reads", "The lifetime is frame-scoped, and
+// there are two problems", "Repeated font-atlas reads"). `DUSK_ATLAS_CACHE=0`
+// turns it off, which is what an A/B or a bug report wants.
 //
 // The two field-jitter halves are Ayesha-only and stay OptIn. They are ported
 // from Arland (where both are on by default) but nothing has been measured on
@@ -78,10 +100,10 @@ constexpr Support X = Support::OnByDefault;
 // confirmed for this build -- see the comment on stabilizerEnabled in
 // field_physics.cpp. They must not be promoted alongside the cache.
 constexpr Support kMatrix[3][static_cast<int>(Feature::Count)] = {
-  //                Stats Cache Field Stab
-  /* Ayesha  */   {   O,    X,    O,    O },
-  /* Escha   */   {   U,    U,    U,    U },
-  /* Shallie */   {   U,    U,    U,    U },
+  //                Stats Trace Verfy Censu Probe Cache Field Stab
+  /* Ayesha  */   {   O,    O,    O,    O,    O,    X,    O,    O },
+  /* Escha   */   {   U,    U,    U,    U,    U,    U,    U,    U },
+  /* Shallie */   {   U,    U,    U,    U,    U,    U,    U,    U },
 };
 
 int titleRow(Title t) {
@@ -98,6 +120,23 @@ int titleRow(Title t) {
 Title currentTitle() {
   static const Title title = detectTitle();
   return title;
+}
+
+Engine currentEngine() {
+  switch (currentTitle()) {
+    case Title::Ayesha:  return Engine::Phyre;
+    case Title::Escha:
+    case Title::Shallie: return Engine::Ktgl;
+    default: return Engine::Unknown;
+  }
+}
+
+const char* engineName(Engine e) {
+  switch (e) {
+    case Engine::Phyre: return "Phyre";
+    case Engine::Ktgl:  return "KTGL";
+    default: return "Unknown";
+  }
 }
 
 const char* titleName(Title t) {

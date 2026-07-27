@@ -21,7 +21,7 @@ version_rc = configure_file(
   output : 'version.rc',
   configuration : version_data)
 version_header = configure_file(
-  input : 'src/version.h.in',
+  input : 'src/core/version.h.in',
   output : 'version.h',
   configuration : version_data)
 resource_includes = include_directories('.')
@@ -30,12 +30,19 @@ resource_includes = include_directories('.')
 # resolve them elsewhere.
 dxguid_dep = cpp.find_library('dxguid')
 
+# Split by engine: src/core is engine-agnostic, src/phyre is Ayesha
+# (PhyreEngine), src/ktgl is Escha & Logy plus Shallie. They compile into one
+# d3d11.dll -- see src/core/engine.h for why.
 sources = files(
-  'src/main.cpp',
-  'src/game.cpp',
-  'src/atlas_fix.cpp',
-  'src/field_physics.cpp',
-  'src/hook_util.cpp',
+  'src/core/main.cpp',
+  'src/core/d3d11_probe.cpp',
+  'src/core/engine.cpp',
+  'src/core/game.cpp',
+  'src/core/hook_util.cpp',
+  'src/phyre/phyre.cpp',
+  'src/phyre/atlas_fix.cpp',
+  'src/phyre/field_physics.cpp',
+  'src/ktgl/ktgl.cpp',
   'vendor/minhook/src/hde/hde64.c',
   'vendor/minhook/src/hook.c',
   'vendor/minhook/src/buffer.c',
@@ -45,12 +52,12 @@ sources = files(
 shared_library('d3d11',
   [sources,
    windows.compile_resources(
-     'src/d3d11.rc',
+     'src/core/d3d11.rc',
      depend_files : version_rc,
      include_directories : resource_includes)],
   name_prefix : '',
-  vs_module_defs : 'src/d3d11.def',
-  include_directories : include_directories('src'),
+  vs_module_defs : 'src/core/d3d11.def',
+  include_directories : include_directories('src', 'src/core'),
   dependencies : dxguid_dep,
   cpp_args : common_cpp_args,
   link_args : common_link_args + (cpp.get_id() == 'gcc' ? ['-Wl,--file-alignment=4096'] : []),

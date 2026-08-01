@@ -5,7 +5,7 @@
 //
 // These two are UCRT builds on the newer Gust engine. They carry NO known menu
 // hitch -- the Arland/Ayesha text renderer has no homolog in either binary and
-// their queue drain mismatches on both vote and prologue shape (TECHNICAL.md
+// their queue drain mismatches on both vote and prologue shape (WORK_DOC.md
 // 1.3) -- so nothing in `src/phyre/` applies to them and none of it is reachable
 // here. Their own open defects are different problems entirely:
 //

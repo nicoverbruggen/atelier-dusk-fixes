@@ -26,7 +26,7 @@ using atfix::currentModuleIdentity;
 using atfix::log;
 
 // The four KTGL executables, fingerprinted the same way as Ayesha's two: name
-// plus .text VirtualSize. SHA-256 for each is in TECHNICAL.md "Hook boundaries".
+// plus .text VirtualSize. SHA-256 for each is in WORK_DOC.md "Hook boundaries".
 //
 // A zero `textSize` would mean "name matches, size unknown" and is reported but
 // never treated as a verified identity, so a future fix cannot install against

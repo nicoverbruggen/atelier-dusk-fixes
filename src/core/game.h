@@ -23,7 +23,7 @@ const char* titleName(Title t);
 // source tree is split along, because the two share almost nothing that a fix
 // can reach: Ayesha is the PhyreEngine-derived, old-MSVC-CRT build whose
 // font-atlas and text-rendering path is the same code as the Arland games'
-// (TECHNICAL.md "The engine triage"), while
+// (WORK_DOC.md "The engine triage"), while
 // Escha & Logy and Shallie are UCRT builds on LTGL/KTGL whose text layer has no
 // homolog of it at all.
 //

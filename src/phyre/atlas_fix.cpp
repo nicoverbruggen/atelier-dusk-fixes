@@ -3,7 +3,7 @@
 // Ayesha font-atlas read cache, plus the diagnostic that justified it.
 //
 // Both ride the same four hooked entry points; the addresses and how they were
-// derived are recorded in TECHNICAL.md "Hook boundaries". Do not change an RVA
+// derived are recorded in WORK_DOC.md "Hook boundaries". Do not change an RVA
 // here without updating that table.
 //
 // DUSK_ATLAS_CACHE (the fix) serves repeated 512x512 font-atlas locks from a CPU
@@ -15,7 +15,7 @@
 //
 // Lifetime is FRAME-SCOPED, i.e. the Arland Rorona path rather than the
 // Totori/Meruru one. That is a measured choice, not a default: 72% of Ayesha's
-// candidate locks arrive outside the resource-event queue drain (TECHNICAL.md
+// candidate locks arrive outside the resource-event queue drain (WORK_DOC.md
 // 2.3), so a queue-scoped cache would miss most of the work. Snapshots are
 // therefore discarded at Present, and never held across a frame boundary.
 #define WIN32_LEAN_AND_MEAN
@@ -51,7 +51,7 @@ using atfix::installMinHookDetour;
 using atfix::log;
 
 // Signatures match the Arland project's, which is expected: these are the same
-// middleware and text-renderer functions (TECHNICAL.md "Corroborating the atlas
+// middleware and text-renderer functions (WORK_DOC.md "Corroborating the atlas
 // lock past its WEAK verdict").
 //
 // The atlas lock's 4th argument is the middleware ACCESS MODE, not a cube face:
@@ -70,7 +70,7 @@ RenderTextProc originalRenderText = nullptr;
 AtlasLockProc originalAtlasLock = nullptr;
 AtlasUnlockProc originalAtlasUnlock = nullptr;
 
-// Prologues verified in both Ayesha binaries; see TECHNICAL.md "Hook
+// Prologues verified in both Ayesha binaries; see WORK_DOC.md "Hook
 // boundaries" for how each was derived.
 //
 // The queue drain, text renderer and lock windows are build-independent. The
@@ -195,7 +195,7 @@ bool censusActive = false;
 // because the answer is an ordering property: the cache recognizes its own
 // unlocks by matching the top of a per-thread stack, a LIFO pairing inherited
 // from Arland's one-write-plus-one-read-per-glyph pattern. Ayesha issues two
-// writes per read (TECHNICAL.md "Repeated font-atlas reads"), so that
+// writes per read (WORK_DOC.md "Repeated font-atlas reads"), so that
 // assumption may simply not hold here -- and no aggregate count can distinguish
 // "the pairing is wrong" from "something else unlocks these textures".
 //

@@ -66,12 +66,12 @@ constexpr Support X = Support::OnByDefault;
 // AtlasStats is Ayesha-only and OptIn: it is a diagnostic, so it must never be
 // on by default, and it is meaningless on the other two games because their
 // text-rendering layer has no homolog of the hooked entry points
-// (TECHNICAL.md "The engine triage").
+// (WORK_DOC.md "The engine triage").
 //
 // AtlasTrace is the same, and additionally implies AtlasStats: it records the
 // raw atlas lock/unlock sequence of one steady-state frame and prints it, which
 // is how the write-to-read pairing gets settled rather than guessed
-// (TECHNICAL.md "Diagnostics"). It costs a mutex acquisition per lock, so it is
+// (WORK_DOC.md "Diagnostics"). It costs a mutex acquisition per lock, so it is
 // strictly a bring-your-own-question switch.
 //
 // AtlasVerify is the correctness check for the cache, and is Ayesha-only and
@@ -89,7 +89,7 @@ constexpr Support X = Support::OnByDefault;
 // The pattern it addresses is measured, not assumed -- 2385 candidate locks onto
 // 3 atlases per 248 ms drain, plus a per-frame steady-state drip -- and the
 // measured effect is an 85% reduction in menu-build time at a 95.5% hit rate
-// (TECHNICAL.md "Repeated font-atlas reads", "The lifetime is frame-scoped, and
+// (WORK_DOC.md "Repeated font-atlas reads", "The lifetime is frame-scoped, and
 // there are two problems", "Repeated font-atlas reads"). `DUSK_ATLAS_CACHE=0`
 // turns it off, which is what an A/B or a bug report wants.
 //

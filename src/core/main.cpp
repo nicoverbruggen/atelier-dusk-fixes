@@ -15,10 +15,12 @@
 #include <array>
 #include <cstring>
 
+#include "config.h"
 #include "d3d11_probe.h"
 #include "engine.h"
 #include "game.h"
 #include "log.h"
+#include "highres.h"
 #include "util.h"
 #include "version.h"
 #include "../../vendor/minhook/include/MinHook.h"
@@ -61,6 +63,7 @@ D3D11Proc loadSystemD3D11() {
 
   log("Atelier Dusk Fixes version ", DUSK_FIX_VERSION);
   log("Title: ", titleName(currentTitle()));
+  logConfiguration();
 
   HMODULE libD3D11 = LoadLibraryExA("d3d11_proxy.dll", nullptr,
     LOAD_LIBRARY_SEARCH_APPLICATION_DIR);
@@ -104,6 +107,7 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* swapChain,
   // lifetime, not just where the diagnostic attributes out-of-drain locks.
   dusk::engineFrameTick();
   d3d11WriteProbeFrameTick();
+  highResFrameTick();
   return originalPresent(swapChain, syncInterval, flags);
 }
 
@@ -135,6 +139,12 @@ HRESULT STDMETHODCALLTYPE hookedCreateSwapChain(
     IDXGIFactory* factory, IUnknown* device,
     DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** swapChain) {
   const HRESULT result = originalCreateSwapChain(factory, device, desc, swapChain);
+  // Reported from the succeeded call, so the line names the swap chain the game
+  // actually got rather than the one it asked for.
+  if (SUCCEEDED(result) && desc)
+    noteSwapChainSize(desc->BufferDesc.Width, desc->BufferDesc.Height,
+      desc->BufferDesc.Format, desc->BufferDesc.RefreshRate.Numerator,
+      desc->BufferDesc.RefreshRate.Denominator, desc->Windowed != FALSE);
   if (SUCCEEDED(result) && swapChain && *swapChain)
     hookPresent(*swapChain);
   return result;
@@ -209,8 +219,15 @@ DLLEXPORT HRESULT __stdcall D3D11CreateDevice(
     ppImmediateContext);
 
   // Ayesha's route: the swap chain arrives later, via the DXGI factory.
-  if (SUCCEEDED(hr) && ppDevice && *ppDevice)
+  if (SUCCEEDED(hr) && ppDevice && *ppDevice) {
     atfix::hookFactoryForSwapChain(*ppDevice);
+    // Installed here, before the game has created anything. A census that
+    // starts late silently omits the targets built during startup, which is
+    // most of them -- and the fix that shares its hook would miss exactly the
+    // same ones, which is worse than missing them in a log.
+    atfix::initializeHighRes(*ppDevice,
+      ppImmediateContext ? *ppImmediateContext : nullptr);
+  }
 
   if (SUCCEEDED(hr) && ppImmediateContext && *ppImmediateContext)
     atfix::initializeD3D11WriteProbe(*ppImmediateContext);
@@ -240,8 +257,19 @@ DLLEXPORT HRESULT __stdcall D3D11CreateDeviceAndSwapChain(
     Software, Flags, pFeatureLevels, FeatureLevels, SDKVersion, pSwapChainDesc,
     ppSwapChain, ppDevice, pFeatureLevel, ppImmediateContext);
 
+  if (SUCCEEDED(hr) && pSwapChainDesc)
+    atfix::noteSwapChainSize(pSwapChainDesc->BufferDesc.Width,
+      pSwapChainDesc->BufferDesc.Height, pSwapChainDesc->BufferDesc.Format,
+      pSwapChainDesc->BufferDesc.RefreshRate.Numerator,
+      pSwapChainDesc->BufferDesc.RefreshRate.Denominator,
+      pSwapChainDesc->Windowed != FALSE);
+
   if (SUCCEEDED(hr) && ppSwapChain && *ppSwapChain)
     atfix::hookPresent(*ppSwapChain);
+
+  if (SUCCEEDED(hr) && ppDevice && *ppDevice)
+    atfix::initializeHighRes(*ppDevice,
+      ppImmediateContext ? *ppImmediateContext : nullptr);
 
   if (SUCCEEDED(hr) && ppImmediateContext && *ppImmediateContext)
     atfix::initializeD3D11WriteProbe(*ppImmediateContext);

@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# Day-to-day local build. Cross-compiles the Windows target with MinGW inside the
-# build container, producing:
-#   build64/d3d11.dll          (64-bit game DLL)
+# Day-to-day local build. Cross-compiles all three Windows targets with MinGW
+# inside the build container, producing:
+#   build64/d3d11.dll              (64-bit game DLL)
+#   build64/dusk-fix-launcher.exe  (64-bit launcher window)
+#   build32/msimg32.dll            (32-bit launcher proxy)
 #
 # The container (default "atfix-build", override with $ATFIX_CONTAINER) provides
 # the MinGW-w64 toolchain, meson and ninja, and is shared with the Arland
 # project -- see ../atelier-arland-fixes/BUILDING.md for how to create it.
 # Optional first argument: the meson build type (default: release).
 #
-# Unlike the Arland project there is no 32-bit target: this repository ships no
-# launcher proxy yet.
+# The two targets exist because the split is in the games: all six Dusk
+# front-ends are 32-bit and the six game executables are 64-bit.
 set -euo pipefail
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"
@@ -37,12 +39,26 @@ buildtype="$1"
 meson setup build64 --cross-file build-win64.txt --buildtype "$buildtype" --reconfigure >/dev/null 2>&1 \
   || meson setup build64 --cross-file build-win64.txt --buildtype "$buildtype"
 meson compile -C build64
+meson setup build32 --cross-file build-win32.txt --buildtype "$buildtype" --reconfigure >/dev/null 2>&1 \
+  || meson setup build32 --cross-file build-win32.txt --buildtype "$buildtype"
+meson compile -C build32
 EOSH
 
 echo
-if [[ -f "$repo/build64/d3d11.dll" ]]; then
-  echo "  ok      build64/d3d11.dll"
-else
-  echo "  MISSING build64/d3d11.dll" >&2
-  exit 1
-fi
+status=0
+for artifact in build64/d3d11.dll build64/dusk-fix-launcher.exe build32/msimg32.dll; do
+  if [[ -f "$repo/$artifact" ]]; then
+    echo "  ok      $artifact"
+  else
+    echo "  MISSING $artifact" >&2
+    status=1
+  fi
+done
+[[ "$status" -eq 0 ]] || exit "$status"
+
+# Both DLLs are proxies, so a missing or mis-decorated export is not a build
+# error -- it is a game that fails to start with no explanation. MinGW is
+# capable of exporting the 32-bit stdcall names decorated (_AlphaBlend@44),
+# which the front-ends would not resolve.
+python3 "$repo/scripts/check_exports.py" \
+  "$repo/build64/d3d11.dll" "$repo/build32/msimg32.dll"

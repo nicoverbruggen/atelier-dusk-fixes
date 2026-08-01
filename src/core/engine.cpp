@@ -4,6 +4,8 @@
 // one DLL.
 #include "engine.h"
 
+#include <cstdlib>
+
 #include "game.h"
 #include "log.h"
 #include "../ktgl/ktgl.h"
@@ -35,6 +37,17 @@ bool initializeEngineFixes() {
     const Engine engine = currentEngine();
     log("Engine: ", engineName(engine),
         " (", titleName(currentTitle()), ")");
+    // DUSK_DISABLE stands the whole mod down for one launch: Direct3D is still
+    // forwarded, but no module initializes and nothing is hooked. It is what
+    // the launcher's "Play without the mod" button passes to the game, so the
+    // shipped behaviour can be compared against without moving files out of the
+    // folder and having to remember to move them back.
+    if (const char* disabled = std::getenv("DUSK_DISABLE")) {
+      if (disabled[0] != '0') {
+        log("DUSK_DISABLE is set: installing nothing, forwarding Direct3D only");
+        return false;
+      }
+    }
     switch (engine) {
       case Engine::Phyre:
         if (!initializePhyreFixes())

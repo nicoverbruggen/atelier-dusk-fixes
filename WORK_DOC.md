@@ -12,6 +12,14 @@ font-atlas read cache — plus the diagnostics that justified it. The opt-in
 switches listed in the README beyond those are experimental and are not
 documented as established behaviour.
 
+Two larger pieces are implemented but unvalidated, and both are one in-game
+session away from an answer: the **launcher** (the window, the 32-bit redirect
+and the `dusk-fix.ini` layer behind them) and the **high-resolution fix** for
+Ayesha. The current state of each, including exactly what the next run has to
+show, is under "The launcher window" and "The high-resolution fix" →
+"Validation status". `../atelier-re-tools/DUSK.md` carries the same two as its
+top queue items.
+
 Steam app IDs: Ayesha `1152300`, Escha & Logy `1152310`, Shallie `1152320`.
 
 ## Historical background
@@ -40,10 +48,13 @@ under "The engine triage" below.
 The source tree follows the engine boundary:
 
 ```
-src/core/    engine-agnostic: the D3D11 proxy, engine dispatch, the capability
-             matrix, hook installation, logging
-src/phyre/   Ayesha — the atlas read cache
-src/ktgl/    Escha & Logy and Shallie — fingerprinting only, so far
+src/core/     engine-agnostic: the D3D11 proxy, engine dispatch, the capability
+              matrix, the ini layer, the high-resolution fix and its census,
+              hook installation, logging
+src/phyre/    Ayesha — the atlas read cache
+src/ktgl/     Escha & Logy and Shallie — fingerprinting only, so far
+src/launcher/ neither engine, and one of the two is not even the same
+              architecture: the launcher window and the 32-bit msimg32 proxy
 ```
 
 Neither engine module includes the other's headers, and no address pack lives in
@@ -365,6 +376,594 @@ uncommon kanji page in far more often than Latin. If a report arrives,
 `DUSK_ATLAS_CACHE=0` restores the game's own behaviour without a rebuild, and the
 log records the cache's hit/real-read split for any run.
 
+## The Dusk front-ends
+
+> **TL;DR**: Each Dusk game ships the same two 32-bit front-end programs the Arland games do, and they load a DLL the same way, so the Arland launcher redirect ports across almost unchanged. What is different is that the Dusk launchers are per-game files rather than one shared binary.
+
+Every Dusk game folder holds four executables: the 64-bit English and
+multilingual game builds, plus two 32-bit front-ends.
+
+| Front-end | What it is | `.text` VirtualSize | Entry-point RVA |
+|---|---|---:|---:|
+| `Atelier_<Game>Launcher.exe` | what Steam runs | `0x14f4f4` | `0x1216f2` |
+| `Atelier_<Game>Env.exe` | the stock settings editor | `0x1b9e20` | `0x137279` |
+
+All six are `IMAGE_FILE_MACHINE_I386` and all six statically import
+**MSIMG32.dll**, for `AlphaBlend` and `TransparentBlt`, which is exactly the
+arrangement the Arland proxy relies on. Their import sets are otherwise
+identical to the Arland front-ends' as well, `ArlandDXEnv.exe` included, down to
+the settings editor importing `d3d11.dll` and `dxgi.dll` while the launcher does
+not.
+
+The three launchers are separate compiles of one program: identical `.text`
+VirtualSize and identical entry-point RVA, but differing `.text` SHA-256, so
+per-game strings live inside the section. The three settings editors are the
+same story except that Ayesha's and Shallie's `.text` are byte-identical to each
+other and Escha's differs.
+
+| Executable | `.text` SHA-256 |
+|---|---|
+| `Atelier_AyeshaLauncher.exe` | `d8d87625df6e8895e3221ddeabbcea47d55b94162427c306d0c422abb015e533` |
+| `Atelier_Escha_and_LogyLauncher.exe` | `e222f8bee6fd20886c698b32ac4105a29df62f68b0d49696aba60c12fa1d8de7` |
+| `Atelier_ShallieLauncher.exe` | `56472142cf4e832ba514b51fbcbb98a991cbf4c6531fcf6c9ae4d3ccd1c3cd1a` |
+| `Atelier_AyeshaEnv.exe` | `c10bbf867638c8b06ccca4dca62c668ae0e3a7289ebfd695363fbed44ca0d96e` |
+| `Atelier_Escha_and_LogyEnv.exe` | `8b1e6cc7a13c29e2ffb610558a137a2736a259e7cfb0555f6800f22748802df4` |
+| `Atelier_ShallieEnv.exe` | `c10bbf867638c8b06ccca4dca62c668ae0e3a7289ebfd695363fbed44ca0d96e` |
+
+The practical consequence for the redirect is that the launcher's **file name**
+is what identifies the game, where the Arland proxy could not tell its three
+apart at all and had to probe the folder for whichever game executable existed.
+That is a simplification rather than a complication: the Dusk proxy knows which
+title it is in before it looks at the disk, so resolving which build to start is
+a two-candidate check against one row rather than a sweep of all three games.
+
+### How the stock launcher picks the game build
+
+The mapping from `[Lang] Language` to executable is read out of the launcher
+rather than assumed from the Arland convention it happens to match. The stock
+launcher parses `Setting.ini` by hand, splitting each line at `=`, then runs a
+**string**-compare chain over the value against the constants `"1"`, `"2"`,
+`"3"` and `"4"` at `0x551ea4`, `0x551ea8`, `0x551eac` and `0x551eb0` (ImageBase
+`0x400000`), each arm pushing an executable name:
+
+| `Language` | Branch RVA | Executable |
+|---|---:|---|
+| `1` (Japanese) | `0x2ff8` | `Atelier_Ayesha.exe` (multilingual) |
+| `2` (English) | `0x303a` → `0x30dc` | `Atelier_Ayesha_EN.exe` |
+| `3` (Simplified Chinese) | `0x3086` | `Atelier_Ayesha.exe` |
+| `4` (Traditional Chinese) | `0x30d5` | `Atelier_Ayesha.exe` |
+| anything else | `0x30dc` | `Atelier_Ayesha_EN.exe` |
+
+The `"2"` arm and the unrecognized-value arm are the same branch, which is where
+the English default comes from. All four names sit consecutively at
+`0x551ed8`–`0x551f18`, immediately before the `Setting.ini` and
+`Atelier_AyeshaEnv.exe` constants, and the Escha & Logy and Shallie launchers
+carry the identical table at the identical file offset (`0x1508a4`) with their
+own executable names.
+
+So the convention is the Arland one, default included. The one place the proxy
+could have differed is that it originally tested only the value's first
+character, where the launcher compares whole strings: `Language=10` would have
+read as Japanese instead of falling to English. It now compares whole strings
+too.
+
+### Open, low priority: the settings editor and the 64-bit `d3d11.dll`
+
+Note which executable this is about. The **launcher** does not import `d3d11`
+at all, so it is unaffected and always has been. The **settings editor**,
+`Atelier_<Game>Env.exe`, is a 32-bit process that statically imports
+`d3d11.dll`, and the mod installs a 64-bit `d3d11.dll` into the same folder. If
+the loader prefers the application directory for that name, a 32-bit process
+cannot load it and the editor fails to start.
+
+This is untested and is not a blocker. Proton cannot answer it: the
+`WINEDLLOVERRIDES=d3d11=n,b` the test scripts use falls back to the builtin
+when the native load fails, which the Windows loader does not do, so a working
+editor under Proton would prove nothing. Arland has the identical layout and has
+shipped it for a long time without a report, so whatever the answer is, it
+applies to both projects equally.
+
+If it does turn out to be real, the fix is to proxy a DLL that no front-end
+imports. Ten names qualify (imported by every game executable, by none of the
+six front-ends): `d3d9`, `d3dcompiler_43`, `dwmapi`, `dxva2`, `mf`, `mfplat`,
+`mfreadwrite`, `steam_api64`, `vcomp140`, `xinput1_3`. Most rule themselves
+out -- `steam_api64` is a real file already in the folder, `mf*` is Media
+Foundation and Proton substitutes it, `d3d9` is DXVK's under Proton, and
+`xinput1_3` is the controller path, which has its own open work item.
+**`dwmapi.dll`** is the best of them: a genuine always-present system DLL with a
+tiny export surface. The cost is that the mod would no longer own the D3D11
+entry points it currently exports, and would have to hook
+`d3d11!D3D11CreateDevice` from `DllMain` instead.
+
+## Ayesha's resolution path
+
+> **TL;DR**: Ayesha takes its resolution straight out of its own `Setting.ini` and does not check the value against anything. So raising the resolution needs no injection at all -- a launcher that writes that file is enough. What is still unknown is whether the *renderer* honours the larger size everywhere, which is the defect the Arland project had to fix.
+
+The game reads `[Graphics] ScreenWidth` and `[Graphics] ScreenHeight` from
+`Setting.ini` beside the executable, as wide-character
+`GetPrivateProfileInt`-shaped reads. Both builds carry the same reader:
+
+| Anchor | Ayesha EN | Derivation |
+|---|---:|---|
+| resolution reader | `0x71a550` | the only reader of the `ScreenWidth`/`ScreenHeight` string constants |
+| its single caller | `0x19bfe0` | via incremental-link thunk `0x1abe0`, one confirmed call site |
+
+`0x71a550` reads the width into its second argument and the height into its
+third. The interesting part is what it does with them:
+
+```
+0x0071a69e  cmp dword ptr [r14], 0        ; width
+0x0071a6a2  jge 0x71a6ab
+0x0071a6a4  mov dword ptr [r14], 0x500    ; 1280
+...
+0x0071a7a6  mov dword ptr [rsi], 0x2d0    ; 720, the same shape for height
+```
+
+That is the **entire** validation: a negative value is replaced by the 1280x720
+default, and anything else is passed through. There is no clamp against an
+upper bound, no snapping to a table of supported modes, and no consultation of
+the display's reported mode list. The caller stores the pair straight into its
+configuration object at `+0xc` and `+0x10`, alongside the fullscreen flag at
+`+0x27`.
+
+Two things follow, and the second is the one that matters.
+
+**The mod does not need a resolution override.** Arland needs one because Koei
+Tecmo's settings editor filters its lists through Windows display-mode
+reporting, so a resolution the game would accept can be impossible to select;
+the Arland launcher works around that by writing its own ini key and having the
+64-bit DLL replace the swap-chain request. Here the game's own key already
+accepts any value, so a launcher that writes `Setting.ini` gets a higher
+resolution with no injection, no hook and no second source of truth for a
+setting the game already owns. This repository deliberately does not add a
+`DisplayWidth`/`DisplayHeight` key.
+
+**Whether the renderer follows is a separate question, and it is open.** The
+old-Arland renderer sizes its backbuffer from the setting but pins a family of
+auxiliary render targets to 1920x1080, so raising the resolution there produces
+a larger frame with a smaller image inside it, and the Arland project had to
+resize those targets and correct the viewport and scissor state to get a genuine
+1440p. Ayesha is a different renderer, so nothing about that carries over by
+assumption in either direction. A screenshot cannot settle it either: "the UI
+looks right" and "the scene targets are the size they should be" are different
+claims, and only the second says what would need fixing.
+
+`DUSK_TARGET_CENSUS=1` answered it by enumeration, and one run was enough.
+
+### Measured: Ayesha has the old-Arland defect
+
+A single windowed run of the English build with `ScreenWidth=2560`,
+`ScreenHeight=1440` settles it. Two things are confirmed at once, and neither
+needed a 1440p display: the game was asked for a resolution larger than the
+screen and it simply made one, which is the static reading of `0x71a550`
+confirmed at runtime.
+
+```
+Swap chain: 2560x1440 format=87 refresh=60/1 windowed
+TARGETCENSUS 2560x1440 rel=matchesSwapChain format=44 samples=1 bindFlags=0x40 callerRva=0x559da6
+TARGETCENSUS 1920x1080 rel=1920x1080   format=90 samples=1 bindFlags=0x28 callerRva=0x5596d9
+TARGETCENSUS 1920x1080 rel=1920x1080   format=90 samples=4 bindFlags=0x28 callerRva=0x5596d9
+TARGETCENSUS 1920x1080 rel=1920x1080   format=44 samples=4 bindFlags=0x48 callerRva=0x5596d9
+TARGETCENSUS 1728x972  rel=other       format=90 samples=4 bindFlags=0x28 callerRva=0x5596d9
+TARGETCENSUS 1536x864  rel=other       format=90 samples=4 bindFlags=0x28 callerRva=0x5596d9
+TARGETCENSUS  960x540  rel=other       format=90 samples=1 bindFlags=0x28 callerRva=0x5596d9
+TARGETCENSUS  480x272 / 240x136 / 120x68 / 64x36        same caller
+TARGETCENSUS 1024x1024 rel=other       format=44 samples=1 bindFlags=0x48 callerRva=0x5596d9
+```
+
+Formats are `87` `B8G8R8A8_UNORM` (the swap chain), `90` `B8G8R8A8_TYPELESS`
+(colour targets) and `44` `R24G8_TYPELESS` (depth). Bind flags are `0x28`
+`SHADER_RESOURCE|RENDER_TARGET`, `0x48` `SHADER_RESOURCE|DEPTH_STENCIL`, `0x40`
+`DEPTH_STENCIL`. The whole session settles at 29 creations across 15 distinct
+shapes and never grows again, so this is the complete set.
+
+The conclusion is the one the Arland project reached about its own renderer.
+**The swap chain and its matching depth follow the setting; everything the scene
+is actually drawn into is pinned to 1920x1080.** The scene is rendered at 1080p
+and scaled up to the 1440p backbuffer, so selecting a higher resolution today
+buys a larger window and no more detail.
+
+Two caller RVAs appear, `0x5596d9` and `0x559da6`, inside `0x559600` and
+`0x559c40`. **Neither attributes the size**, and an earlier reading of this that
+said the defect "is in `0x559600`" was wrong. Disassembly shows `0x559600` is
+the engine's *generic* texture-creation wrapper: it assembles a
+`D3D11_TEXTURE2D_DESC` on the stack purely from its own arguments and calls the
+device through the vtable slot at `[rbx+0x3358]`. Everything funnels through it,
+so the census's caller RVA names the wrapper and says nothing about who chose
+1920x1080. `0x559c40` is a second such path, which happens to be the one the
+main depth target takes.
+
+Attribution would need one more stack frame, and it turns out not to be
+necessary: the fix does not have to know who asked. The census line still
+carries the caller because a *third* distinct RVA appearing would mean a
+creation path this was never measured against, which is worth knowing.
+
+The pinned family has structure worth noting:
+
+- A **4x MSAA pair** at 1920x1080, colour and depth, plus a non-MSAA pair.
+- **1728x972 and 1536x864**, which are 0.9x and 0.8x of 1920x1080. A quality or
+  dynamic-resolution ladder derived from the same fixed base, so a fix that
+  rewrites only exact-1920x1080 targets would leave these behind at their
+  1080p-derived sizes.
+- A **halving chain** 960x540, 480x272, 240x136, 120x68, 64x36, which is a
+  bloom or downsample pyramid rooted at half of 1080p. Same problem: derived
+  sizes, not literal 1920x1080, so they need proportional scaling rather than a
+  match-and-replace.
+- A **1024x1024** depth appearing about 50 seconds in, which is the shadow map
+  and is resolution-independent by design. Leave it alone.
+
+## The high-resolution fix
+
+> **TL;DR**: The scene targets are made to follow the chosen resolution instead of staying at 1080p, and the hard-coded viewport and scissor follow with them. The mechanism is TellowKrinkle's, refined by the Arland project; this is not a new technique.
+
+Implemented in `src/core/highres.cpp`, sharing its `CreateTexture2D` hook with
+the census that measured the defect. They are one subsystem: MinHook allows
+exactly one hook per target, so they could not be separate installs, and running
+them together is what makes "did this actually resize everything" answerable in
+one session. `[Rendering] HighResolution` / `DUSK_HIGHRES`.
+
+### Prior art, and what was taken from where
+
+TellowKrinkle's rendering branch already solves this for this engine family, and
+its `CreateTexture2D` comment names Ayesha outright: *"Some older Atelier games
+(Rorona, Meruru, Ayesha) always render at 1080p no matter the requested
+resolution"*. Its rule is three parts: take the first depth-stencil target's
+size as the main render size, rewrite any render or depth target that is exactly
+1920x1080 to that size, and override a full-screen 1920x1080 viewport and
+scissor with the bound target's real dimensions.
+
+The Arland project ported that and added three refinements, all carried over
+here: **shape validation** on the main-target guess, rather than trusting the
+first depth-stencil unconditionally; the **half-size blur rule**, because the
+engine hard-codes 960x540 for its blur chain and leaving it behind gives a blur
+sampled at 1080p proportions over a 1440p scene; and keeping raster state **per
+context** rather than globally.
+
+Yuri Hime's Atelier Graphics Tweak also ships a resolution hack for these games.
+It is unlicensed, none of its code is used, and it was not consulted for this.
+
+### What the rules are, and why each is narrow
+
+- **Main size**: the first `D3D11_BIND_DEPTH_STENCIL` texture, accepted only if
+  it matches the swap chain's size or is 16:9 and at least 1920x1080. The
+  ordering is confirmed in Ayesha's own log -- a 2560x1440 depth at 125 ms, the
+  first pinned target at 2241 ms -- and the shape check is what stops a game
+  that reordered its creations from having some small depth buffer adopted and
+  every scene target resized to it.
+- **Full targets**: exactly 1920x1080, render or depth, **created empty**. The
+  initial-data check keeps a loaded image that happens to be that size out.
+- **Blur targets**: exactly 960x540, colour only, typeless BGRA, one mip, one
+  array slice, no MSAA. Narrow on purpose, because "half the pinned size" is a
+  shape plenty of unrelated textures could share.
+- **Only ever scales up.** At or below 1920x1080 nothing is rewritten at all, so
+  an ordinary 1080p session takes the path the game shipped with.
+- **A refused resize falls back.** If the driver rejects the enlarged
+  descriptor, the creation is retried with exactly what the game asked for, so
+  the worst case is the unfixed 1080p frame rather than a missing texture.
+
+### The raster correction: two attempts, and a misread in between
+
+The first implementation rewrote the viewport and scissor **eagerly**, inside
+`RSSetViewports` and `RSSetScissorRects`, rather than deferring to the next draw
+the way TellowKrinkle's fork and the Arland implementation both do. The reason
+was cost: deferring means hooking `Draw`, `DrawIndexed`, `DrawInstanced` and
+`DrawIndexedInstanced`, the four hottest entry points in the API, for a
+correction that applies to a handful of submissions a frame.
+
+The run that followed produced a frame with the scene complete and correctly
+proportioned but drawn into about nine-sixteenths of the window, with the UI
+detached from it. That was read at the time as the eager rewrite firing on a
+pass it should not have, and the correction was rewritten in the deferred,
+target-aware form on the strength of that reading.
+
+**The reading was wrong, and the arithmetic says so.** Nine sixteenths is
+0.5625, which is 0.75 squared, and 0.75 is 1920/2560. Two stacked passes each
+keeping the top-left three quarters produce it exactly: the scene drawn with a
+1920x1080 viewport into the resized 2560x1440 target, then composited with a
+1920x1080 viewport into the 2560x1440 backbuffer. That is precisely what the
+resize alone does when **no** viewport correction happens at all. The eager
+version never fired either; both attempts have the same root cause, and the
+second was built on a misdiagnosis of the first.
+
+The deferred form is kept regardless, because it is the better design and the
+one the prior art uses: `RSSetViewports` and `RSSetScissorRects` record that
+raster state changed, and the four draw hooks settle it at the point where the
+render target is bound and can be asked how big it is. A single full-screen
+viewport or scissor starting at the origin is enlarged only when the surface
+bound underneath it is genuinely larger, which is the condition the eager
+version assumed rather than checked. Raster state is kept per context, immediate
+and deferred, following the Arland implementation.
+
+### Why it did not fire: the wrong context vtable
+
+The deferred version reported `viewportRewrites=0 scissorRewrites=0` with all
+six hooks installed. Step counters were added to tell the four possible failures
+apart -- hook never runs, runs but state is never dirty, dirty but the bound
+target cannot be read, or everything works and the sizes never match -- and an
+instrumented 1080p run answered it immediately:
+
+```
+HIGHRES: installed fix=1 census=1 contextHooks=6
+frame=1500 ... rsViewports=0 rsScissors=0 draws=0 updates=0
+```
+
+**Not one of the six context hooks ever ran**, across 1500 frames, while the
+device-level `CreateTexture2D` hook on the same run fired normally.
+
+The cause is a property of how MinHook works against COM. MinHook hooks a
+function *address*, and the address comes from a vtable -- so hooking the
+immediate context's vtable hooks only contexts of that class. D3D11
+implementations give deferred contexts a **different class with a different
+vtable**, and this engine issues its draws and its raster state on a deferred
+context. Every hook was installed correctly, on functions the game never calls.
+
+This also explains something that had looked like corroboration and was not.
+`d3d11_probe.cpp` hooks `Map` on the immediate context's vtable and has always
+worked, which made the immediate context look like the right one. Texture
+uploads do go through it. Drawing does not.
+
+Both vtables are hooked now. A deferred context is created purely to read its
+vtable and released immediately; every deferred context the engine makes shares
+it, so hooking through ours covers all of them. Each detour dispatches to the
+originals belonging to the vtable its context actually came from, decided by
+comparing the context's vtable pointer rather than the object identity, since
+the engine may hold several deferred contexts.
+
+Two cases are handled explicitly. If an implementation gives both context types
+the **same** function for a method, MinHook refuses the second hook on that
+address with `MH_ERROR_ALREADY_CREATED`; that is not an error, and the second
+vtable's original is pointed at the trampoline the first install produced. And
+if the deferred context cannot be created at all, the install **declines
+entirely** rather than resizing targets whose raster state it could never
+correct.
+
+The installer now logs both vtable pointers and whether they are distinct, so
+the question this cost two runs to answer is a line in every log.
+
+### A silent partial install, now impossible
+
+The eager version could reach a genuinely broken state without saying so. Its
+context hooks were installed only `if (g_fixEnabled && context)`, and when no
+context was available they were quietly skipped -- while the installer still
+logged a flat `HIGHRES: installed fix=1`. That is the worst possible
+combination: targets resized, raster correction absent, and a log that says
+everything is fine.
+
+Two changes close it. The installer names every hook it puts in and reports the
+count, and a fix that cannot install its raster correction **declines to install
+at all** rather than half-applying itself -- an unfixed 1080p frame is a much
+better failure than a resized target drawn with a 1080p viewport. And
+`initializeHighRes` now asks the device for its immediate context when none was
+handed to it, so the case that triggered the concern does not arise.
+
+### What is deliberately left alone
+
+- The **0.9x and 0.8x ladder** (1728x972, 1536x864). Neither Arland nor
+  TellowKrinkle has an equivalent, so there is no proven rule to carry over, and
+  inventing a "scale anything that is 1920x1080 times k" rule is exactly the
+  kind of fuzzy match that catches unrelated textures. If a run shows the game
+  actually rendering into one of these, the census will say so and it becomes a
+  second, evidence-backed rule.
+- The **deeper pyramid levels** (480x272, 240x136, 120x68, 64x36). These are not
+  exact halvings -- 540/2 is 270, not 272 -- so they are alignment-rounded blur
+  levels whose absolute size barely matters visually. Arland leaves its
+  equivalents alone.
+- The **1024x1024 shadow map**, which is resolution-independent by design.
+
+### Validation status
+
+The **resize** is confirmed working at 2560x1440 on the English build: one run
+produced `adoptedAsMain` on the 2560x1440 depth target, `resizedFull` on all
+four hard-coded 1920x1080 targets, `resizedBlur` on the 960x540 blur target, and
+`passthrough` on the ladder, the deeper pyramid levels and the shadow map,
+exactly as the rules intend.
+
+The **raster machinery is confirmed working**, and the deferred-vtable
+diagnosis is confirmed structurally. A 1080p run of the English build reports
+distinct immediate and deferred vtables (`0x...4410` and `0x...3ca0`), both
+hooked, and every stage of the chain running:
+
+```
+HIGHRES: context vtables immediate=0x6ffffa6c4410 deferred=0x6ffffa6c3ca0 (distinct, both hooked)
+HIGHRES: installed fix=1 census=1 contextVtables=2 hooksPerVtable=6
+frame=2400 ... rsViewports=13605 rsScissors=13605 draws=4987 updates=4603
+              targetLookupFails=0 viewportRewrites=0 scissorRewrites=0
+```
+
+`targetLookupFails=0` says `OMGetRenderTargets` works on the deferred context,
+which is the one thing about correcting there that was not obvious.
+
+The `HIGHRES RASTER` lines from that run are worth keeping as the baseline,
+because they establish what the engine submits when nothing needs correcting:
+
+```
+viewport=1920x1080@0,0  boundTarget=1920x1080
+viewport=1024x1024@0,0  boundTarget=1024x1024     (the shadow pass)
+viewport=960x540@0,0    boundTarget=960x540
+viewport=480x272 / 240x136 / 120x68 / 64x36, each matching its own target
+```
+
+**Every viewport exactly matches its bound target**, so `viewportRewrites=0` is
+the correct result at 1080p rather than another silent failure -- the rule
+enlarges only when the bound surface is larger, and here none is. It also
+confirms the shadow pass and the whole blur pyramid submit self-consistent
+viewports, so they are untouched at any resolution.
+
+What remains unproven is the correction itself, which by construction cannot
+fire at 1080p. That needs one run above 1080p: `viewportRewrites` should become
+non-zero and stable, and the frame should fill the window. The feature stays
+`OptIn` until it has, and while the correction is unconfirmed the resize on its
+own makes the picture *worse* rather than better, so it should not be
+recommended to anyone in this state.
+
+## The launcher proxy
+
+The Arland launcher redirect is ported into `src/launcher/launcher_proxy.cpp`,
+building as a 32-bit `msimg32.dll` from the same tree. The mechanism is
+unchanged and is documented in that file; the reasoning behind its two
+load-bearing decisions was paid for in the Arland project, so it is repeated
+there rather than re-derived:
+
+- The redirect is **armed** in `DllMain` and **runs** at the host executable's
+  entry point. Starting a child from process attach produced a process Steam
+  knew nothing about, which cost the overlay and Steam Input.
+- The stock launcher process **stays alive** behind whatever replaced it,
+  because it is the process Steam launched and is counting.
+
+What differs from Arland is only the naming: the host must be one of the three
+`Atelier_<Game>Launcher.exe` files, the ini is `dusk-fix.ini`, the stand-down
+variable is `DUSK_NO_REDIRECT`, and the configurator it looks for is
+`dusk-fix-launcher.exe`. The game build to start on a straight launch is chosen
+from `[Lang] Language` in `Setting.ini`, using the mapping read out of the stock
+launcher below rather than assumed.
+
+The entry point is taken from the PE headers rather than a hardcoded RVA, and
+the original five bytes are kept so a failed start restores them and runs the
+stock launcher as though the mod were not installed. With no
+`dusk-fix-launcher.exe` installed the redirect is never armed at all, so a
+partial install is inert rather than broken.
+
+## The launcher window
+
+`dusk-fix-launcher.exe` (`src/launcher/launcher_gui.cpp`) is the 64-bit settings
+window the proxy opens. It is **structured to match the Arland project's
+`src/config_gui/main.cpp` deliberately and closely**, so that someone who has
+used one does not have to learn the other: the same tab strip with the game name
+right-aligned on it, the same cursor-driven `Layout` with measured note heights,
+the same bottom button row with Play on the left and the skip-launcher checkbox
+beside it, the same About page, the same mnemonics.
+
+It carries three of Arland's four pages, named identically: **Display**, **Game**
+and **About**. Image Quality is absent because this mod has no image-quality
+options at all -- no MSAA, supersampling, anisotropic filtering, shadow-map
+scaling or SMAA -- and an empty tab is worse than a missing one. Arland's
+conditional Debug tab is absent for the same reason: there are no developer
+views to reach, and the diagnostics that do exist are environment switches on
+purpose.
+
+The `Layout` helper is carried over rather than reinvented, including the part
+that matters most: **every note's height is measured at the width it will be
+drawn at**. A static silently drops any line past its height, so a note given a
+fixed two lines turns a third line into a sentence ending mid-word, with nothing
+in the build, the log or the code to say so. That shipped twice in the Arland
+project.
+
+It edits two files, and the split is the interesting part:
+
+| File | Keys | Whose |
+|---|---|---|
+| `Setting.ini` | `[Graphics] ScreenWidth`/`ScreenHeight`/`Outline`, `[Window] FullScreen`, `[Lang] Language` | the game's own, read whether or not the mod is installed |
+| `dusk-fix.ini` | `[Rendering] HighResolution`, `[Fixes] AtlasCache`/`FieldEngineFix`/`FieldStabilizer`, `[Launcher] SkipLauncher`/`AutoResolution` | the mod's |
+
+### Auto resolution, and why it resolves in a different place than Arland's
+
+The resolution list leads with an **Auto** entry carried as a 0x0 sentinel,
+exactly as the Arland launcher carries it, and labelled with what it currently
+resolves to (`Auto  (1920 x 1080)`) so the answer sits in the list being chosen
+from.
+
+The two projects have to *resolve* it in different places, and that is a
+consequence of the resolution decision above rather than a style difference.
+Arland leaves its own ini keys blank and its DLL decides what blank means when
+the device is created, so Auto there keeps following the display even if it
+changes between launches. This mod writes a literal number into the game's own
+`Setting.ini`, because the game reads that field itself and no mod-side
+resolution override exists to duplicate it -- and "Auto" is not something the
+game's integer parse can be handed. Its reader replaces only a *negative* value
+with a default, so a zero written there would be passed straight through.
+
+So Auto is resolved here, at save time, and the choice is remembered in
+`[Launcher] AutoResolution` so that reopening the window shows Auto rather than
+whatever number it last resolved to. What is lost against Arland is
+re-resolving when the display changes without reopening the launcher, which
+genuinely does need the DLL. `Reset to defaults` selects Auto, so a fresh
+install never inherits the game's own 1280x720.
+
+One Arland behaviour is deliberately **not** carried over: dropping modes larger
+than the display maximum. Ayesha windowed will create a swap chain bigger than
+the screen, and that is how the 1440p render-target census was measured on a
+1080p panel; filtering by the display maximum would have removed the one entry
+that made it possible. The cost is that a fullscreen selection above the panel's
+size is offered and will not do anything useful.
+
+Resolution is written to the game's file and nowhere else, because the game
+already owns that setting and accepts any value in it. The list offered is this
+project's own and is **not** filtered through Windows' reported display modes,
+which is the point: that filtering is what hides a usable mode on a high-DPI
+handheld or in docked use. The current desktop mode is appended if it is not
+already listed, as is whatever the file already holds, so opening the window can
+never silently change a resolution it did not offer.
+
+Three behaviours are carried over from the Arland launcher because each was paid
+for there:
+
+- **It configures the folder it was run from, not always the one it lives in.**
+  Wine resolves a symlinked executable before reporting it, so a launcher
+  symlinked into a game folder reports the link's target as its own location.
+  The working directory is the fallback, and it is what Explorer, the test
+  scripts and the msimg32 redirect all set correctly.
+- **Start game saves first.** Starting with the settings only on screen is the
+  one outcome nobody wants from that button, and it matters most for the game's
+  own file, which it reads either way.
+- **The two stock-tool buttons set `DUSK_NO_REDIRECT`.** The proxy sent the
+  stock launcher here in the first place; without it, that button would only
+  ever reopen this window. It is cleared immediately so it cannot reach the game
+  from a later press of Play with mod.
+
+The Display page's third button, "Play without the mod", needed one addition on
+the DLL side: `DUSK_DISABLE`, checked in `initializeEngineFixes()`. When it is
+set, Direct3D is still forwarded but no engine module initializes and nothing is
+hooked, so the game as it shipped can be compared against without moving files
+out of the folder and having to remember to move them back. It is the Arland
+`ARLAND_DISABLE` mechanism under this project's prefix.
+
+The mod switches are enabled only on Ayesha, and are read and written only
+there. On Escha & Logy and Shallie the capability matrix hard-offs all three, so
+showing `AtlasCache` ticked-but-greyed would claim the cache is running on a
+game where nothing of the sort is installed; the controls stay visible and
+greyed instead, with a note saying why, so the window says the same thing about
+every game.
+
+An earlier single-page version of this window was opened once and came up. The
+tabbed structure above has not been run: it compiles and is deployed to the
+Ayesha test folder, but no run has confirmed the tab layout, the measured note
+heights at either scale, the save round-trip into both files, Auto resolving to
+the desktop mode, the redirect chain, the two stock-tool buttons or "Play
+without the mod".
+
+## Configuration: dusk-fix.ini
+
+The project now has an ini layer, `src/core/config.{h,cpp}`, because the
+launcher needs somewhere to persist what it configures. It follows the Arland
+split exactly: **`dusk-fix.ini` is the user-facing surface and every environment
+switch is a diagnostic.** A diagnostic with an ini key would eventually be
+turned on by someone following a forum post, and these diagnostics are slow on
+purpose.
+
+So the capability matrix's `Descriptor` now carries an optional section and key
+alongside its environment variable, and only the three user-facing features have
+one:
+
+| Key | Feature |
+|---|---|
+| `[Launcher] SkipLauncher` | start the game directly, skipping both front-ends |
+| `[Fixes] AtlasCache` | the shipping font-atlas read cache |
+| `[Fixes] FieldEngineFix` | experimental field-jitter threshold rescale |
+| `[Fixes] FieldStabilizer` | experimental field-jitter resting stabilizer |
+
+Precedence is environment, then ini, then the matrix default, and
+`Support::Unsupported` remains a hard off that neither can turn on. Only
+`SkipLauncher` is seeded when the file is created; the feature keys are seeded
+lazily on first read, which is what keeps each one written with the default for
+the game it is actually running in, and keeps a game that supports none of them
+from growing keys it would ignore. Escha & Logy and Shallie therefore get a
+`dusk-fix.ini` containing `SkipLauncher` and nothing else, which is an accurate
+description of their current state.
+
+`logConfiguration()` writes the resolved values into the log at startup, so a
+report says what the run was configured with rather than what the reporter
+believes it was.
+
 ## Diagnostics
 
 Each session log begins with the version compiled from the repository's `VERSION`
@@ -428,6 +1027,31 @@ produced it. A clean session is one where `checks` is large and `mismatches` and
 `foreignWrites` are both zero; a session where `checks` stays at zero has proved
 nothing and is itself a finding.
 
+`DUSK_TARGET_CENSUS=1` is the render-target census, and is the one diagnostic
+that is not Ayesha-only: it reads nothing but the D3D11 resources the game
+creates, so it needs no mapped address and no engine knowledge, and it lives in
+`src/core` rather than in either engine module. It hooks
+`ID3D11Device::CreateTexture2D` and logs one line per distinct (dimensions,
+format, bind flags, sample count, call site) tuple that is bound as a render
+target or a depth-stencil, classifying each against the swap chain the game
+actually got: `rel=matchesSwapChain`, `rel=1920x1080`, or `rel=other`. The
+swap-chain line itself is logged in every run, census or not, since one line
+naming the present resolution is worth having in every report.
+
+Each line also carries `action=`, which says what the high-resolution fix did
+with that creation: `adoptedAsMain`, `resizedFull`, `resizedBlur` or
+`passthrough`. That is why the two share a file -- one log answers both "what
+does this game create" and "what did the fix do about it".
+
+It is keyed on the target's *shape* rather than on the resource pointer,
+because the engine recreates these objects and the question is which shapes
+appear, not how many objects carried them. It reports the count of creations
+with every periodic summary for the same reason `DUSK_ATLAS_VERIFY` reports its
+check count: a census whose only output is "nothing found" cannot be
+distinguished from one that never installed. It is opt-in on all three games and
+initializes MinHook itself, since on Escha & Logy and Shallie it is the only
+thing in the tree that hooks anything.
+
 `DUSK_FIELD_TRACE=1` wraps the field controller's per-frame update and, on each
 ground-contact change, dumps a short ring of frames either side of the event. It
 only writes inside those windows, so a character resting quietly produces no
@@ -463,7 +1087,14 @@ device-creation functions the game expects and forwards them to
 `d3d11_proxy.dll` when one is deliberately installed for chain-loading, or to the
 real `d3d11.dll` from the Windows system directory otherwise. This lets the mod
 observe device creation and install its hooks without replacing the graphics
-implementation. There is no 32-bit launcher proxy in this repository.
+implementation.
+
+The 32-bit `msimg32.dll` is the second proxy, loaded by the games' own
+front-ends rather than by the games. It forwards `AlphaBlend` and
+`TransparentBlt` to the system library and, in the three launcher processes
+only, rewrites five bytes at the executable's entry point so the launch can be
+redirected. The original bytes are kept and put back if the redirect cannot
+complete. See "The launcher proxy" above.
 
 Executable changes are detours. After verifying the target function, MinHook
 places a jump at its entry point and preserves the displaced instructions in a
@@ -554,6 +1185,7 @@ Per-game availability and defaults are centralized in a capability matrix
 (`src/core/game.cpp`): the running title is detected from the executable name
 independently of any hook, and each feature resolves through the matrix —
 unsupported titles are hard-off regardless of configuration — before consulting
-its environment override. The matrix is the source of truth mirrored by the
-feature table in the README. There is no ini layer; every switch is an
-environment variable.
+its environment override, then its `dusk-fix.ini` key if it has one. The matrix
+is the source of truth mirrored by the feature table in the README. See
+"Configuration: dusk-fix.ini" above for which features have an ini key and why
+the diagnostics deliberately do not.

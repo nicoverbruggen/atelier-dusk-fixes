@@ -1,0 +1,60 @@
+// Resources for dusk-fix-launcher.exe.
+//
+// Resource id 1 is CREATEPROCESS_MANIFEST_RESOURCE_ID, which is what the loader
+// looks for in an executable; type 24 is RT_MANIFEST. Spelling both as numbers
+// keeps this working under windres and rc alike without pulling in winuser.h.
+//
+// The manifest itself carries no comments, and should stay that way. The
+// resource compiler embeds it byte for byte without parsing it, so anything
+// written in there is handed to Windows at process start -- including comment
+// text. A comment containing "--" is invalid XML, which cost the Arland project
+// a release: the process refused to start with "the side-by-side configuration
+// is incorrect" and the reason appeared only in the event log. What the
+// manifest declares, and why, is therefore recorded here instead.
+//
+// ComCtl32 version 6: without this dependency the process gets the 5.82 common
+// controls, which are the flat grey Windows-95 ones, and SysLink is not
+// registered at all.
+//
+// supportedOS: declares the versions of Windows this was tested against (7
+// through 11). Without it Windows applies compatibility shims aimed at much
+// older software.
+//
+// dpiAware, system rather than per-monitor: every coordinate goes through a
+// scale factor (see S() in launcher_gui.cpp), so the window can be laid out at
+// the real DPI instead of being drawn small and bitmap-stretched. The scale is
+// decided once, when the controls are created; changing it afterwards would
+// mean rebuilding every control while the user has unsaved edits in them. With
+// system awareness, moving the window to a monitor at a different scale gets
+// Windows' bitmap scaling: slightly soft, but correctly sized and without
+// losing what is on screen. For a settings window open for a minute, that is
+// the right trade.
+#include "version.rc"
+
+1 24 "dusk-fix-launcher.manifest"
+
+1 VERSIONINFO
+FILEVERSION     VERSION_COMMA
+PRODUCTVERSION  VERSION_COMMA
+FILEOS          0x4L
+FILETYPE        0x1L
+{
+  BLOCK "StringFileInfo"
+  {
+    BLOCK "040904b0"
+    {
+      VALUE "CompanyName",      "Nico Verbruggen"
+      VALUE "FileDescription",  "Atelier Dusk Fixes launcher"
+      VALUE "FileVersion",      VERSION_STRING
+      VALUE "InternalName",     "dusk-fix-launcher"
+      VALUE "LegalCopyright",   "Nico Verbruggen. MIT licensed; see LICENSE."
+      VALUE "OriginalFilename", "dusk-fix-launcher.exe"
+      VALUE "ProductName",      "Atelier Dusk Fixes"
+      VALUE "ProductVersion",   VERSION_STRING
+    }
+  }
+  BLOCK "VarFileInfo"
+  {
+    VALUE "Translation", 0x409, 1200
+  }
+}

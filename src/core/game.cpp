@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "config.h"
 #include "game.h"
 
 namespace atfix {
@@ -34,24 +35,33 @@ Title detectTitle() {
   return Title::Unknown;
 }
 
-// Where a feature's override lives. A null env means the feature has no
-// environment override. No ini layer exists yet -- the Dusk project has no
-// config file, so the Arland Descriptor's section/key fields are omitted rather
-// than left dangling.
+// Where a feature's overrides live. `env` is always present; `section`/`key`
+// are set only for the options a user is meant to configure, and null for the
+// diagnostics.
+//
+// That asymmetry is the Arland rule carried over: dusk-fix.ini is the
+// user-facing surface and every environment switch is a diagnostic. Giving a
+// diagnostic an ini key would eventually get it turned on by someone following
+// a forum post, and these diagnostics are slow on purpose -- AtlasVerify adds a
+// real atlas lock and a ~1 MB comparison per verified read.
 struct Descriptor {
   const char* env;
+  const char* section;
+  const char* key;
 };
 
 const Descriptor& descriptor(Feature f) {
   static const Descriptor table[static_cast<int>(Feature::Count)] = {
-    /* AtlasStats      */ { "DUSK_ATLAS_STATS" },
-    /* AtlasTrace      */ { "DUSK_ATLAS_TRACE" },
-    /* AtlasVerify     */ { "DUSK_ATLAS_VERIFY" },
-    /* AtlasCensus     */ { "DUSK_ATLAS_CENSUS" },
-    /* D3D11WriteProbe */ { "DUSK_D3D11_WRITE_PROBE" },
-    /* AtlasCache      */ { "DUSK_ATLAS_CACHE" },
-    /* FieldEngineFix  */ { "DUSK_FIELD_ENGINE_FIX" },
-    /* FieldStabilizer */ { "DUSK_FIELD_STABILIZER" },
+    /* AtlasStats      */ { "DUSK_ATLAS_STATS",       nullptr, nullptr },
+    /* AtlasTrace      */ { "DUSK_ATLAS_TRACE",       nullptr, nullptr },
+    /* AtlasVerify     */ { "DUSK_ATLAS_VERIFY",      nullptr, nullptr },
+    /* AtlasCensus     */ { "DUSK_ATLAS_CENSUS",      nullptr, nullptr },
+    /* D3D11WriteProbe */ { "DUSK_D3D11_WRITE_PROBE", nullptr, nullptr },
+    /* TargetCensus    */ { "DUSK_TARGET_CENSUS",     nullptr, nullptr },
+    /* HighRes         */ { "DUSK_HIGHRES",  "Rendering", "HighResolution" },
+    /* AtlasCache      */ { "DUSK_ATLAS_CACHE",       "Fixes", "AtlasCache" },
+    /* FieldEngineFix  */ { "DUSK_FIELD_ENGINE_FIX",  "Fixes", "FieldEngineFix" },
+    /* FieldStabilizer */ { "DUSK_FIELD_STABILIZER",  "Fixes", "FieldStabilizer" },
   };
   return table[static_cast<int>(f)];
 }
@@ -99,11 +109,30 @@ constexpr Support X = Support::OnByDefault;
 // stabilizer additionally writes into the controller object at offsets not yet
 // confirmed for this build -- see the comment on stabilizerEnabled in
 // field_physics.cpp. They must not be promoted alongside the cache.
+//
+// TargetCensus is the one diagnostic that is NOT Ayesha-only. It reads nothing
+// but the D3D11 resources the game creates, so it needs no mapped address and
+// no engine knowledge, and the question it answers -- does this game size its
+// internal render targets from the resolution it was asked for, or does it pin
+// some of them to 1080p the way the old-Arland renderer does -- is open for all
+// three games (WORK_DOC.md "Ayesha's resolution path"). It stays OptIn
+// everywhere: it hooks CreateTexture2D, which no shipping configuration should.
+//
+// HighResRendering is Ayesha-only and OptIn *for now*. The defect it fixes is
+// measured and the mechanism is TellowKrinkle's, proven on this engine family
+// and refined in the Arland project, so this is not an experiment in the way
+// the field-jitter switches are. It stays opt-in only until a playthrough has
+// confirmed the corrected frame, because the failure mode -- a viewport or a
+// target that did not move with the rest -- is a visibly wrong picture rather
+// than a silent regression, and that is worth one round of eyes before it
+// becomes the default. Escha & Logy and Shallie are Unsupported rather than
+// OptIn because their renderer has not been censused at all; enabling this
+// there would apply a rule derived from a different engine.
 constexpr Support kMatrix[3][static_cast<int>(Feature::Count)] = {
-  //                Stats Trace Verfy Censu Probe Cache Field Stab
-  /* Ayesha  */   {   O,    O,    O,    O,    O,    X,    O,    O },
-  /* Escha   */   {   U,    U,    U,    U,    U,    U,    U,    U },
-  /* Shallie */   {   U,    U,    U,    U,    U,    U,    U,    U },
+  //                Stats Trace Verfy Censu Probe Targt HiRes Cache Field Stab
+  /* Ayesha  */   {   O,    O,    O,    O,    O,    O,    O,    X,    O,    O },
+  /* Escha   */   {   U,    U,    U,    U,    U,    O,    U,    U,    U,    U },
+  /* Shallie */   {   U,    U,    U,    U,    U,    O,    U,    U,    U,    U },
 };
 
 int titleRow(Title t) {
@@ -160,11 +189,20 @@ bool featureEnabled(Feature f) {
   if (support == Support::Unsupported)
     return false;
   const Descriptor& d = descriptor(f);
+  // Environment first, so a diagnostic run overrides a persisted setting
+  // without editing the user's file.
   if (d.env) {
     if (const char* v = std::getenv(d.env))
       return v[0] != '0';
   }
-  return support == Support::OnByDefault;
+  const bool def = support == Support::OnByDefault;
+  // Seeded here rather than in configPath()'s first-use block so the key is
+  // written with the default for the game it is running in, and so a game that
+  // supports the feature not at all never grows a key for it: the Unsupported
+  // hard-off above returns before this point.
+  if (d.section && d.key)
+    return duskConfigBool(d.section, d.key, def);
+  return def;
 }
 
 }  // namespace atfix

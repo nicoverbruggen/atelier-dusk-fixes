@@ -36,16 +36,18 @@ const char* engineName(Engine e);
 // Enhancements the mod can apply. Order must match the matrix columns and the
 // descriptor rows in game.cpp.
 //
-// All eight are implemented, and all are Ayesha-only. AtlasCache is the one that
-// ships on by default; the rest are OptIn, two of them because they are
-// diagnostics and two because nothing about the field-jitter port has been
-// validated in-game yet.
+// AtlasCache is the one that ships on by default. Six of the rest are
+// diagnostics, and the two field-jitter halves stay opt-in because nothing
+// about that port has been validated in-game yet. Every row but TargetCensus is
+// Ayesha-only.
 enum class Feature : uint8_t {
   AtlasStats,       // Ayesha font-atlas diagnostic counters (measurement only)
   AtlasTrace,       // Ayesha font-atlas lock/unlock sequence trace (one frame)
   AtlasVerify,      // Ayesha font-atlas snapshot-vs-real comparison (slow)
   AtlasCensus,      // Ayesha font-atlas writer census (enumerates every caller)
   D3D11WriteProbe,  // Ayesha D3D11-level writes to a font atlas, if any exist
+  TargetCensus,     // any game: sizes of the render/depth targets it creates
+  HighResRendering, // Ayesha: scene targets follow the resolution, not 1080p
   AtlasCache,       // Ayesha atlas read caching (frame-scoped)
   FieldEngineFix,   // Ayesha high-refresh field jitter: rescale the move threshold
   FieldStabilizer,  // Ayesha high-refresh field jitter: hold the character at rest

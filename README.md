@@ -55,7 +55,7 @@ Adding `DUSK_ATLAS_TRACE=1` alongside the diagnostic dumps the raw lock/unlock s
 
 The trilogy spans two engines, and the source follows that split: `src/core` is engine-agnostic, `src/phyre` is Ayesha (PhyreEngine), `src/ktgl` is Escha & Logy and Shallie (LTGL/KTGL). They still build into one `d3d11.dll` that covers all three games — every fix is gated on both the capability matrix and an executable fingerprint, so the module for the wrong engine installs nothing. `WORK_DOC.md`, "Two engines, one DLL", has the reasoning.
 
-`src/ktgl` implements no fix yet. It fingerprints and logs, which is how the four remaining executables' identities get collected.
+`src/ktgl` implements no fix yet. It verifies and logs the four known executable identities, providing the gate future LTGL/KTGL fixes will install behind.
 
 ## Documentation
 

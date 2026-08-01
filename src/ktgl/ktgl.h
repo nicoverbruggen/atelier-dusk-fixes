@@ -13,9 +13,9 @@
 //     SRV at init, and the system-save-data wipe on quit.
 //   * Shallie: the CreateSamplerState bug AGT patched.
 //
-// None is implemented yet, so this module currently only fingerprints. That is
-// not busywork: the four executables' identities are an open TODO item, and the
-// gate every future fix here installs behind is exactly this check.
+// None is implemented yet, so this module currently only fingerprints. The four
+// executable identities are verified; this check is the gate every future fix
+// here will install behind.
 
 namespace dusk {
 

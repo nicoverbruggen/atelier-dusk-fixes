@@ -1,20 +1,9 @@
 // SPDX-License-Identifier: MIT
 //
-// Field-map character jitter: the probe that identified the cause, and the two
-// halves of the fix for it. See field_physics.h.
-//
-// The halves are a rescale of the engine constant behind the jitter, which makes
-// it mean a speed instead of a per-frame distance, and a resting stabilizer that
-// holds the character still while it is genuinely at rest. The rescale alone
-// keeps ground contact but leaves a small sawtooth, because gravity goes on
-// integrating while resting; the stabilizer is what removes the motion. Both are
-// env-gated and inert by default, so they can be A/B'd against vanilla and
-// against each other at runtime.
-//
-// The probe (DUSK_FIELD_TRACE=1) wraps the controller's per-frame update and,
-// on each ground-contact change, dumps the frames either side of it. That is how
-// the cause was measured, and it is kept because it is how any future build gets
-// re-checked.
+// Experimental Ayesha field-jitter probe and Arland-derived writes. The current
+// port failed its Ayesha runtime test; see field_physics.h and WORK_DOC.md. All
+// behaviour remains env-gated and inert by default while the Ayesha-specific
+// mechanism and controller layout are reinvestigated.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
@@ -37,9 +26,10 @@ namespace {
 using FieldUpdateProc = void (STDMETHODCALLTYPE*)(uintptr_t, float);
 FieldUpdateProc originalFieldUpdate = nullptr;
 
-// Offsets within the controller object. Identical in all six builds: their
-// Update bodies are instruction-for-instruction the same, differing only in two
-// external call targets.
+// Controller offsets carried over from the Arland implementation. Ayesha's
+// Update is a strong static homologue, but its live layout is not confirmed and
+// the current port did not fix the problem. Do not treat these as established
+// Ayesha fields without runtime evidence.
 constexpr uintptr_t kGroundedOffset = 0x38;   // flags word; bit 8 = ground contact
 constexpr uintptr_t kVelOffset = 0x50;        // three contiguous floats
 constexpr uintptr_t kVelYOffset = 0x54;
@@ -85,18 +75,9 @@ const FieldPhysicsAddrs* addressesFor(uint8_t exeBuild) {
 
 float* g_moveThreshold = nullptr;   // null unless verified and made writable
 
-// Rescaling the game's own constant keeps the full refresh rate, but it only
-// reduces the movement rather than removing it, and it writes to the game's
-// memory. The shipped answer is the frame-rate cap, so this stays an
-// investigative switch rather than a documented option.
-// On by default since 2026-07-25, when the pair was measured at a vsync-paced
-// 144 fps: the rescale alone still let the cauldron interaction prompt flicker,
-// and the two together held the character steady. Set the variable to 0 to run
-// the game's own behaviour, which is what an A/B or a bug report wants.
-// OPT-IN in this project, unlike Arland where it is on by default. Nothing here
-// has been validated on Ayesha yet: the addresses are verified statically (the
-// threshold has exactly one reader, inside the prologue-checked resolver), but no
-// run has confirmed the jitter exists in Ayesha or that rescaling fixes it.
+// OPT-IN. The threshold address and its single reader are verified statically,
+// but an Ayesha runtime test established that this Arland-derived rescale does
+// not fix the problem. Keep it only as an investigation switch.
 bool engineFixEnabled() {
   static const bool enabled = [] {
     const char* value = std::getenv("DUSK_FIELD_ENGINE_FIX");
@@ -105,23 +86,17 @@ bool engineFixEnabled() {
   return enabled;
 }
 
-// The other half of the fix, gated separately from the rescale so the two can be
-// measured apart: the rescale on its own is the "does contact hold" experiment,
-// the stabilizer on its own is the "is it actually still" one.
-// On by default, and specifically NOT redundant with the rescale above: at 144
-// fps the rescale on its own leaves the residual sawtooth this removes. Set to
-// 0 to disable.
 // OPT-IN, and the more dangerous of the two: unlike the rescale, which writes one
 // verified constant, the stabilizer WRITES INTO THE CONTROLLER OBJECT at offsets
 // (kVelYOffset, kAirTimerOffset) carried over from the Arland builds. Those
-// offsets are justified there by the Update bodies being instruction-for-
-// instruction identical; Ayesha's Update matches on prologue and homologue vote,
-// but its layout has NOT been confirmed, and a wrong offset here corrupts live
-// game state rather than merely failing.
+// offsets are established in Arland only. Ayesha's Update matches on prologue
+// and homologue vote, but its layout has NOT been confirmed, the current port
+// failed its runtime test, and a wrong offset here corrupts live game state
+// rather than merely failing.
 //
-// Validate with DUSK_FIELD_TRACE=1 first: the trace reads the same offsets, so if
-// posY/velY/grounded read as plausible values the layout holds, and if they read
-// as garbage it does not. Only enable this after that check.
+// DUSK_FIELD_TRACE=1 reads the same offsets and is the starting point for fresh
+// analysis. Plausible values are necessary but no longer sufficient evidence
+// that this stabilizer is correct.
 bool stabilizerEnabled() {
   static const bool enabled = [] {
     const char* value = std::getenv("DUSK_FIELD_STABILIZER");

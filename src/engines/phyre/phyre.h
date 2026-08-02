@@ -5,8 +5,7 @@
 //
 // Ayesha is the Dusk game built on the same old-MSVC-CRT/PhyreEngine lineage as
 // the Arland DX ports, and its font-atlas and text-rendering code is the same
-// code, function for function, as the one behind the Arland menu hitch
-// (WORK_DOC.md "The engine triage"). That is
+// code, function for function, as the one behind the Arland menu hitch. That is
 // why every fix in this directory is an Arland port and why none of them means
 // anything in Escha & Logy or Shallie -- those are on KTGL and live in
 // `src/engines/ktgl/`.
@@ -23,17 +22,15 @@
 namespace atfix {
 
 // Per-executable descriptor for the Phyre text path: the executable identity
-// plus the RVAs of the four hooked entry points. Derivation for every row is
-// recorded in WORK_DOC.md "Hook boundaries"; do not change an RVA here without
-// updating it.
+// plus the RVAs of the four hooked entry points. Every row was derived
+// separately; do not change an RVA here without re-deriving it.
 //
 // atlasUnlockRva names the two-instruction *stub* at lock+0x40, not the
-// implementation behind it. Both are mapped (WORK_DOC.md "The unlock has two
-// levels; the stub is hooked"); the stub is hooked so the hook sees the same
-// argument convention as the Arland Totori/Meruru path. Because the stub's
-// prologue window contains a jmp rel32 displacement it is not portable across
-// builds, hence unlockExpected being per-row rather than a single shared
-// constant.
+// implementation behind it. Both are mapped; the stub is hooked so the hook
+// sees the same argument convention as the Arland Totori/Meruru path. Because
+// the stub's prologue window contains a jmp rel32 displacement it is not
+// portable across builds, hence unlockExpected being per-row rather than a
+// single shared constant.
 struct PhyreGame {
   const char* executable;
   DWORD textSize;

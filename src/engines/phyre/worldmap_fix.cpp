@@ -45,8 +45,8 @@ struct WorldMapAddrs {
 
 // WMStateAutoMove's sub-state update callback and the cursor mover it calls.
 //
-// DERIVATION (WORK_DOC.md "The travel-map cursor"). The class was identified by
-// RTTI -- the WMState* family -- and the chain confirmed statically:
+// DERIVATION. The class was identified by RTTI -- the WMState* family -- and
+// the chain confirmed statically:
 //
 //   WMGameMode::Update -> WMStateMgr::Update -> WMStateAutoMove::Update
 //     -> sub-state dispatch -> driver(owner, dt) -> move(self)

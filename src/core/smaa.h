@@ -9,7 +9,7 @@
 namespace atfix {
 
 // Whether SMAA post-processing is enabled. Ayesha-only and opt-in for now; see
-// the capability matrix in game.cpp and WORK_DOC.md, "SMAA".
+// the capability matrix in game.cpp.
 bool smaaEnabled();
 
 // Whether the pre-UI path is wanted. On by default when SMAA is on, because it

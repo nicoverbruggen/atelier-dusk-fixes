@@ -2,7 +2,7 @@
 
 ## Project scope
 
-Fixes for the Steam Dusk-trilogy DX ports: Atelier Ayesha DX, Atelier Escha & Logy DX, Atelier Shallie DX. This project is still pre-release; read `WORK_DOC.md` for the detailed current evidence and `../atelier-re-tools/DUSK.md` for the concise work queue.
+Fixes for the Steam Dusk-trilogy DX ports: Atelier Ayesha DX, Atelier Escha & Logy DX, Atelier Shallie DX. This project is still pre-release. `TECHNICAL.md` records finalized, measured behaviour. The detailed investigation record and the work queue are kept privately and are deliberately not published here.
 
 ## Source layout
 
@@ -19,17 +19,21 @@ Split by engine, because the trilogy spans two and they share nothing a fix can 
   Plural on purpose. `src/core/engine.{h,cpp}` is the **dispatch layer** — it resolves which engine this process is and forwards to one module. `src/engines/` holds the modules it forwards to. Singular for the dispatcher, plural for the implementations.
 - `src/launcher/` — both launcher pieces, neither of which is an engine module and neither of which shares code with the game DLL: `launcher_gui.cpp` is the 64-bit `dusk-fix-launcher.exe` settings window, and `launcher_proxy.cpp` is the 32-bit `msimg32.dll` the games' own front-ends load. They agree on ini key names and nothing else.
 
-One `d3d11.dll` covers all three games. Do not split it per game or per engine: fixes are already gated on both the capability matrix and an executable fingerprint. See `WORK_DOC.md`, "Two engines, one DLL". `msimg32.dll` is a separate target only because the front-ends that load it are 32-bit processes.
+One `d3d11.dll` covers all three games. Do not split it per game or per engine: fixes are already gated on both the capability matrix and an executable fingerprint. See `TECHNICAL.md`, "Scope and engines". `msimg32.dll` is a separate target only because the front-ends that load it are 32-bit processes.
 
 Neither engine module may include the other's headers, and no address pack belongs in `src/core`.
 
-User-facing options go in `dusk-fix.ini` through the capability matrix's `Descriptor`; environment switches are diagnostics and must not be given an ini key. See `WORK_DOC.md`, "Configuration: dusk-fix.ini".
+User-facing options go in `dusk-fix.ini` through the capability matrix's `Descriptor`; environment switches are diagnostics and must not be given an ini key. See `ADVANCED.md` for the option surface.
 
 This is the sibling of `../atelier-arland-fixes`. Read that repository's `AGENTS.md` and `TECHNICAL.md` first: its architecture (d3d11 proxy, capability matrix, hook idioms, documentation rules) is the template for this project.
 
 ## Documentation policy
 
-This repository is still pre-release. `WORK_DOC.md` is its detailed technical and investigation record and may contain shipped measurements, work in progress, open questions and unvalidated ports. Keep it current as code and evidence change. The concise task queue is `../atelier-re-tools/DUSK.md`; do not create a second TODO or handoff file. `TECHNICAL.md` is the release-facing draft of finalized, measured behavior only; do not move open investigations or unvalidated ports into it. Refresh it as the first version approaches release.
+This repository publishes **no investigation record**. The evidence layer — disassembly, addresses, struct layouts, derivations, open questions and unvalidated ports — lives privately alongside the work queue, outside this repository. Do not recreate a `WORK_DOC.md` here, and do not add a second TODO or handoff file.
+
+**Never name that private location anywhere in this repository** — not in source comments, not in documentation, not in this file. A reader of the published repository should never be pointed at a document they cannot open, nor learn that one exists by name or path.
+
+`TECHNICAL.md` is this repository's only technical record and covers **finalized, measured behaviour only**. Keep it current as features are validated; do not move open investigations or unvalidated ports into it.
 
 ## Game copies
 

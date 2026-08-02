@@ -113,14 +113,13 @@ constexpr Support X = Support::OnByDefault;
 //
 // AtlasStats is Ayesha-only and OptIn: it is a diagnostic, so it must never be
 // on by default, and it is meaningless on the other two games because their
-// text-rendering layer has no homolog of the hooked entry points
-// (WORK_DOC.md "The engine triage").
+// text-rendering layer has no homolog of the hooked entry points.
 //
 // AtlasTrace is the same, and additionally implies AtlasStats: it records the
 // raw atlas lock/unlock sequence of one steady-state frame and prints it, which
-// is how the write-to-read pairing gets settled rather than guessed
-// (WORK_DOC.md "Diagnostics"). It costs a mutex acquisition per lock, so it is
-// strictly a bring-your-own-question switch.
+// is how the write-to-read pairing gets settled rather than guessed. It costs
+// a mutex acquisition per lock, so it is strictly a bring-your-own-question
+// switch.
 //
 // AtlasVerify is the correctness check for the cache, and is Ayesha-only and
 // OptIn for a stronger reason than the others: it makes the game slow on purpose
@@ -137,10 +136,9 @@ constexpr Support X = Support::OnByDefault;
 // The pattern it addresses is measured, not assumed -- 2385 candidate locks onto
 // 3 atlases per 248 ms drain, plus a per-frame steady-state drip -- and the
 // measured effect is an 85% reduction in menu-build time at a 95.5% hit rate
-// (WORK_DOC.md "Repeated font-atlas reads", "The lifetime is frame-scoped, and
-// there are two problems", "Repeated font-atlas reads"). Like the field-jitter
-// fix it has no ini key and no launcher control; `DUSK_ATLAS_CACHE=0` turns it
-// off, which is what an A/B or a bug report wants.
+// (TECHNICAL.md, "Font-atlas cache"). Like the field-jitter fix it has no ini
+// key and no launcher control; `DUSK_ATLAS_CACHE=0` turns it off, which is what
+// an A/B or a bug report wants.
 //
 // The two field-jitter halves are Ayesha-only and ship ON BY DEFAULT, as they
 // do in Arland. They were held OptIn while nothing had been measured on Ayesha;
@@ -148,7 +146,7 @@ constexpr Support X = Support::OnByDefault;
 // of the atelier's interior steps -- 12-18 px of vertical excursion while the
 // character is horizontally at rest, a gravity-versus-threshold sawtooth rather
 // than a bob -- and an in-game session with both switches on confirmed the fix
-// (WORK_DOC.md "The field-jitter fix").
+// (TECHNICAL.md, "High-refresh field movement").
 //
 // They are one feature in two keys, not two features. The stabilizer needs the
 // rescale it builds on and refuses to run without it (installFieldPhysics), so
@@ -177,7 +175,7 @@ constexpr Support X = Support::OnByDefault;
 // Escha & Logy and Shallie are Unsupported rather than OptIn only for want of
 // evidence: the full-frame path needs no engine knowledge and would very likely
 // work there unchanged. Nothing has been measured on KTGL, so nothing is
-// claimed (WORK_DOC.md, "SMAA").
+// claimed.
 //
 // Supersampling is OptIn on Ayesha and Unsupported on the KTGL games, and it is
 // a rebuild rather than a repair: four implementations preceded it and none of
@@ -195,7 +193,7 @@ constexpr Support X = Support::OnByDefault;
 // and substitutes a box-filtered display-sized copy of the scene in the
 // argument array of the one PSSetShaderResources call that composite makes.
 // Nothing is latched across calls and nothing at all happens at Present. See
-// supersample.h and WORK_DOC.md.
+// supersample.h.
 //
 // OptIn rather than on by default, and it can never be anything else: 200% is
 // four times the shaded pixels, measured at 70% GPU on a 7900 XTX in the game's
@@ -222,8 +220,8 @@ constexpr Support X = Support::OnByDefault;
 // no engine knowledge, and the question it answers -- does this game size its
 // internal render targets from the resolution it was asked for, or does it pin
 // some of them to 1080p the way the old-Arland renderer does -- is open for all
-// three games (WORK_DOC.md "Ayesha's resolution path"). It stays OptIn
-// everywhere: it hooks CreateTexture2D, which no shipping configuration should.
+// three games. It stays OptIn everywhere: it hooks CreateTexture2D, which no
+// shipping configuration should.
 //
 // HighResRendering is Ayesha-only and ships ON BY DEFAULT, applied the same way
 // the Arland project applies its own correction: automatically, whenever the

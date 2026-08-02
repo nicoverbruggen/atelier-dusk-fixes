@@ -22,10 +22,9 @@ const char* titleName(Title t);
 // Which rendering/text engine the current title runs on. This is the axis the
 // source tree is split along, because the two share almost nothing that a fix
 // can reach: Ayesha is the PhyreEngine-derived, old-MSVC-CRT build whose
-// font-atlas and text-rendering path is the same code as the Arland games'
-// (WORK_DOC.md "The engine triage"), while
-// Escha & Logy and Shallie are UCRT builds on LTGL/KTGL whose text layer has no
-// homolog of it at all.
+// font-atlas and text-rendering path is the same code as the Arland games',
+// while Escha & Logy and Shallie are UCRT builds on LTGL/KTGL whose text layer
+// has no homolog of it at all.
 //
 // One DLL still covers all three: the engine is resolved from the executable at
 // startup and only that engine's module installs anything. See `core/engine.h`.

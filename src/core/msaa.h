@@ -37,7 +37,7 @@
 // shipped anti-aliasing is FXAA, inside its tonemap pass.
 //
 // So there is no engine switch to flip, and MSAA has to be built outside the
-// renderer. See WORK_DOC.md, "MSAA: why the engine cannot be asked".
+// renderer.
 //
 // THE MECHANISM is the twin-resource one, from TellowKrinkle's rendering work
 // and the Arland project's adaptation of it (`src/sync_fix.cpp`). The game goes

@@ -8,10 +8,10 @@
 
 // Stops Escha & Logy and Shallie destroying their own system save data.
 //
-// THE DEFECT, traced in full in WORK_DOC.md "The system-save wipe", is NOT in
-// the writer. It is a load that reports success when it failed, followed by a
-// save that writes the resulting defaults over a healthy file. Four independent
-// missing checks line up, and any one of them would have prevented it:
+// THE DEFECT is NOT in the writer. It is a load that reports success when it
+// failed, followed by a save that writes the resulting defaults over a healthy
+// file. Four independent missing checks line up, and any one of them would have
+// prevented it:
 //
 //   1. PlatformSteam::Load::step routes its _wfopen_s-failure and null-FILE
 //      branches into the SAME exit as success, which sets the completion flag --

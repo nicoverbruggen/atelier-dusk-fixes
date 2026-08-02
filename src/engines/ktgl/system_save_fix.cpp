@@ -27,8 +27,8 @@ using StepProc = void (STDMETHODCALLTYPE*)(uintptr_t);
 StepProc originalLoadStep = nullptr;
 StepProc originalSaveStep = nullptr;
 
-// PlatformSteam::{Load,Save} share one 0x438-byte object. Derivation in
-// WORK_DOC.md "The system-save wipe".
+// PlatformSteam::{Load,Save} share one 0x438-byte object. The layout below was
+// derived separately and is recorded in the project's private technical notes.
 constexpr uintptr_t kState = 0x10;         // dword; 6 = completed, 7 = read failed
 constexpr uintptr_t kError = 0x14;         // dword; 5 accompanies state 7
 constexpr uintptr_t kIsSystemData = 0x418; // byte; 0 selects GAMEDATA

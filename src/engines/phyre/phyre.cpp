@@ -34,12 +34,11 @@ using atfix::PhyreGame;
 using atfix::currentModuleIdentity;
 using atfix::log;
 
-// The two Ayesha builds. SHA-256 and .text size for each are in WORK_DOC.md
-// 1.7, together with how every RVA was derived.
+// The two Ayesha builds. The SHA-256 and .text size for each, together with how
+// every RVA was derived, are recorded in the project's private technical notes.
 //
 // The unlock prologue is per-row because the hooked unlock is a jmp stub and its
-// 16-byte window carries the rel32 displacement (WORK_DOC.md "The unlock has
-// two levels; the stub is hooked"). The other three windows are
+// 16-byte window carries the rel32 displacement. The other three windows are
 // build-independent and live in atlas_fix.cpp with the hooks that check them.
 constexpr PhyreGame kGames[] = {
   { "Atelier_Ayesha_EN.exe", 0x984df4,

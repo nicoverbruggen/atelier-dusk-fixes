@@ -29,6 +29,10 @@ These things were not part of the original games, but were added with the mod. T
 | Borderless fullscreen | — | — | — |
 | High-resolution fonts | — | — | — |
 
+## Before v1
+
+This repository is pre-release and still needs housekeeping before the first tagged version: a pass over the commit history, the working files, and anything that accumulated during development but does not belong in a published release. Treat the current tree as a development snapshot rather than a release candidate.
+
 ## License
 
 See [LICENSE](LICENSE) for the MIT and zlib license terms applying to the respective source files.

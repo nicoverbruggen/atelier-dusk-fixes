@@ -17,9 +17,9 @@
 //   - Pre-UI injection. Arland runs these passes on the scene target before the
 //     game composites its interface, so menus and text are not softened. Which
 //     draw is that boundary is engine knowledge, and it was established
-//     separately for each Arland title (WORK_DOC.md, "SMAA"). Nothing equivalent
-//     is known for PhyreEngine yet, so this file offers only the full-frame
-//     path at Present.
+//     separately for each Arland title. Nothing equivalent is known for
+//     PhyreEngine yet, so this file offers only the full-frame path at
+//     Present.
 //   - The MSAA twin write-back. Arland's pre-UI injection has to push its result
 //     into a bound multisample twin; this project has no MSAA, so there is no
 //     twin and no write-back.

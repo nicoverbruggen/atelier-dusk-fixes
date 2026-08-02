@@ -49,4 +49,4 @@ The launcher proxy is silent by design. To have it write `dusk-launcher.log` bes
 
 ## Release checklist
 
-Before the first public release, build all three targets with `scripts/build_linux.sh`, run `scripts/check_exports.py` on the resulting DLLs, and complete the launcher validation session recorded in `WORK_DOC.md`. The Ayesha fixes also require a clean cache-verification run and a 4K target-census run for the release record. Escha & Logy and Shallie should be tested to confirm that their controls remain disabled and their engine-specific fixes remain hard-off.
+Before the first public release, build all three targets with `scripts/build_linux.sh`, run `scripts/check_exports.py` on the resulting DLLs, and complete the launcher validation session listed in `TECHNICAL.md`. The Ayesha fixes also require a clean cache-verification run and a 4K target-census run for the release record. Escha & Logy and Shallie should be tested to confirm that their controls remain disabled and their engine-specific fixes remain hard-off.

@@ -14,7 +14,6 @@
 // is no SCL animator involved, and `CPaneGroupArrayAnimator` -- the obvious
 // suspect by name -- appears only in an unreferenced string pool. The whole
 // thing is a hand-rolled immediate-mode easing loop inside ButtonHelp::Update.
-// Full map in WORK_DOC.md "Shallie's control-hint panel".
 //
 // THE COMPLAINT is that it replays constantly. The panes are never destroyed,
 // so within one lifetime of the object this is re-animation rather than

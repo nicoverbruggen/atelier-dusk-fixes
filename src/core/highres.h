@@ -10,12 +10,11 @@
 // running them together is what makes "did this actually resize everything"
 // answerable in a single session.
 //
-// THE DEFECT, measured rather than assumed (WORK_DOC.md, "Measured: Ayesha has
-// the old-Arland defect"). Ayesha takes any resolution from its own
-// Setting.ini and creates a swap chain and matching depth target at that size,
-// but every target the scene is actually drawn into is created at a hard-coded
-// 1920x1080. The scene is therefore rendered at 1080p and scaled up, and
-// choosing 1440p buys a larger window and no more detail.
+// THE DEFECT, measured rather than assumed. Ayesha takes any resolution from
+// its own Setting.ini and creates a swap chain and matching depth target at
+// that size, but every target the scene is actually drawn into is created at a
+// hard-coded 1920x1080. The scene is therefore rendered at 1080p and scaled up,
+// and choosing 1440p buys a larger window and no more detail.
 //
 // THE FIX is the one TellowKrinkle established for this engine family and the
 // Arland project refined: learn the main render size from the first

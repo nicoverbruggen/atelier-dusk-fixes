@@ -1,9 +1,17 @@
 // SPDX-License-Identifier: MIT
 //
-// Experimental Ayesha field-jitter probe and Arland-derived writes. The current
-// port failed its Ayesha runtime test; see field_physics.h and WORK_DOC.md. All
-// behaviour remains env-gated and inert by default while the Ayesha-specific
-// mechanism and controller layout are reinvestigated.
+// Ayesha field-jitter correction: the threshold rescale and the resting
+// stabilizer. See field_physics.h for the defect and how the two halves couple.
+//
+// Both ship ON BY DEFAULT and are confirmed in game. An early test reported that
+// they did not help and the pair was held opt-in on that basis; a later session
+// with BOTH switches on confirmed that they do. That earlier negative is worth
+// remembering rather than forgetting, because the most likely reading of it is a
+// configuration result rather than a code one -- the stabilizer refuses to run
+// without the rescale, so a test that enabled only one of them, or that relied
+// on an ini key while an environment variable pinned it off, would report
+// exactly that failure. `DUSK_FIELD_ENGINE_FIX=0` stands the pair down for a
+// comparison and `DUSK_FIELD_STABILIZER=0` disables only the second half.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
@@ -32,7 +40,7 @@ FieldUpdateProc originalFieldUpdate = nullptr;
 // (EN 0x739fa0, ML 0x75c4a0) for every access to each one. The two this file
 // writes carry the strongest evidence: +0x54 is accumulated and then clamped to
 // -20.0f terminal velocity, and +0xb8 is reset to zero and accumulated by frame
-// time. See WORK_DOC.md, "The controller offsets, confirmed on both builds".
+// time.
 //
 // kGroundedOffset/kGroundedBit are the one indirect pair. The object holds two
 // adjacent BYTE flags at +0x38 and +0x39, not a flags word, and ground contact

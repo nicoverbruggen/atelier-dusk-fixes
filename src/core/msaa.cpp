@@ -140,10 +140,10 @@ void markClean(ID3D11Resource* host) {
 // Whether that gap costs anything here is an open question and NOT one to
 // settle by reasoning: it depends on whether this engine ever samples its scene
 // depth host, and the evidence that it does was withdrawn (the sampler names it
-// rested on belong to another game's shaders -- WORK_DOC.md). The depth host is
-// therefore tagged at twin time and SRV binds of it are counted, so one run
-// answers it. A non-zero `depthHostReads` in the log means the depth-resolve
-// pass has to be written; zero means there is nothing to write.
+// rested on belong to another game's shaders). The depth host is therefore
+// tagged at twin time and SRV binds of it are counted, so one run answers it. A
+// non-zero `depthHostReads` in the log means the depth-resolve pass has to be
+// written; zero means there is nothing to write.
 void resolveColor(ID3D11DeviceContext* context, ID3D11Resource* host) {
   if (!isDirty(host))
     return;

@@ -79,7 +79,7 @@ unsigned int ssaaPercent() {
     // actually asked for.
     //
     // 150% is nevertheless RESTORED-BUT-UNPROVEN on this engine: no fractional
-    // factor has ever been run here. See WORK_DOC.md.
+    // factor has ever been run here.
     if (v == 125 || v == 150 || v == 200 || v == 300 || v == 400)
       return unsigned(v);
     return 100;

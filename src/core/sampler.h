@@ -33,7 +33,7 @@
 // is upgraded too. Arland ships that and gets away with it. It is not obviously
 // safe here: point sampling is *correct* for lookup textures, and filtering a
 // colour-grading LUT, a gradient ramp or a dither table smears the very thing
-// it encodes. `DUSK.md` flags this and asks that it be validated against a
+// it encodes. This is flagged as needing validation against a
 // scene with tonemapping and post-processing running, not just a menu.
 //
 // So this counts what it upgrades, by kind, and says so. If a run reports no

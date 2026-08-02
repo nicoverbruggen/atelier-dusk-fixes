@@ -6,8 +6,8 @@
 // mechanism.
 //
 // All six Dusk front-ends are 32-bit and statically import MSIMG32, exactly as
-// the Arland ones do (WORK_DOC.md, "The Dusk front-ends"), so one DLL is loaded
-// into each and does a different job in each:
+// the Arland ones do, so one DLL is loaded into each and does a different job
+// in each:
 //
 //   Atelier_<Game>Launcher.exe -> start dusk-fix-launcher.exe instead, if it is
 //                                 installed, or the game itself when
@@ -17,8 +17,7 @@
 //                                 to. It writes the game's own Setting.ini, and
 //                                 Ayesha reads its resolution straight out of
 //                                 that file with no clamping of its own
-//                                 (WORK_DOC.md, "Ayesha's resolution path"), so
-//                                 there is nothing here worth patching.
+//                                 so there is nothing here worth patching.
 //
 // Everything else that loads it just gets the two forwarded GDI entry points.
 #define WIN32_LEAN_AND_MEAN
@@ -264,8 +263,7 @@ constexpr std::array<DuskGame, 3> SupportedGames = {{
 // 0x551ea4/ea8/eac/eb0 and branches to a per-language executable name; the "2"
 // arm and the fall-through arm are the same branch, which is where the
 // English default comes from. The other two launchers carry the identical
-// table at the identical file offset with their own names. See WORK_DOC.md,
-// "The Dusk front-ends".
+// table at the identical file offset with their own names.
 //
 // The comparison below is against the whole value for the same reason: the
 // stock launcher compares whole strings, so "10" is unrecognized there and

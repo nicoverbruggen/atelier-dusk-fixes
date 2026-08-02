@@ -5,9 +5,9 @@
 //
 // These two are UCRT builds on the newer Gust engine. They carry NO known menu
 // hitch -- the Arland/Ayesha text renderer has no homolog in either binary and
-// their queue drain mismatches on both vote and prologue shape (WORK_DOC.md
-// 1.3) -- so nothing in `src/engines/phyre/` applies to them and none of it is reachable
-// here. Their own open defects are different problems entirely:
+// their queue drain mismatches on both vote and prologue shape -- so nothing in
+// `src/engines/phyre/` applies to them and none of it is reachable here. Their
+// own open defects are different problems entirely:
 //
 //   * Escha & Logy: the shadow-texture bug AGT worked around by replacing the
 //     SRV at init, and the system-save-data wipe on quit.
@@ -33,8 +33,8 @@ namespace atfix {
 // A zero `textSize` would mean "name matches, size unknown" and is reported but
 // never treated as a verified identity, so a fix cannot install against an
 // unrecognized build. A zero RVA means that fix has no row for this build and
-// declines; every RVA here is derived in WORK_DOC.md, "The 'Loadning system
-// data.' typo", and none of them is currently zero.
+// declines; every RVA here was derived separately, and none of them is
+// currently zero.
 struct KtglGame {
   const char* executable;
   DWORD textSize;

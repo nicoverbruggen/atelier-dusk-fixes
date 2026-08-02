@@ -35,15 +35,16 @@ using atfix::currentModuleIdentity;
 using atfix::log;
 
 // The four KTGL executables, fingerprinted the same way as Ayesha's two: name
-// plus .text VirtualSize. SHA-256 for each is in WORK_DOC.md "Hook boundaries";
-// see KtglGame in ktgl.h for what a zero in either the size or an RVA means.
+// plus .text VirtualSize. The SHA-256 for each is recorded in the project's
+// private technical notes; see KtglGame in ktgl.h for what a zero in either the
+// size or an RVA means.
 //
 // The log line below prints the .text size it actually saw, so a game patch that
 // changes .text is visible in the log rather than silently accepted.
 //
 // loadingTextRva is the "Loadning system data." literal in each build's .rdata,
-// derived in WORK_DOC.md, "The 'Loadning system data.' typo". All four differ
-// because these are four separate compiles.
+// derived separately for each. All four differ because these are four separate
+// compiles.
 // A zero in any RVA column means "this fix has no row for this build" and the
 // fix declines. controlPrompt* is zero for both Escha builds because Escha does
 // not have that panel at all -- not because the address is unknown.

@@ -13,16 +13,15 @@
 // It carries the same four pages as the Arland launcher: Display, Image
 // Quality, Game and About. Arland's Debug page has no counterpart here --
 // there are no developer views to reach, and the diagnostics that do exist are
-// environment switches on purpose (WORK_DOC.md, "Configuration:
-// dusk-fix.ini").
+// environment switches on purpose.
 //
 // Two files are edited, and the split matters:
 //
 //   Setting.ini   the game's own, which it reads by itself. Resolution lives
 //                 here and nowhere else -- Ayesha accepts any value in it and
-//                 validates nothing but a negative number (WORK_DOC.md,
-//                 "Ayesha's resolution path"), so the mod deliberately has no
-//                 resolution setting of its own to duplicate it with.
+//                 validates nothing but a negative number, so the mod
+//                 deliberately has no resolution setting of its own to
+//                 duplicate it with.
 //   dusk-fix.ini  the mod's, parsed by src/core/config.cpp. The same
 //                 Get/WritePrivateProfileString API is used here so the
 //                 on-disk format matches, and only known keys are touched, so
@@ -175,9 +174,9 @@ const int kResolutionCount = int(sizeof(kResolutions) / sizeof(kResolutions[0]))
 // meant something different from "leave it alone". Draw-time instrumentation
 // disproved it and the feature was rewritten because of it: the engine creates
 // multisampled targets and renders into none of them, so the twins this mod
-// attaches are the only multisampling in the frame (WORK_DOC.md, "MSAA: the
-// engine will not do it, so the mod does"). "0" and "1" are one state with one
-// name, and matching a preset has to accept either (see presetFromControls).
+// attaches are the only multisampling in the frame. "0" and "1" are one state
+// with one name, and matching a preset has to accept either (see
+// presetFromControls).
 const ComboItem kMsaaItems[] = {
   { L"Off",           "0" },
   { L"2x",            "2" },
@@ -287,7 +286,7 @@ const int kWindowModeCount = 2;
 
 // The values Koei Tecmo's launcher compares against, and the build each one
 // starts. Verified from the stock launcher's own string-compare chain rather
-// than assumed; see WORK_DOC.md, "How the stock launcher picks the game build".
+// than assumed; the chain itself is quoted in launcher_proxy.cpp.
 const ComboItem kLangItems[] = {
   { L"Japanese",            "1" },
   { L"English",             "2" },

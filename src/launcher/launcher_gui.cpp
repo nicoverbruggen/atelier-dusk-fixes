@@ -519,10 +519,13 @@ bool hasUnsavedChanges() { return !(currentState() == g_savedState); }
 
 void loadFromIni() {
   // ---- the game's own Setting.ini
+  //
+  // Read with a 0 sentinel rather than the game's 1280x720 default, because
+  // whether these keys exist at all is what decides the Auto default below.
   const unsigned width =
-    GetPrivateProfileIntA("Graphics", "ScreenWidth", 1280, g_settingsPath);
+    GetPrivateProfileIntA("Graphics", "ScreenWidth", 0, g_settingsPath);
   const unsigned height =
-    GetPrivateProfileIntA("Graphics", "ScreenHeight", 720, g_settingsPath);
+    GetPrivateProfileIntA("Graphics", "ScreenHeight", 0, g_settingsPath);
 
   g_resolutions.assign(1, kAutoResolution);
   g_resolutions.insert(g_resolutions.end(), kResolutions,
@@ -536,8 +539,23 @@ void loadFromIni() {
     addResolution(width, height);
   // Auto is the launcher's own memory of a choice, not a value the game could
   // hold, so it lives in dusk-fix.ini rather than in Setting.ini.
+  //
+  // Its default is what a file that has never been saved gets, and it has to
+  // be Auto to match the Arland launcher, which selects Auto whenever its own
+  // ini carries no resolution (`int baseSel = 0; // Auto by default`). Dusk
+  // defaulted to false, and since `AutoResolution` is never seeded at file
+  // creation -- only SkipLauncher is -- a fresh install opened this window and
+  // saw the game's shipped 1280x720 instead of its own display, which is
+  // exactly the outcome resetToDefaults says defaults must not produce.
+  //
+  // The default is conditional rather than a flat `true`, though, because a
+  // flat true would break the other rule this window keeps: opening it must
+  // never silently replace a resolution the user already chose. If the game's
+  // file already carries one, that choice wins and Auto is not assumed; a
+  // deliberate 4K on a 1080p panel (downsampling) survives being looked at.
+  // Auto is assumed only when there is no resolution to overrule.
   refillResolutions(width, height,
-    iniBool(g_iniPath, "Launcher", "AutoResolution", false));
+    iniBool(g_iniPath, "Launcher", "AutoResolution", !(width && height)));
 
   char value[16] = {};
   iniString(g_settingsPath, "Window", "FullScreen", value, sizeof(value), "0");

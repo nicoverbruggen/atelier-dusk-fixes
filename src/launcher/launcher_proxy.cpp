@@ -167,6 +167,67 @@ bool skipLauncherRequested() {
          value[0] == L'y' || value[0] == L'Y';
 }
 
+// [Launcher] AutoResolution, and what it costs to honour it here.
+//
+// Auto means "present at the display's resolution". The mod launcher resolves
+// it when it saves, so every start through that window already follows the
+// display. SkipLauncher is the gap: that window never opens, so the number in
+// Setting.ini keeps whatever the display happened to be when it was last
+// resolved, and a display change is never noticed.
+//
+// The Arland mod closes the same gap in its DLL, which overrides the swap chain
+// at device creation. That does not port here: Arland can present at a size the
+// game did not choose because it also carries a render-to-display fit pass to
+// bridge the two (supersample.cpp). Dusk has no such pass, so a swap chain that
+// disagrees with the size the engine picked for its own targets would put the
+// scene in a corner of the backbuffer. Writing the game's own field instead is
+// both safer and more honest: the game reads it itself, so the resolution is
+// real rather than something the mod imposes on top.
+//
+// Read-only on dusk-fix.ini for the reason given on skipLauncherRequested; only
+// Setting.ini is written, and only when it already exists.
+bool autoResolutionRequested() {
+  std::array<wchar_t, 32768> ini = { };
+  if (!pathInGameDirectory(L"dusk-fix.ini", ini))
+    return false;
+  std::array<wchar_t, 16> value = { };
+  GetPrivateProfileStringW(L"Launcher", L"AutoResolution", L"false",
+    value.data(), static_cast<DWORD>(value.size()), ini.data());
+  return value[0] == L't' || value[0] == L'T' || value[0] == L'1' ||
+         value[0] == L'y' || value[0] == L'Y';
+}
+
+void applyAutoResolution() {
+  if (!autoResolutionRequested())
+    return;
+  DEVMODEW mode = { };
+  mode.dmSize = sizeof(mode);
+  unsigned width = 0, height = 0;
+  if (EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &mode) &&
+      mode.dmPelsWidth && mode.dmPelsHeight) {
+    width = mode.dmPelsWidth;
+    height = mode.dmPelsHeight;
+  } else {
+    const int cx = GetSystemMetrics(SM_CXSCREEN);
+    const int cy = GetSystemMetrics(SM_CYSCREEN);
+    if (cx > 0 && cy > 0) { width = unsigned(cx); height = unsigned(cy); }
+  }
+  if (!width || !height)
+    return;
+  std::array<wchar_t, 32768> settings = { };
+  if (!pathInGameDirectory(L"Setting.ini", settings) ||
+      GetFileAttributesW(settings.data()) == INVALID_FILE_ATTRIBUTES)
+    return;
+  wchar_t value[16] = { };
+  wsprintfW(value, L"%u", width);
+  WritePrivateProfileStringW(L"Graphics", L"ScreenWidth", value,
+    settings.data());
+  wsprintfW(value, L"%u", height);
+  WritePrivateProfileStringW(L"Graphics", L"ScreenHeight", value,
+    settings.data());
+  launcherLog("AutoResolution: presenting at the desktop resolution");
+}
+
 struct DuskGame {
   const wchar_t* launcher;
   const wchar_t* english;
@@ -320,6 +381,11 @@ bool armRedirect() {
   // Where the redirect goes. SkipLauncher asks for the game itself; without it
   // (the default) this is our launcher.
   g_startsGame = skipLauncherRequested();
+  // Before either target starts. With SkipLauncher this is the only chance to
+  // follow the display at all; without it the window is about to re-resolve the
+  // same value anyway, so doing it here as well costs nothing and keeps one
+  // code path rather than two.
+  applyAutoResolution();
   if (g_startsGame) {
     if (!resolveGameExecutable(*game, g_startTarget)) {
       launcherLog("SkipLauncher is set but no game executable is installed "

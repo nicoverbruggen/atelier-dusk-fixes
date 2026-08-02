@@ -966,9 +966,44 @@ with a default, so a zero written there would be passed straight through.
 
 So Auto is resolved here, at save time, and the choice is remembered in
 `[Launcher] AutoResolution` so that reopening the window shows Auto rather than
-whatever number it last resolved to. What is lost against Arland is
-re-resolving when the display changes without reopening the launcher, which
-genuinely does need the DLL. `Reset to defaults` selects Auto, so a fresh
+whatever number it last resolved to.
+
+Two corrections to what this section used to claim.
+
+**Auto's default was wrong, and that was a real divergence from Arland.**
+`loadFromIni` passed `false` as the default for `AutoResolution`, and that key
+is never seeded at file creation (only `SkipLauncher` is), so any install whose
+launcher had not yet saved selected the literal from `Setting.ini` instead of
+Auto -- the game's shipped 1280x720 on a fresh one. Arland selects Auto in
+exactly that case (`int baseSel = 0; // Auto by default`), and `resetToDefaults`
+here already argued that a fresh install must not inherit 720p. The default is
+now `!(width && height)`: Auto when the game's file carries no resolution of its
+own, the file's value when it does. A flat `true` would have been the closer
+mirror of Arland but would break this window's other rule, that opening it never
+silently replaces a resolution the user already chose -- a deliberate 4K on a
+1080p panel has to survive being looked at.
+
+**Arland's mechanism does not port, and blank `[Rendering] DisplayWidth` /
+`DisplayHeight` keys in `dusk-fix.ini` do nothing.** Arland can present at a
+size the game never chose because it carries a render-to-display fit pass
+(`supersample.cpp`) that bridges the two, and `sync_fix.cpp` records the
+original swap-chain size when it overrides the chain. Dusk has no such pass. A
+swap chain overridden to the desktop resolution while the engine sizes its own
+targets from `Setting.ini` puts the scene in a corner of an oversized
+backbuffer, and on Ayesha it would also stop `highres.cpp` adopting a main
+render size at all, since nothing would match the chain any more. Porting the
+keys means porting the fit pass first.
+
+What was genuinely lost against Arland is therefore narrower than "needs the
+DLL": it is only the launches where the launcher window never opens, since
+`Start game` saves first and re-resolves Auto every time it is used. That gap is
+now closed in the 32-bit proxy instead (`applyAutoResolution` in
+`launcher_proxy.cpp`), which resolves the display and writes the game's own
+`Setting.ini` before starting either target. It covers the `SkipLauncher` path
+and the stock-launcher path, needs no rendering machinery, and leaves the
+resolution real rather than imposed on top of the game. It cannot cover starting
+the game executable directly, which is what the workspace's own `run-*.sh`
+scripts do -- there, whatever is in `Setting.ini` is what runs. `Reset to defaults` selects Auto, so a fresh
 install never inherits the game's own 1280x720.
 
 One Arland behaviour is deliberately **not** carried over: dropping modes larger

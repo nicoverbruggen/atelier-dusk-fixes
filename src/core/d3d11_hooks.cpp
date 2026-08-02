@@ -175,11 +175,13 @@ void d3d11InstallHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
   // wants nothing installs nothing.
   const HighResWants highRes = highResResolveWants();
   const unsigned int msaa = msaaSamples();
-  // Supersampling deliberately does not appear here. It owns no hook: it
-  // scales the size the high-resolution fix already rewrites targets to, and so
-  // rides that feature's CreateTexture2D hook entirely. See supersample.h.
+  // Supersampling owns no hook of its own, but it is not hookless either: it
+  // reads the bind detour to identify the composite and the shader-resource
+  // detour to substitute at its sample, and both live in the MSAA set below.
+  // Naming it here is what keeps `DUSK_SSAA=200` with everything else off from
+  // installing nothing and reporting nothing.
   if (!highRes.createTexture2D && !highRes.rasterCorrection && msaa <= 1 &&
-      !anisotropyLevel() && !smaaPreUiEnabled())
+      !anisotropyLevel() && !smaaPreUiEnabled() && !ssaaConfigured())
     return;
 
   // The Phyre module initializes MinHook for Ayesha, but this subsystem is the
@@ -215,11 +217,24 @@ void d3d11InstallHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
          ++i)
       specs[specCount++] = from[i];
   };
-  if (highRes.rasterCorrection)
+  // Also when supersampling is on: the enlarged scene targets are useless
+  // without the raster correction that carries the engine's hard-coded viewport
+  // and scissor onto them.
+  //
+  // NOT for the pre-UI SMAA path, though a version of this line briefly said so
+  // on the grounds that SMAA "fires after the composite draw, and the draw
+  // detours are in this set". It does not: it fires from msaaNoteSceneBoundary
+  // inside the OMSetRenderTargets detour, which is in the MSAA set below, and
+  // there is no draw-time entry point anywhere in smaa.cpp. Installing six
+  // detours on the hottest functions in the frame to satisfy a dependency that
+  // does not exist is worth avoiding even when they are inert.
+  if (highRes.rasterCorrection || ssaaConfigured())
     append(kRasterHooks, int(sizeof(kRasterHooks) / sizeof(kRasterHooks[0])));
   // Also when the pre-UI SMAA path is on: it needs the OMSetRenderTargets
   // detour to see the scene/UI boundary, and that detour lives in this set.
-  if (msaa > 1 || smaaPreUiEnabled())
+  // And when supersampling is on: it identifies the composite from that same
+  // detour and substitutes at PSSetShaderResources, both of them here.
+  if (msaa > 1 || smaaPreUiEnabled() || ssaaConfigured())
     append(kMsaaHooks, int(sizeof(kMsaaHooks) / sizeof(kMsaaHooks[0])));
 
   if (specCount && !context) {
@@ -349,6 +364,25 @@ void d3d11InstallHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
         "x requested (twin targets; 'MSAA: engaged' confirms it attached)");
   else
     log("FIXES msaa=off");
+
+  // Only the OFF half of supersampling's configured line is logged here. The ON
+  // half carries the scene and display sizes, and neither exists yet: Ayesha
+  // creates its device before its swap chain, and the main render size is
+  // learned from the first depth target after that. ssaaFrameTick emits it once
+  // those numbers are real, so the line never has to say "unknown".
+  if (!ssaaConfigured())
+    log("FIXES ssaa=off");
+
+  // The trap that costs a whole session when it is hit. DUSK_HIGHRES=0 stands
+  // down the CreateTexture2D hook, which is the only thing that ever learns a
+  // main render size -- so Ayesha's MSAA scene test can never match, and there
+  // is nothing enlarged for supersampling to downscale. Both features then
+  // report themselves configured and do nothing, which is exactly the state
+  // this project has now been in three times.
+  if (!highRes.rasterCorrection && (msaa > 1 || ssaaConfigured()))
+    log("D3D11HOOKS: WARNING the high-resolution fix is off, so no main render"
+        " size is ever learned; the scene test cannot match and neither MSAA"
+        " nor supersampling will do anything this session");
 
   log("D3D11HOOKS: installed highres=", highRes.rasterCorrection ? 1 : 0,
       " census=", highRes.createTexture2D && !highRes.rasterCorrection ? 1 : 0,

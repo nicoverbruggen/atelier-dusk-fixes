@@ -79,6 +79,13 @@ const Descriptor& descriptor(Feature f) {
     /* FieldStabilizer */ { "DUSK_FIELD_STABILIZER",  nullptr, nullptr },
     /* Smaa            */ { "DUSK_SMAA",     "Rendering", "SMAA" },
     /* Msaa            */ { "DUSK_MSAA",               nullptr, nullptr },
+    // Env-only DESPITE having an ini key, which is the one exception in this
+    // table and needs stating. `[Rendering] Supersampling` is an INT
+    // percentage, and featureEnabled's boolean path would seed the literal
+    // `false` into it the first time anything asked whether the feature was on.
+    // ssaaPercent() owns that key and parses it as the integer it is; the
+    // capability matrix still owns whether the running game supports the
+    // feature at all, which is the only question asked of this row.
     /* Supersampling   */ { "DUSK_SSAA",               nullptr, nullptr },
     /* AnisotropicFiltering */
                           { "DUSK_ANISO", "Rendering", "AnisotropicFiltering" },
@@ -161,24 +168,31 @@ constexpr Support X = Support::OnByDefault;
 // work there unchanged. Nothing has been measured on KTGL, so nothing is
 // claimed (WORK_DOC.md, "SMAA").
 //
-// Supersampling is Unsupported EVERYWHERE, and that is a measurement rather
-// than caution. The implementation is ported and correct in itself, but its
-// attachment point is wrong for this engine: it substitutes a larger texture
-// when the game creates a render-target view over the back buffer, and Ayesha
-// created exactly one such view at startup (285 ms, a second before the first
-// present) and none afterwards. A count that never grows, with a black screen,
-// says the engine does not composite through that view -- most likely it blits
-// into the back buffer with something that needs no view at all. So the larger
-// target stayed empty and the downscale painted it over a frame the game had
-// already drawn correctly.
+// Supersampling is OptIn on Ayesha and Unsupported on the KTGL games, and it is
+// a rebuild rather than a repair: four implementations preceded it and none of
+// them worked. A back-buffer redirect found nothing to attach to, because this
+// engine never composites through the back buffer's render-target view.
+// Enlarging the scene targets and letting the engine resample worked but gave
+// four bilinear taps, and silently disabled MSAA because two places computed
+// the scene size and disagreed. Owning the resample improved it marginally.
+// Adding a once-per-frame latch to that pass produced a black scene, because
+// the transition it latched on fires 5-22 times per frame and the first one is
+// a post-processing bind rather than the composite.
 //
-// Left Unsupported rather than opt-in because the failure blanks the screen,
-// which is not something to leave reachable from a launcher. The route that
-// should work is described in WORK_DOC.md, "MSAA and supersampling": have
-// highres.cpp adopt the supersampled size as its main render size, so the
-// engine renders its own targets larger and the existing raster correction
-// carries the viewports, then downscale that. Nothing here needs deleting for
-// it; the downscale pass and its shader are the same either way.
+// What ships now identifies the composite POSITIVELY -- the bind whose colour
+// target is the swap-chain back buffer, which is a runtime fact and exact --
+// and substitutes a box-filtered display-sized copy of the scene in the
+// argument array of the one PSSetShaderResources call that composite makes.
+// Nothing is latched across calls and nothing at all happens at Present. See
+// supersample.h and WORK_DOC.md.
+//
+// OptIn rather than on by default, and it can never be anything else: 200% is
+// four times the shaded pixels, measured at 70% GPU on a 7900 XTX in the game's
+// opening interior, which is close to the lightest scene there is. Combined
+// with 4x MSAA that is sixteen geometry samples per displayed pixel.
+//
+// Its key is the one in this table that featureEnabled must not be asked about
+// -- see the note on the Descriptor row.
 //
 // TargetCensus is the one diagnostic that is NOT Ayesha-only. It reads nothing
 // but the D3D11 resources the game creates, so it needs no mapped address and
@@ -213,7 +227,7 @@ constexpr Support X = Support::OnByDefault;
 // derived from a different engine.
 constexpr Support kMatrix[3][static_cast<int>(Feature::Count)] = {
   //                Stats Trace Verfy Censu Probe Targt HiRes Cache Field Stab Smaa Msaa Ssaa Aniso
-  /* Ayesha  */   {   O,    O,    O,    O,    O,    O,    X,    X,    X,    X,   O,   O,   O,   X },
+  /* Ayesha  */   {   O,    O,    O,    O,    O,    O,    X,    X,    X,    X,   X,   O,   O,   X },
   /* Escha   */   {   U,    U,    U,    U,    U,    O,    U,    U,    U,    U,   U,   U,   U,   O },
   /* Shallie */   {   U,    U,    U,    U,    U,    O,    U,    U,    U,    U,   U,   U,   U,   O },
 };

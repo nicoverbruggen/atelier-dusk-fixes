@@ -13,9 +13,11 @@
 #include <d3d11.h>
 
 #include <array>
+#include <cstdlib>
 #include <cstring>
 
 #include "config.h"
+#include "crash_log.h"
 #include "d3d11_probe.h"
 #include "engine.h"
 #include "game.h"
@@ -66,6 +68,12 @@ D3D11Proc loadSystemD3D11() {
   if (d3d11Proc.D3D11CreateDevice)
     return d3d11Proc;
 
+  // Before anything else this DLL does, so a fault in our own installation is
+  // still caught. Skipped when the mod is stood down: DUSK_DISABLE means a
+  // process this DLL has not touched, and an installed exception filter is a
+  // thing it has touched.
+  if (!std::getenv("DUSK_DISABLE") || std::getenv("DUSK_DISABLE")[0] == '0')
+    installCrashLogger();
   log("Atelier Dusk Fixes version ", DUSK_FIX_VERSION);
   log("Title: ", titleName(currentTitle()));
   logConfiguration();
@@ -114,6 +122,12 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* swapChain,
   d3d11WriteProbeFrameTick();
   highResFrameTick();
   msaaFrameTick();
+  // Counters and one-shot diagnostics ONLY. Supersampling deliberately does no
+  // rendering work at Present: two of its four failed predecessors blacked the
+  // screen out with a present-time pass painting over a finished frame, and the
+  // absence of one here is this design's safety argument rather than an
+  // optimisation. See supersample.h.
+  ssaaFrameTick(swapChain);
   samplerReport();
   // Before any present-time pass reads the frame: the scene may still be
   // sitting in a multisample twin, and SMAA and the downscale both sample the
@@ -167,6 +181,11 @@ HRESULT STDMETHODCALLTYPE hookedCreateSwapChain(
       desc->BufferDesc.Format, desc->BufferDesc.RefreshRate.Numerator,
       desc->BufferDesc.RefreshRate.Denominator, desc->Windowed != FALSE);
   if (SUCCEEDED(result) && swapChain && *swapChain) {
+    // Tag the back buffer. This is supersampling's identity anchor: the bind
+    // whose colour target carries this tag is the composite, which is the one
+    // fact the whole feature is built on. Both swap-chain routes do it, because
+    // Ayesha takes this one and the other games have never been measured.
+    ssaaNoteBackBuffer(*swapChain);
     hookPresent(*swapChain);
   }
   return result;
@@ -302,6 +321,7 @@ DLLEXPORT HRESULT __stdcall D3D11CreateDeviceAndSwapChain(
       pSwapChainDesc->Windowed != FALSE);
 
   if (SUCCEEDED(hr) && ppSwapChain && *ppSwapChain) {
+    atfix::ssaaNoteBackBuffer(*ppSwapChain);
     atfix::hookPresent(*ppSwapChain);
   }
 

@@ -31,6 +31,7 @@
 #include "d3d11_hooks.h"
 #include "msaa.h"
 #include "smaa.h"
+#include "supersample.h"
 
 namespace atfix {
 
@@ -249,11 +250,30 @@ ID3D11Texture2D* getOrCreateTwin(ID3D11Resource* hostResource,
   desc.MiscFlags = 0;
   desc.Usage = D3D11_USAGE_DEFAULT;
 
+  // Walk down on ALLOCATION failure, not just on format support.
+  //
+  // supportedSamples() asks the driver what it can render; it does not ask
+  // whether the memory exists. The launcher's Ultra rung is 8x over a 200%
+  // scene, which at 1440p is roughly 470 MB for this one colour twin before its
+  // depth partner -- a plausible refusal on a smaller card, and the old code
+  // took it as "no MSAA at all" rather than "try four". Halving is what the
+  // rest of this feature already does when a request cannot be met.
   ID3D11Texture2D* twin = nullptr;
-  if (FAILED(g_device->CreateTexture2D(&desc, nullptr, &twin)) || !twin) {
+  UINT attempt = samples;
+  while (attempt >= 2) {
+    desc.SampleDesc.Count = attempt;
+    if (SUCCEEDED(g_device->CreateTexture2D(&desc, nullptr, &twin)) && twin)
+      break;
+    twin = nullptr;
     g_twinFailures.fetch_add(1, std::memory_order_relaxed);
-    return nullptr;
+    attempt /= 2;
+    if (attempt >= 2)
+      log("MSAA: could not allocate a ", std::dec, attempt * 2,
+          "x twin at ", desc.Width, "x", desc.Height,
+          "; trying ", attempt, "x");
   }
+  if (!twin)
+    return nullptr;
   // SetPrivateDataInterface ties the twin's lifetime to the host's: when the
   // engine releases its target, the twin goes with it. Nothing in this module
   // keeps a separate registry, which is what makes a resize or a device reset
@@ -584,36 +604,47 @@ void msaaNoteSceneBoundary(ID3D11DeviceContext* context, unsigned int numViews,
                            ID3D11RenderTargetView* const* views,
                            ID3D11DepthStencilView* depth) {
   const MsaaSceneTest sceneTest = g_sceneTest;
-  if (!context || !sceneTest || !smaaPreUiEnabled())
+  // Supersampling needs this boundary as much as SMAA does -- not to fire a
+  // pass from it, but because this is the only place that knows which colour
+  // target the engine's scene test accepted, and supersampling has to be able
+  // to recognise that surface later when the composite samples it. Gating the
+  // whole function on the SMAA switch made supersampling depend on an unrelated
+  // checkbox, silently.
+  if (!context || !sceneTest || (!smaaPreUiEnabled() && !ssaaConfigured()))
     return;
 
-  // Is the arriving bind the scene?
-  ID3D11Texture2D* arriving = nullptr;
-  if (numViews == 1 && views && views[0] && depth) {
+  // The arriving colour target, and whether it is the scene. Both are needed:
+  // the scene test decides whether this is still the scene pass, and the target
+  // itself is what SMAA will run on once the composite has drawn into it.
+  ID3D11Texture2D* arrivingColor = nullptr;
+  bool arrivingIsScene = false;
+  if (numViews == 1 && views && views[0]) {
     ID3D11Resource* colorResource = nullptr;
-    ID3D11Resource* depthResource = nullptr;
     views[0]->GetResource(&colorResource);
-    depth->GetResource(&depthResource);
-    ID3D11Texture2D* colorTex = nullptr;
-    ID3D11Texture2D* depthTex = nullptr;
-    if (colorResource && depthResource &&
-        SUCCEEDED(colorResource->QueryInterface(IID_ID3D11Texture2D,
-          reinterpret_cast<void**>(&colorTex))) &&
-        SUCCEEDED(depthResource->QueryInterface(IID_ID3D11Texture2D,
-          reinterpret_cast<void**>(&depthTex))) && colorTex && depthTex) {
-      D3D11_TEXTURE2D_DESC cd = {};
-      D3D11_TEXTURE2D_DESC dd = {};
-      colorTex->GetDesc(&cd);
-      depthTex->GetDesc(&dd);
-      if (sceneTest(cd, dd)) {
-        arriving = colorTex;      // ownership moves to `arriving`
-        colorTex = nullptr;
+    if (colorResource) {
+      ID3D11Texture2D* colorTex = nullptr;
+      if (SUCCEEDED(colorResource->QueryInterface(IID_ID3D11Texture2D,
+            reinterpret_cast<void**>(&colorTex))) && colorTex) {
+        arrivingColor = colorTex;   // ownership moves here
+        if (depth) {
+          ID3D11Resource* depthResource = nullptr;
+          depth->GetResource(&depthResource);
+          ID3D11Texture2D* depthTex = nullptr;
+          if (depthResource &&
+              SUCCEEDED(depthResource->QueryInterface(IID_ID3D11Texture2D,
+                reinterpret_cast<void**>(&depthTex))) && depthTex) {
+            D3D11_TEXTURE2D_DESC cd = {};
+            D3D11_TEXTURE2D_DESC dd = {};
+            arrivingColor->GetDesc(&cd);
+            depthTex->GetDesc(&dd);
+            arrivingIsScene = sceneTest(cd, dd);
+            depthTex->Release();
+          }
+          if (depthResource) depthResource->Release();
+        }
       }
+      colorResource->Release();
     }
-    if (colorTex) colorTex->Release();
-    if (depthTex) depthTex->Release();
-    if (colorResource) colorResource->Release();
-    if (depthResource) depthResource->Release();
   }
 
   ID3D11Texture2D* previous = nullptr;
@@ -621,19 +652,50 @@ void msaaNoteSceneBoundary(ID3D11DeviceContext* context, unsigned int numViews,
   if (FAILED(context->GetPrivateData(IID_DuskSceneColor, &size, &previous)))
     previous = nullptr;
 
-  // Scene -> not-scene is the boundary. Under MSAA the host arriving here is
-  // the one the twin has already been resolved into, because the resolve for
-  // the displaced pair runs before this bind completes.
-  if (previous && !arriving)
+  // Scene -> not-scene: the scene is complete and the interface is not yet
+  // drawn, so `previous` is the surface to antialias.
+  //
+  // NOTE, and it is the open question of this whole area: this transition
+  // happens 5-22 times per frame, because the engine steps in and out of its
+  // scene targets while running its post-processing chain. Only the last one is
+  // the composite. SMAA tolerates that because its own once-per-frame latch
+  // makes the FIRST one win and the scene is largely complete by then -- but
+  // "largely" is doing work in that sentence and it has never been verified
+  // against a census. Anything with stricter timing needs the composite
+  // identified positively, not inferred from this transition -- which is
+  // exactly what supersampling now does, and why it fires nothing here.
+  //
+  // So when supersampling is configured this pass stands down entirely and SMAA
+  // runs inside the downscale instead, on the display-sized result. Running
+  // both would antialias the scene twice; running this one would additionally
+  // do it at the supersampled size, where a morphological filter's pixel-counted
+  // search distances are wrong by the supersampling factor.
+  // Stood down only once supersampling has actually ENGAGED, not merely when it
+  // is configured. If it is configured and never attaches -- the composite is
+  // never identified, the pass fails, a second host is refused -- then keying on
+  // configuration alone would leave SMAA with nowhere to run, and it would fall
+  // back to the Present path and antialias the interface. That is strictly
+  // worse than turning supersampling off, and it is the shape of silent
+  // degradation this rebuild exists to eliminate. The frame latch inside
+  // smaaApplySceneColor makes the brief overlap harmless: for the first frames
+  // before SSAA engages, SMAA runs here at scene resolution; afterwards the
+  // in-pass call at display resolution claims the frame first.
+  if (previous && !arrivingIsScene && !ssaaEngaged())
     smaaApplySceneColor(context, previous);
 
-  if (arriving)
-    context->SetPrivateDataInterface(IID_DuskSceneColor, arriving);
-  else if (previous)
+  if (arrivingIsScene) {
+    context->SetPrivateDataInterface(IID_DuskSceneColor, arrivingColor);
+    // Tag it for supersampling. This module owns the verdict "that surface is
+    // the scene"; supersample.cpp owns storing it, so there is still exactly
+    // one place that decides. No-op when supersampling is off.
+    ssaaTagSceneHost(arrivingColor);
+  } else if (previous) {
     context->SetPrivateData(IID_DuskSceneColor, 0, nullptr);
+  }
+
+  if (arrivingColor) arrivingColor->Release();
 
   if (previous) previous->Release();
-  if (arriving) arriving->Release();
 }
 
 void msaaSetTargetBinder(
@@ -730,15 +792,22 @@ void msaaBindTargets(ID3D11DeviceContext* context, unsigned int numViews,
     originals.omSetRenderTargets(context, numViews, views, depth);
 }
 
+// THE ORDER OF THE FOUR STEPS BELOW IS A CORRECTNESS REQUIREMENT, not a style.
+// Three of the four failed supersampling attempts were ordering bugs, and the
+// invariant they all violated is one sentence: ANYTHING THAT READS A SCENE
+// COLOUR HOST MUST RUN AFTER msaaResolveReplaced, because under MSAA the scene
+// is in the multisample twin until that call lands it.
+//
+//   1. msaaSubstituteTargets   -- decides the twins, sets the pair aside
+//   2. msaaResolveReplaced     -- lands the displaced twin into its host
+//                                 ---- EVERYTHING BELOW READS THE HOST ----
+//   3. msaaNoteSceneBoundary   -- tags scene colour hosts; fires pre-UI SMAA
+//                                 only when supersampling is off
+//   4. ssaaNoteTargetsBound    -- sets or clears the composite marker
+//   5. forward the bind
 void STDMETHODCALLTYPE hookedOMSetRenderTargets(
     ID3D11DeviceContext* self, UINT numViews,
     ID3D11RenderTargetView* const* views, ID3D11DepthStencilView* depth) {
-  // The scene/UI boundary, observed. This bind is the composite if the pair
-  // that was bound until now was the scene and this one is not -- at which
-  // point the scene is complete, the interface has not been drawn, and the
-  // scene target is exactly the surface SMAA wants. See smaa.h.
-  msaaNoteSceneBoundary(self, numViews, views, depth);
-
   ID3D11RenderTargetView* twinRtv = nullptr;
   ID3D11DepthStencilView* twinDsv = nullptr;
   const bool substituted =
@@ -751,6 +820,23 @@ void STDMETHODCALLTYPE hookedOMSetRenderTargets(
   // state.
   msaaResolveReplaced(self);
 
+  // The scene/UI boundary, observed: the pair bound until now was the scene and
+  // this one is not, so the scene is complete and the interface is not yet
+  // drawn. Both consumers of that moment -- the pre-UI SMAA pass and the
+  // supersampling scene-host tag -- read the scene HOST, so this must run AFTER
+  // the resolve above and not before it. With MSAA on, the scene lives in the
+  // twin until that resolve lands it; reading the host first samples the
+  // previous frame, or nothing at all.
+  msaaNoteSceneBoundary(self, numViews, views, depth);
+
+  // Is the swap chain's back buffer among the targets arriving? On this engine
+  // that is the composite and nothing else, and it is the positive
+  // identification the whole supersampling rebuild rests on. Note that it reads
+  // the views the GAME passed, not the substituted twins: the back buffer is
+  // never twinned, so the two agree, but reading the game's own arguments is
+  // what keeps this true if that ever changes.
+  ssaaNoteTargetsBound(self, numViews, views);
+
   if (substituted) {
     ID3D11RenderTargetView* substituteViews[1] = { twinRtv };
     d3d11OriginalsFor(self).omSetRenderTargets(self, 1, substituteViews, twinDsv);
@@ -761,12 +847,28 @@ void STDMETHODCALLTYPE hookedOMSetRenderTargets(
   }
 }
 
+// The same ordering rule as the bind detour, for the same reason. Step 1 makes
+// the hosts current; step 2 reads one of them.
 void STDMETHODCALLTYPE hookedPSSetShaderResources(
     ID3D11DeviceContext* self, UINT startSlot, UINT numViews,
     ID3D11ShaderResourceView* const* views) {
   // Before the bind, not after: the point is that the game is about to sample
   // these, and the resolve has to have happened by then.
   msaaResolveShaderResources(self, numViews, views);
+
+  // The composite's sample IS the resample, so replacing what it samples
+  // replaces the filter -- a box filter sized to the ratio instead of the
+  // engine's four bilinear taps. The substitution lives in this array and
+  // nowhere else: it is gone the moment this call returns, so the
+  // post-processing passes that sample the same texture cannot inherit it.
+  ID3D11ShaderResourceView* substituted[kSsaaMaxSubstitutedViews];
+  if (ssaaSubstituteShaderResources(self, startSlot, numViews, views,
+                                    substituted, kSsaaMaxSubstitutedViews)) {
+    d3d11OriginalsFor(self).psSetShaderResources(self, startSlot, numViews,
+                                                 substituted);
+    return;
+  }
+
   d3d11OriginalsFor(self).psSetShaderResources(self, startSlot, numViews, views);
 }
 
@@ -794,6 +896,10 @@ HRESULT STDMETHODCALLTYPE hookedFinishCommandList(
   // that moment has to be landed before the list is replayed, or the resolve
   // would be recorded after the reads it is supposed to precede.
   msaaResolveBeforeFinish(self);
+  // The composite marker is per-context state, and a list can be closed with
+  // the back buffer still bound. Dropping it here keeps the next recording on
+  // this context from starting out believing it is inside the composite.
+  ssaaClearContextState(self);
   return d3d11OriginalsFor(self).finishCommandList(self, restoreState, commandList);
 }
 
@@ -875,8 +981,16 @@ void STDMETHODCALLTYPE hookedOMSetRenderTargetsAndUnorderedAccessViews(
   const bool substituted = !keepTargets &&
     msaaSubstituteTargets(self, numViews, views, depth, &twinRtv, &twinDsv);
 
-  if (!keepTargets)
+  // The same four steps, in the same order, for the same reason. The sentinel
+  // is the only difference: with it there is no bind to substitute, nothing is
+  // displaced, no boundary is crossed and the composite marker must be left
+  // exactly as it is -- treating the sentinel as a count would be a wild read
+  // and clearing the marker on it would drop the composite half way through.
+  if (!keepTargets) {
     msaaResolveReplaced(self);
+    msaaNoteSceneBoundary(self, numViews, views, depth);
+    ssaaNoteTargetsBound(self, numViews, views);
+  }
 
   if (substituted) {
     ID3D11RenderTargetView* substituteViews[1] = { twinRtv };

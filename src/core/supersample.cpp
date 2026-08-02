@@ -1,23 +1,40 @@
 // SPDX-License-Identifier: MIT
 //
-// See supersample.h for why this scales the scene targets rather than
-// redirecting the back buffer, and what the first attempt got wrong.
+// See supersample.h for the mechanism, the four attempts that preceded it, and
+// why the composite is identified by the back buffer rather than inferred from
+// a scene-target transition.
 //
-// The back-buffer redirect and its box-filter downscale shader are not lost:
-// they are in this file's git history, and they remain the right design for a
-// renderer that composites into the back buffer -- which is what the Arland
-// games do and what Escha & Logy or Shallie may yet turn out to do. They were
-// removed rather than left dormant because a second, inert mechanism sitting
-// beside the live one is how the wrong one ends up being debugged.
+// TWO RULES HOLD THIS FILE TOGETHER, and both were bought with a failed run:
+//
+//   Every internal bind goes through a TRAMPOLINE, never through the public
+//   ID3D11DeviceContext method. The fourth attempt called
+//   context->OMSetRenderTargets inside its pass, re-entered the MSAA detour
+//   that hook lives in, and hung the game on the loading screen before the
+//   intro video could play. Draw, RSSetViewports, RSSetScissorRects,
+//   PSSetShaderResources and OMSetRenderTargets are all hooked in this project;
+//   every one of them is reached here through d3d11OriginalsFor().
+//
+//   Nothing this module computes is latched past the call that needs it. The
+//   substitution exists only in the argument array of the single
+//   PSSetShaderResources call it was computed for. A substitution that stayed
+//   armed would be handed to the post-processing passes that sample the same
+//   texture, which is the failure that made attempt 4's picture black.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <d3d11.h>
 
+#include <atomic>
+#include <cmath>
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
 
 #include "config.h"
 #include "game.h"
 #include "log.h"
+#include "d3d11_hooks.h"
+#include "highres.h"
+#include "smaa.h"
 #include "supersample.h"
 
 namespace atfix {
@@ -40,40 +57,54 @@ unsigned int ssaaPercent() {
     if (featureSupport(Feature::Supersampling) == Support::Unsupported)
       return 100;
     int v = 0;
+    // Read directly rather than through featureEnabled(): this setting is an
+    // INT percentage, and the capability matrix's boolean path would seed
+    // `false` into the ini key the moment anything asked whether the feature
+    // was on. The matrix still owns whether the running game supports it at
+    // all, which is the check above.
     if (const char* env = std::getenv("DUSK_SSAA"))
       v = std::atoi(env);
     else
       v = duskConfigInt("Rendering", "Supersampling", 100);
-    // INTEGER FACTORS ONLY, and this is the substantive difference from the
-    // Arland implementation's ladder rather than a restriction for tidiness.
+    // The full ladder, matching Arland's.
     //
-    // There, the mod owns the downscale and applies a box filter sized to the
-    // factor, so any factor resamples correctly. Here the ENGINE owns it: its
-    // composite pass samples the scene target through an ordinary bilinear
-    // sampler, and bilinear is four taps.
+    // This was briefly restricted to whole-number factors, and that restriction
+    // was correct for a version of this feature that no longer exists: when the
+    // ENGINE owned the downscale, its composite sampled through a bilinear
+    // sampler, four taps resample correctly only at a whole-number ratio, and
+    // 150% aliased and softened at the same time. The downscale is now this
+    // module's own, box-filtered with ceil(ratio) samples per axis, which is
+    // the same shader Arland runs at 125% and 150%. The restriction outlived
+    // its reason by several builds and silently refused the setting the ini
+    // actually asked for.
     //
-    // At exactly 2:1 four taps is the correct answer. A destination pixel
-    // centre maps to source coordinate (i + 0.5) * 2 = 2i + 1, which sits
-    // exactly between texel centres 2i + 0.5 and 2i + 1.5 -- equal weights on
-    // each axis, so the sample is an exact 2x2 box average. Nothing is missed.
-    //
-    // At 1.5:1 it is not. The footprint is one and a half texels wide while
-    // bilinear still reads two, so source texels contribute to no destination
-    // pixel at all. The result aliases AND softens: supersampling that looks
-    // worse than leaving it off, which is precisely what a 150% run produced.
-    //
-    // So 125, 150 and 300 are refused rather than honoured badly. If arbitrary
-    // factors are wanted here, the work is a mod-owned downscale pass, and the
-    // box-filter shader for it is in this file's git history.
-    if (v == 200 || v == 400)
+    // 150% is nevertheless RESTORED-BUT-UNPROVEN on this engine: no fractional
+    // factor has ever been run here. See WORK_DOC.md.
+    if (v == 125 || v == 150 || v == 200 || v == 300 || v == 400)
       return unsigned(v);
-    if (v == 125 || v == 150 || v == 300)
-      log("FIXES supersampling=", std::dec, v, "% refused: this engine does its"
-          " own downscale with a bilinear sampler, which only resamples"
-          " correctly at whole-number factors. Use 200 or 400.");
     return 100;
   }();
   return percent;
+}
+
+bool ssaaConfigured() {
+  return ssaaPercent() > 100;
+}
+
+float ssaaSharpen() {
+  static const float amount = [] () -> float {
+    // Percent, so the ini and the environment carry no decimal point -- the
+    // same locale trap the supersampling factor avoids.
+    int v = 35;
+    if (const char* env = std::getenv("DUSK_SSAA_SHARPEN"))
+      v = std::atoi(env);
+    else
+      v = duskConfigInt("Rendering", "SupersamplingSharpen", 35);
+    if (v < 0) v = 0;
+    if (v > 100) v = 100;
+    return float(v) / 100.0f;
+  }();
+  return amount;
 }
 
 bool ssaaSceneSize(unsigned int mainWidth, unsigned int mainHeight,
@@ -103,6 +134,900 @@ bool ssaaSceneSize(unsigned int mainWidth, unsigned int mainHeight,
   *sceneWidth = static_cast<unsigned int>(width) & ~1u;
   *sceneHeight = static_cast<unsigned int>(height) & ~1u;
   return *sceneWidth > mainWidth && *sceneHeight > mainHeight;
+}
+
+
+// ---- identity tags ---------------------------------------------------------
+
+namespace {
+
+// Private-data keys. A distinct base from msaa.cpp's, for the reason that file
+// gives: the two mods are never loaded into the same process, but colliding
+// GUIDs across sibling codebases costs a day to find if it ever happens.
+//
+// On a RESOURCE: this is the swap chain's back buffer.
+const GUID IID_DuskBackBuffer =
+  { 0x9d3e7b11, 0x2c48, 0x4f0a, { 0xb6, 0x21, 0x5a, 0x0d, 0x14, 0x8e, 0x93, 0x01 } };
+// On a RESOURCE: the engine's scene test called this a scene colour host.
+const GUID IID_DuskSceneHost =
+  { 0x9d3e7b11, 0x2c48, 0x4f0a, { 0xb6, 0x21, 0x5a, 0x0d, 0x14, 0x8e, 0x93, 0x02 } };
+// ...93, 0x03 was a cached shader-resource view over the scene colour host,
+// hung off the host with SetPrivateDataInterface. It is deliberately gone; see
+// sourceViewFor for why that particular trick cannot be borrowed from msaa.cpp.
+// On a CONTEXT: the back buffer is currently bound as a colour render target,
+// which on this engine means the composite is being set up.
+const GUID IID_DuskSsaaComposite =
+  { 0x9d3e7b11, 0x2c48, 0x4f0a, { 0xb6, 0x21, 0x5a, 0x0d, 0x14, 0x8e, 0x93, 0x04 } };
+
+void setMarker(ID3D11DeviceChild* on, const GUID& key) {
+  const UINT value = 1;
+  if (on)
+    on->SetPrivateData(key, sizeof(value), &value);
+}
+
+void clearMarker(ID3D11DeviceChild* on, const GUID& key) {
+  if (on)
+    on->SetPrivateData(key, 0, nullptr);
+}
+
+bool hasMarker(ID3D11DeviceChild* on, const GUID& key) {
+  UINT value = 0;
+  UINT size = sizeof(value);
+  return on && SUCCEEDED(on->GetPrivateData(key, &size, &value)) && value;
+}
+
+// ---- counters and one-shots ------------------------------------------------
+//
+// Every number here answers a question that would otherwise be answered by
+// inference, which is how three of the four previous attempts shipped. The
+// distinction the log has to preserve is CONFIGURED (this file's FIXES line and
+// HIGHRES: scene size) / ATTACHED ('composite identified') / DOING SOMETHING
+// ('engaged', and these counters growing).
+std::atomic<uint64_t> g_frame{0};
+std::atomic<uint64_t> g_compositeBinds{0};
+std::atomic<uint64_t> g_substitutions{0};
+std::atomic<uint64_t> g_downscales{0};
+std::atomic<uint64_t> g_passFailures{0};
+std::atomic<uint64_t> g_backBufferRetags{0};
+std::atomic<bool> g_backBufferKnown{false};
+
+// The pass's own re-entry guard.
+//
+// The downscale runs INSIDE a PSSetShaderResources detour and then calls SMAA,
+// which binds shader resources of its own through the public method. Without
+// this, that bind would walk straight back into ssaaSubstituteShaderResources
+// with the composite marker still set. Thread-local because the guard is about
+// one call stack, not about the context.
+thread_local bool g_inPass = false;
+
+}  // namespace
+
+// ---- the downscale pass ----------------------------------------------------
+
+namespace {
+
+using PFN_D3DCompile = HRESULT (WINAPI*)(LPCVOID, SIZE_T, LPCSTR,
+  const D3D_SHADER_MACRO*, ID3DInclude*, LPCSTR, LPCSTR, UINT, UINT,
+  ID3DBlob**, ID3DBlob**);
+
+// Fullscreen triangle from SV_VertexID: no vertex buffer and no input layout,
+// so the pass needs nothing of the game's IA state.
+//
+// The box filter is the Arland project's, unchanged. Its comment explains the
+// half-ratio backoff, which is what makes odd ratios land on texel centres.
+const char* kDownscaleHlsl = R"HLSL(
+struct VSOut { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; };
+
+VSOut VSMain(uint id : SV_VertexID) {
+  VSOut o;
+  o.uv = float2((id << 1) & 2, id & 2);
+  o.pos = float4(o.uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
+  return o;
+}
+
+cbuffer Params : register(b0) {
+  float2 texel;    // 1 / render size
+  float2 ratio;    // render size / display size, per axis
+  float  samples;  // samples per axis
+  float  sharpen;  // 0 = off
+  float2 padding;
+};
+
+Texture2D    src  : register(t0);
+SamplerState samp : register(s0);
+
+// Average the source texels one output pixel actually covers.
+//
+// The footprint of output pixel p spans source texels [p*ratio, (p+1)*ratio].
+// uv * sourceSize is the CENTRE of that footprint, so backing off half a ratio
+// gives its top-left corner; samples are then spread evenly across it. For an
+// integer ratio with samples == ratio this lands exactly on texel centres and
+// the result is an exact box filter -- for odd ratios as well as even ones.
+float3 boxAt(float2 uv) {
+  int n = (int) samples;
+  float2 sourceSize = 1.0 / texel;
+  float2 origin = uv * sourceSize - 0.5 * ratio;
+  float2 step = ratio / samples;
+  float3 sum = 0.0;
+  for (int y = 0; y < n; ++y) {
+    for (int x = 0; x < n; ++x) {
+      float2 position = origin + (float2(x, y) + 0.5) * step;
+      sum += src.SampleLevel(samp, position * texel, 0).rgb;
+    }
+  }
+  return sum / (samples * samples);
+}
+
+float4 PSMain(VSOut i) : SV_TARGET {
+  float3 c = boxAt(i.uv);
+  if (sharpen > 0.0) {
+    // A box filter is an average, and an average is a blur -- so a correct
+    // downscale is inherently softer than the image it came from. Sharpening
+    // here rather than in a pass of its own costs four more box evaluations
+    // and no extra bandwidth, because the taps are already in cache.
+    float2 destTexel = ratio * texel;          // one output pixel, in source uv
+    float3 l = boxAt(i.uv - float2(destTexel.x, 0.0));
+    float3 r = boxAt(i.uv + float2(destTexel.x, 0.0));
+    float3 u = boxAt(i.uv - float2(0.0, destTexel.y));
+    float3 d = boxAt(i.uv + float2(0.0, destTexel.y));
+    float3 mean = (l + r + u + d) * 0.25;
+    float3 sharpened = c + (c - mean) * sharpen;
+    // Clamped to the neighbourhood, which is what keeps this from ringing.
+    // An unsharp mask left unclamped puts a bright halo on every dark edge and
+    // reads as exactly the oversharpened look it is.
+    float3 lo = min(min(min(l, r), min(u, d)), c);
+    float3 hi = max(max(max(l, r), max(u, d)), c);
+    c = clamp(sharpened, lo, hi);
+  }
+  return float4(c, 1.0);
+}
+)HLSL";
+
+struct DownscaleParams {
+  float texel[2];
+  float ratio[2];
+  float samples;
+  float sharpen;
+  float padding[2];
+};
+
+template <typename T> void release(T*& p) { if (p) { p->Release(); p = nullptr; } }
+
+ID3D11VertexShader* g_vs = nullptr;
+ID3D11PixelShader* g_ps = nullptr;
+ID3D11Buffer* g_cb = nullptr;
+ID3D11SamplerState* g_sampler = nullptr;
+ID3D11BlendState* g_blend = nullptr;
+ID3D11DepthStencilState* g_depth = nullptr;
+ID3D11RasterizerState* g_raster = nullptr;
+ID3D11Texture2D* g_small = nullptr;
+ID3D11RenderTargetView* g_smallRTV = nullptr;
+ID3D11ShaderResourceView* g_smallSRV = nullptr;
+UINT g_smallWidth = 0, g_smallHeight = 0;
+bool g_passReady = false;
+bool g_passBroken = false;
+
+// WHAT g_small CURRENTLY HOLDS -- part of g_small's state, and declared with it
+// so nothing can reallocate the texture without facing the question. See the
+// note above ssaaSubstituteShaderResources' use of them for why one texture
+// gets one occupant and a second host in the same frame is refused.
+const void* g_smallHost = nullptr;
+uint64_t g_smallFrame = 0;
+
+// How many pipeline slots the state bracket below saves. Wider than the pass
+// itself touches on purpose: SMAA runs inside this bracket and binds up to ten
+// shader resources while restoring only four of them, so the four it would
+// leave behind are covered here instead of by editing a validated feature.
+constexpr UINT kSavedSrvs = 16;
+constexpr UINT kSavedSamplers = 4;
+constexpr UINT kSavedConstantBuffers = 4;
+
+// Every hooked context method this pass needs, resolved to its trampoline once.
+//
+// This is the fix for the defect that hung attempt 4. The public methods are
+// detoured -- OMSetRenderTargets into the MSAA substitution, Draw into the
+// high-resolution raster correction, PSSetShaderResources into this very
+// function -- and a pass that calls them is asking the mod to interpret its own
+// internal state changes as the game's.
+struct PassBinder {
+  ID3D11DeviceContext* ctx;
+  const ContextOriginals& originals;
+
+  explicit PassBinder(ID3D11DeviceContext* c)
+    : ctx(c), originals(d3d11OriginalsFor(c)) {}
+
+  void targets(UINT count, ID3D11RenderTargetView* const* rtvs,
+               ID3D11DepthStencilView* dsv) const {
+    d3d11SetRenderTargets(ctx, count, rtvs, dsv);
+  }
+  void viewports(UINT count, const D3D11_VIEWPORT* vp) const {
+    if (originals.rsSetViewports) originals.rsSetViewports(ctx, count, vp);
+    else ctx->RSSetViewports(count, vp);
+  }
+  void scissors(UINT count, const D3D11_RECT* rects) const {
+    if (originals.rsSetScissorRects) originals.rsSetScissorRects(ctx, count, rects);
+    else ctx->RSSetScissorRects(count, rects);
+  }
+  void shaderResources(UINT start, UINT count,
+                       ID3D11ShaderResourceView* const* srvs) const {
+    if (originals.psSetShaderResources)
+      originals.psSetShaderResources(ctx, start, count, srvs);
+    else ctx->PSSetShaderResources(start, count, srvs);
+  }
+  void draw(UINT vertices, UINT start) const {
+    if (originals.draw) originals.draw(ctx, vertices, start);
+    else ctx->Draw(vertices, start);
+  }
+};
+
+// Save and restore everything this pass disturbs. Same discipline as the SMAA
+// pre-UI pass, and for the same reason: the engine is midway through building a
+// frame -- in fact midway through setting up the composite's own shader
+// resources -- and its next call expects to find its own state.
+struct ScopedPassState {
+  const PassBinder& bind;
+  ID3D11DeviceContext* ctx;
+  ID3D11InputLayout* layout = nullptr;
+  D3D11_PRIMITIVE_TOPOLOGY topology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+  ID3D11Buffer* vertexBuffer = nullptr;
+  UINT vertexStride = 0, vertexOffset = 0;
+  ID3D11RasterizerState* raster = nullptr;
+  UINT viewportCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+  D3D11_VIEWPORT viewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE] = {};
+  UINT scissorCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+  D3D11_RECT scissors[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE] = {};
+  ID3D11BlendState* blend = nullptr;
+  FLOAT blendFactor[4] = {};
+  UINT sampleMask = 0;
+  ID3D11DepthStencilState* depthState = nullptr;
+  UINT stencilRef = 0;
+  ID3D11RenderTargetView* rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+  ID3D11DepthStencilView* dsv = nullptr;
+  ID3D11VertexShader* vs = nullptr;
+  ID3D11PixelShader* ps = nullptr;
+  // The stages between the vertex and pixel shaders. This pass sets neither,
+  // and that is exactly why they have to be saved and cleared: a fullscreen
+  // triangle drawn with the engine's geometry or tessellation shaders still
+  // bound is not a fullscreen triangle. SMAA's bracket omits them and has been
+  // fine, but SMAA fires at the scene/UI boundary and this fires mid-composite
+  // -- a point nothing has ever run at before, so "the engine happens to have
+  // none bound here" is an assumption rather than a measurement.
+  ID3D11GeometryShader* gs = nullptr;
+  ID3D11HullShader* hs = nullptr;
+  ID3D11DomainShader* ds = nullptr;
+  ID3D11Buffer* vsCbs[kSavedConstantBuffers] = {};
+  ID3D11Buffer* psCbs[kSavedConstantBuffers] = {};
+  ID3D11SamplerState* samplers[kSavedSamplers] = {};
+  ID3D11ShaderResourceView* srvs[kSavedSrvs] = {};
+
+  explicit ScopedPassState(const PassBinder& b) : bind(b), ctx(b.ctx) {
+    ctx->IAGetInputLayout(&layout);
+    ctx->IAGetPrimitiveTopology(&topology);
+    ctx->IAGetVertexBuffers(0, 1, &vertexBuffer, &vertexStride, &vertexOffset);
+    ctx->RSGetState(&raster);
+    ctx->RSGetViewports(&viewportCount, viewports);
+    ctx->RSGetScissorRects(&scissorCount, scissors);
+    ctx->OMGetBlendState(&blend, blendFactor, &sampleMask);
+    ctx->OMGetDepthStencilState(&depthState, &stencilRef);
+    ctx->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs, &dsv);
+    ctx->VSGetShader(&vs, nullptr, nullptr);
+    ctx->PSGetShader(&ps, nullptr, nullptr);
+    ctx->GSGetShader(&gs, nullptr, nullptr);
+    ctx->HSGetShader(&hs, nullptr, nullptr);
+    ctx->DSGetShader(&ds, nullptr, nullptr);
+    ctx->VSGetConstantBuffers(0, kSavedConstantBuffers, vsCbs);
+    ctx->PSGetConstantBuffers(0, kSavedConstantBuffers, psCbs);
+    ctx->PSGetSamplers(0, kSavedSamplers, samplers);
+    ctx->PSGetShaderResources(0, kSavedSrvs, srvs);
+  }
+
+  ~ScopedPassState() {
+    ctx->IASetInputLayout(layout);
+    ctx->IASetPrimitiveTopology(topology);
+    ctx->IASetVertexBuffers(0, 1, &vertexBuffer, &vertexStride, &vertexOffset);
+    ctx->RSSetState(raster);
+    bind.viewports(viewportCount, viewports);
+    bind.scissors(scissorCount, scissors);
+    ctx->OMSetBlendState(blend, blendFactor, sampleMask);
+    ctx->OMSetDepthStencilState(depthState, stencilRef);
+    bind.targets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs, dsv);
+    ctx->VSSetShader(vs, nullptr, 0);
+    ctx->PSSetShader(ps, nullptr, 0);
+    ctx->GSSetShader(gs, nullptr, 0);
+    ctx->HSSetShader(hs, nullptr, 0);
+    ctx->DSSetShader(ds, nullptr, 0);
+    ctx->VSSetConstantBuffers(0, kSavedConstantBuffers, vsCbs);
+    ctx->PSSetConstantBuffers(0, kSavedConstantBuffers, psCbs);
+    ctx->PSSetSamplers(0, kSavedSamplers, samplers);
+    // Shader resources LAST, after the render targets, which is both the order
+    // the engine itself established this state in and the order the validated
+    // SMAA bracket restores in. It matters if any of these views reads a
+    // surface that is also among the targets: D3D11 breaks that tie by dropping
+    // whichever binding arrived first, and restoring in the engine's own order
+    // reproduces the engine's own outcome rather than inventing a new one.
+    bind.shaderResources(0, kSavedSrvs, srvs);
+    release(layout); release(vertexBuffer); release(raster); release(blend);
+    release(depthState); release(dsv); release(vs); release(ps);
+    release(gs); release(hs); release(ds);
+    for (auto*& b : vsCbs) release(b);
+    for (auto*& b : psCbs) release(b);
+    for (auto*& s : samplers) release(s);
+    for (auto*& s : srvs) release(s);
+    for (auto*& r : rtvs) release(r);
+  }
+};
+
+bool compile(PFN_D3DCompile D3DCompile, const char* entry, const char* target,
+             ID3DBlob** blob) {
+  ID3DBlob* err = nullptr;
+  const HRESULT hr = D3DCompile(kDownscaleHlsl, std::strlen(kDownscaleHlsl),
+    "ssaa-downscale", nullptr, nullptr, entry, target, 0, 0, blob, &err);
+  if (FAILED(hr)) {
+    log("SSAA: compile failed entry=", entry, " hr=0x", std::hex,
+        uint32_t(hr), std::dec,
+        err ? " : " : "",
+        err ? static_cast<const char*>(err->GetBufferPointer()) : "");
+    if (err) err->Release();
+    return false;
+  }
+  if (err) err->Release();
+  return true;
+}
+
+bool initPass(ID3D11Device* device) {
+  if (g_passReady) return true;
+  if (g_passBroken) return false;
+  g_passBroken = true;   // cleared on success; one attempt only
+
+  HMODULE compiler = LoadLibraryA("d3dcompiler_47.dll");
+  if (!compiler) compiler = LoadLibraryA("d3dcompiler.dll");
+  if (!compiler) { log("SSAA: no d3dcompiler"); return false; }
+  auto D3DCompile = reinterpret_cast<PFN_D3DCompile>(
+    GetProcAddress(compiler, "D3DCompile"));
+  if (!D3DCompile) { log("SSAA: no D3DCompile"); return false; }
+
+  ID3DBlob* vs = nullptr;
+  ID3DBlob* ps = nullptr;
+  bool ok = compile(D3DCompile, "VSMain", "vs_4_0", &vs) &&
+            compile(D3DCompile, "PSMain", "ps_4_0", &ps);
+  if (ok)
+    ok = SUCCEEDED(device->CreateVertexShader(vs->GetBufferPointer(),
+           vs->GetBufferSize(), nullptr, &g_vs)) &&
+         SUCCEEDED(device->CreatePixelShader(ps->GetBufferPointer(),
+           ps->GetBufferSize(), nullptr, &g_ps));
+  release(vs);
+  release(ps);
+  if (!ok) return false;
+
+  D3D11_BUFFER_DESC cb = {};
+  cb.ByteWidth = sizeof(DownscaleParams);
+  cb.Usage = D3D11_USAGE_DYNAMIC;
+  cb.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+  cb.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+  if (FAILED(device->CreateBuffer(&cb, nullptr, &g_cb))) return false;
+
+  D3D11_SAMPLER_DESC sd = {};
+  sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+  sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+  sd.ComparisonFunc = D3D11_COMPARISON_NEVER;
+  sd.MaxLOD = D3D11_FLOAT32_MAX;
+  if (FAILED(device->CreateSamplerState(&sd, &g_sampler))) return false;
+
+  // Opaque, depth-less: the pass must not inherit whatever the engine had bound.
+  D3D11_BLEND_DESC bd = {};
+  bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+  if (FAILED(device->CreateBlendState(&bd, &g_blend))) return false;
+
+  D3D11_DEPTH_STENCIL_DESC dd = {};
+  dd.DepthEnable = FALSE;
+  dd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+  dd.DepthFunc = D3D11_COMPARISON_ALWAYS;
+  if (FAILED(device->CreateDepthStencilState(&dd, &g_depth))) return false;
+
+  D3D11_RASTERIZER_DESC rd = {};
+  rd.FillMode = D3D11_FILL_SOLID;
+  rd.CullMode = D3D11_CULL_NONE;
+  rd.DepthClipEnable = TRUE;
+  // Created through the device directly and NOT through the hooked
+  // CreateRasterizerState, so MSAA's MultisampleEnable rewrite never reaches
+  // it: this pass draws one triangle into a single-sample texture.
+  if (FAILED(device->CreateRasterizerState(&rd, &g_raster))) return false;
+
+  g_passBroken = false;
+  g_passReady = true;
+  return true;
+}
+
+bool ensureSmall(ID3D11Device* device, UINT width, UINT height,
+                 DXGI_FORMAT format) {
+  if (g_small && g_smallWidth == width && g_smallHeight == height)
+    return true;
+  // A new texture holds nobody's downscale, whatever the old one held.
+  g_smallHost = nullptr;
+  g_smallFrame = 0;
+  release(g_smallSRV);
+  release(g_smallRTV);
+  release(g_small);
+  D3D11_TEXTURE2D_DESC td = {};
+  td.Width = width; td.Height = height;
+  td.MipLevels = 1; td.ArraySize = 1;
+  td.Format = format;
+  td.SampleDesc.Count = 1;
+  td.Usage = D3D11_USAGE_DEFAULT;
+  td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+  if (FAILED(device->CreateTexture2D(&td, nullptr, &g_small)) ||
+      FAILED(device->CreateRenderTargetView(g_small, nullptr, &g_smallRTV)) ||
+      FAILED(device->CreateShaderResourceView(g_small, nullptr, &g_smallSRV))) {
+    release(g_smallSRV); release(g_smallRTV); release(g_small);
+    g_smallWidth = g_smallHeight = 0;
+    return false;
+  }
+  g_smallWidth = width; g_smallHeight = height;
+  return true;
+}
+
+// Samples per axis: enough to cover every source texel the output pixel spans,
+// so a 3x ratio takes 3 and averages all nine rather than four corners of them.
+// Rounded up, because covering slightly more than the footprint is a mild blur
+// while covering less is aliasing.
+float downscaleSamples(UINT sourceHeight, UINT destHeight) {
+  if (!destHeight) return 1.0f;
+  float samples = std::ceil(float(sourceHeight) / float(destHeight));
+  if (samples < 1.0f) samples = 1.0f;
+  if (samples > 8.0f) samples = 8.0f;
+  return samples;
+}
+
+DXGI_FORMAT concreteFormat(DXGI_FORMAT format) {
+  switch (format) {
+    case DXGI_FORMAT_B8G8R8A8_TYPELESS: return DXGI_FORMAT_B8G8R8A8_UNORM;
+    case DXGI_FORMAT_R8G8B8A8_TYPELESS: return DXGI_FORMAT_R8G8B8A8_UNORM;
+    case DXGI_FORMAT_R10G10B10A2_TYPELESS: return DXGI_FORMAT_R10G10B10A2_UNORM;
+    case DXGI_FORMAT_R16G16B16A16_TYPELESS: return DXGI_FORMAT_R16G16B16A16_FLOAT;
+    default: return format;
+  }
+}
+
+// A shader-resource view over the scene colour host, created for this pass and
+// released with it.
+//
+// NOT cached on the host with SetPrivateDataInterface, which is what msaa.cpp
+// does with its twins and what an earlier version of this function did. That
+// trick is safe there and a reference cycle here, and the difference is one
+// word: a twin is a SEPARATE texture and holds no reference back to the host,
+// while a shader-resource view holds a strong reference to the resource it
+// views. host -> (private data) -> view -> host is a cycle neither side can
+// ever leave, so every scene colour target the engine ever allocated would be
+// leaked for the life of the process -- a quarter of a gigabyte apiece at 4K
+// and 200%, and a fresh set on every swap-chain resize.
+//
+// The cost of not caching is one CreateShaderResourceView per downscale, which
+// is once per frame, against a pass that box-filters several million pixels
+// with up to 64 taps each and then runs three SMAA passes over the result.
+ID3D11ShaderResourceView* sourceViewFor(ID3D11Device* device,
+                                        ID3D11Texture2D* host,
+                                        const D3D11_TEXTURE2D_DESC& desc) {
+  D3D11_SHADER_RESOURCE_VIEW_DESC vd = {};
+  vd.Format = concreteFormat(desc.Format);
+  vd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+  vd.Texture2D.MipLevels = 1;
+  ID3D11ShaderResourceView* view = nullptr;
+  if (FAILED(device->CreateShaderResourceView(host, &vd, &view)) || !view)
+    return nullptr;
+  return view;   // caller releases
+}
+
+// WHAT g_small CURRENTLY HOLDS. Not a memo of what has been downscaled -- a
+// statement about the contents of one texture, which is what g_small is.
+//
+// An earlier version kept a four-entry table of (host, frame) pairs and treated
+// a hit on any of them as "the result is ready", while every downscale wrote
+// into the same g_small. That is only sound if at most one host is ever
+// downscaled per frame. If the composite samples two different scene colour
+// hosts -- and the ping-pong pair means there are two, and the DOF composite in
+// the shader bundle declares more than one full-screen colour input -- the
+// second downscale overwrites the first, and the slot already substituted for
+// the first host silently starts reading the second one's image. The draw that
+// consumes both happens after both, so the wrong picture is the guaranteed
+// outcome rather than a risk. On a deferred context, where this engine records
+// its scene, that ordering is not even a race: it is simply the replay order.
+//
+// So: one texture, one occupant, stated as such. A second host in the same
+// frame is REFUSED rather than served a stale or overwritten image -- it keeps
+// its full-size view, the engine's own bilinear resamples it, and the refusal
+// is counted so the log says the composite has more than one scene input
+// instead of leaving it to be inferred from a picture that looks wrong.
+//
+// Raw pointer, compared and never dereferenced, and only ever matched within
+// the frame it was recorded in -- during which the host is alive by
+// construction, because something is sampling it. Declared with g_small above.
+std::atomic<uint64_t> g_secondHostRefusals{0};
+
+// Concurrency guard, distinct from the re-entry guard.
+//
+// g_inPass is thread_local and answers "am I already inside the pass on THIS
+// call stack", which is what stops SMAA's public binds from re-entering the
+// substitution. It says nothing about a second thread. Everything the pass owns
+// -- g_small and its views, the shaders, the constant buffer, g_smallHost -- is
+// one shared set, and this engine records on deferred contexts of which it may
+// hold several (d3d11_hooks.h). Two threads inside ensureSmall is a texture
+// released while the other thread has it bound.
+//
+// Refuses rather than waits. A lock taken inside a D3D11 detour is a deadlock
+// waiting for the right pair of threads; declining costs one frame of one
+// scene target's sharpness and is counted.
+std::atomic<bool> g_passBusy{false};
+
+// Box-filter `host` down to `destWidth` x `destHeight` into g_small, then run
+// SMAA on the result if it is enabled. Returns false if anything failed, in
+// which case nothing was substituted and the engine's own resample stands.
+bool runDownscale(ID3D11DeviceContext* context, ID3D11Texture2D* host,
+                  const D3D11_TEXTURE2D_DESC& sourceDesc,
+                  UINT destWidth, UINT destHeight) {
+  ID3D11Device* device = nullptr;
+  host->GetDevice(&device);
+  if (!device) {
+    g_passFailures.fetch_add(1, std::memory_order_relaxed);
+    return false;
+  }
+
+  const DXGI_FORMAT format = concreteFormat(sourceDesc.Format);
+  ID3D11ShaderResourceView* source = nullptr;
+  bool ok = initPass(device) &&
+            ensureSmall(device, destWidth, destHeight, format) &&
+            (source = sourceViewFor(device, host, sourceDesc)) != nullptr;
+  if (!ok) {
+    if (g_passFailures.fetch_add(1, std::memory_order_relaxed) == 0)
+      log("SSAA: the downscale pass could not be prepared for a ",
+          std::dec, sourceDesc.Width, "x", sourceDesc.Height, " scene target;"
+          " the engine's own bilinear resample stands this session");
+    release(source);
+    device->Release();
+    return false;
+  }
+
+  DownscaleParams params = {};
+  params.texel[0] = 1.0f / float(sourceDesc.Width);
+  params.texel[1] = 1.0f / float(sourceDesc.Height);
+  params.ratio[0] = float(sourceDesc.Width) / float(destWidth);
+  params.ratio[1] = float(sourceDesc.Height) / float(destHeight);
+  params.samples = downscaleSamples(sourceDesc.Height, destHeight);
+  params.sharpen = ssaaSharpen();
+  D3D11_MAPPED_SUBRESOURCE mapped = {};
+  if (SUCCEEDED(context->Map(g_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+    std::memcpy(mapped.pData, &params, sizeof(params));
+    context->Unmap(g_cb, 0);
+  }
+
+  const PassBinder bind(context);
+  {
+    // Bracketed: this fires in the middle of the composite's own setup, and the
+    // composite expects to find the state it had.
+    ScopedPassState saved(bind);
+
+    const D3D11_VIEWPORT viewport = {
+      0.0f, 0.0f, float(destWidth), float(destHeight), 0.0f, 1.0f };
+    const D3D11_RECT scissor = { 0, 0, LONG(destWidth), LONG(destHeight) };
+    ID3D11ShaderResourceView* none[kSavedSrvs] = {};
+    bind.shaderResources(0, kSavedSrvs, none);
+    bind.targets(1, &g_smallRTV, nullptr);
+    bind.viewports(1, &viewport);
+    bind.scissors(1, &scissor);
+    context->RSSetState(g_raster);
+    context->OMSetBlendState(g_blend, nullptr, 0xffffffff);
+    context->OMSetDepthStencilState(g_depth, 0);
+    context->IASetInputLayout(nullptr);
+    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    context->VSSetShader(g_vs, nullptr, 0);
+    context->PSSetShader(g_ps, nullptr, 0);
+    // Cleared, not left inherited: this triangle is generated from SV_VertexID
+    // and must reach the rasteriser as it left the vertex shader. SMAA runs
+    // inside this bracket and sets neither of them either, so clearing here
+    // covers its draws as well.
+    context->GSSetShader(nullptr, nullptr, 0);
+    context->HSSetShader(nullptr, nullptr, 0);
+    context->DSSetShader(nullptr, nullptr, 0);
+    context->PSSetConstantBuffers(0, 1, &g_cb);
+    context->PSSetSamplers(0, 1, &g_sampler);
+    bind.shaderResources(0, 1, &source);
+    bind.draw(3, 0);
+    bind.shaderResources(0, kSavedSrvs, none);
+
+    // SMAA runs HERE, on the downscaled result, rather than as its own
+    // injection on the supersampled scene target.
+    //
+    // Three reasons, and the first is the one that matters. SMAA is a
+    // morphological filter whose search distances are counted in pixels, so it
+    // belongs at display resolution -- on a 2x scene target every edge is twice
+    // as wide as its thresholds expect. Second, it is a quarter of the work at
+    // 2560x1440 than at 5120x2880, including the full-surface copy it starts
+    // with. Third, it happens inside a bracket this pass already holds, instead
+    // of taking and restoring pipeline state a second time.
+    //
+    // Still pre-UI by construction: the composite has not drawn yet, and this
+    // engine draws its interface onto the back buffer after the composite. That
+    // is why msaaNoteSceneBoundary stands its own SMAA call down whenever
+    // supersampling is configured -- two pre-UI passes would be one too many,
+    // and the one at the boundary is the one keyed on a transition that fires
+    // 5 to 22 times a frame.
+    smaaApplySceneColor(context, g_small);
+  }
+
+  release(source);
+  device->Release();
+  g_downscales.fetch_add(1, std::memory_order_relaxed);
+  return true;
+}
+
+}  // namespace
+
+// ---- the interception points -----------------------------------------------
+
+void ssaaNoteBackBuffer(IDXGISwapChain* swapChain) {
+  if (!ssaaConfigured() || !swapChain)
+    return;
+  ID3D11Texture2D* back = nullptr;
+  if (FAILED(swapChain->GetBuffer(0, IID_ID3D11Texture2D,
+                                  reinterpret_cast<void**>(&back))) || !back) {
+    static std::atomic<bool> warned{false};
+    if (!warned.exchange(true, std::memory_order_relaxed))
+      log("SSAA: the swap chain would not hand over buffer 0, so the composite"
+          " cannot be identified and supersampling will not engage");
+    return;
+  }
+  setMarker(back, IID_DuskBackBuffer);
+  if (!g_backBufferKnown.exchange(true, std::memory_order_relaxed)) {
+    D3D11_TEXTURE2D_DESC desc = {};
+    back->GetDesc(&desc);
+    log("SSAA: back buffer identified ", std::dec, desc.Width, "x", desc.Height,
+        " format=", uint32_t(desc.Format));
+  }
+  back->Release();
+}
+
+void ssaaTagSceneHost(ID3D11Texture2D* sceneColor) {
+  if (!ssaaConfigured() || !sceneColor)
+    return;
+  setMarker(sceneColor, IID_DuskSceneHost);
+}
+
+void ssaaNoteTargetsBound(ID3D11DeviceContext* context, unsigned int numViews,
+                          ID3D11RenderTargetView* const* views) {
+  if (!ssaaConfigured() || !context)
+    return;
+
+  bool backBufferBound = false;
+  if (views) {
+    for (unsigned int i = 0; i < numViews && !backBufferBound; ++i) {
+      if (!views[i])
+        continue;
+      ID3D11Resource* resource = nullptr;
+      views[i]->GetResource(&resource);
+      if (resource) {
+        backBufferBound = hasMarker(resource, IID_DuskBackBuffer);
+        resource->Release();
+      }
+    }
+  }
+
+  // Written only on a change: the marker is context private data, and a bind is
+  // one of the hottest calls in the frame.
+  const bool marked = hasMarker(context, IID_DuskSsaaComposite);
+  if (backBufferBound == marked)
+    return;
+  if (backBufferBound) {
+    setMarker(context, IID_DuskSsaaComposite);
+    const uint64_t binds = g_compositeBinds.fetch_add(1, std::memory_order_relaxed);
+    if (binds == 0)
+      log("SSAA: composite identified -- bind whose colour target is the"
+          " swap-chain back buffer (frame ", std::dec,
+          g_frame.load(std::memory_order_relaxed), ")");
+  } else {
+    clearMarker(context, IID_DuskSsaaComposite);
+  }
+}
+
+bool ssaaSubstituteShaderResources(ID3D11DeviceContext* context,
+                                   unsigned int startSlot,
+                                   unsigned int numViews,
+                                   ID3D11ShaderResourceView* const* views,
+                                   ID3D11ShaderResourceView** substituted,
+                                   unsigned int capacity) {
+  if (!ssaaConfigured() || g_inPass || g_passBroken || !context || !views ||
+      !numViews || !substituted)
+    return false;
+  if (!hasMarker(context, IID_DuskSsaaComposite))
+    return false;
+
+  // The display size, which is what the composite is about to sample the scene
+  // down to. highResSceneSize owns the other half of this pair; neither number
+  // is computed anywhere but in highres.cpp.
+  unsigned int destWidth = 0, destHeight = 0;
+  if (!highResMainSize(&destWidth, &destHeight) || !destWidth || !destHeight)
+    return false;
+
+  // Which of these views reads a scene colour host that is genuinely larger
+  // than the display. Anything else the composite samples -- the blur ladder,
+  // the depth host, a lookup texture -- is left exactly as it arrived.
+  unsigned int slot = 0;
+  ID3D11Texture2D* host = nullptr;
+  D3D11_TEXTURE2D_DESC hostDesc = {};
+  for (unsigned int i = 0; i < numViews && !host; ++i) {
+    if (!views[i])
+      continue;
+    ID3D11Resource* resource = nullptr;
+    views[i]->GetResource(&resource);
+    if (!resource)
+      continue;
+    ID3D11Texture2D* texture = nullptr;
+    if (hasMarker(resource, IID_DuskSceneHost) &&
+        SUCCEEDED(resource->QueryInterface(
+          IID_ID3D11Texture2D, reinterpret_cast<void**>(&texture))) && texture) {
+      D3D11_TEXTURE2D_DESC desc = {};
+      texture->GetDesc(&desc);
+      if (desc.SampleDesc.Count == 1 &&
+          desc.Width > destWidth && desc.Height > destHeight) {
+        host = texture;          // ownership moves here
+        hostDesc = desc;
+        slot = i;
+      } else {
+        texture->Release();
+      }
+    }
+    resource->Release();
+  }
+  if (!host)
+    return false;
+
+  // A composite that sets more slots than this array can hold is not something
+  // to guess at: forward what the game asked for and say so once.
+  if (numViews > capacity) {
+    static std::atomic<bool> warned{false};
+    if (!warned.exchange(true, std::memory_order_relaxed))
+      log("SSAA: the composite set ", std::dec, numViews, " shader resources at"
+          " once, more than this substitution handles; the engine's own"
+          " bilinear resample stands");
+    host->Release();
+    return false;
+  }
+
+  const uint64_t frame = g_frame.load(std::memory_order_relaxed);
+  bool ready = g_smallHost == host && g_smallFrame == frame;
+  if (!ready) {
+    // g_small already holds a DIFFERENT host's downscale for this frame, and
+    // that result is bound in a slot whose draw has not happened yet. Leave it
+    // alone; see the note on g_smallHost.
+    if (g_smallHost && g_smallFrame == frame) {
+      if (g_secondHostRefusals.fetch_add(1, std::memory_order_relaxed) == 0)
+        log("SSAA: the composite sampled a second scene colour host in one"
+            " frame; it keeps the engine's own resample so the first one's"
+            " downscale is not overwritten underneath it");
+      host->Release();
+      return false;
+    }
+    // One thread in the pass at a time; the pass's resources are one shared set.
+    bool expected = false;
+    if (!g_passBusy.compare_exchange_strong(expected, true,
+                                            std::memory_order_acquire)) {
+      host->Release();
+      return false;
+    }
+    g_inPass = true;
+    ready = runDownscale(context, host, hostDesc, destWidth, destHeight);
+    g_inPass = false;
+    if (ready) {
+      g_smallHost = host;
+      g_smallFrame = frame;
+    }
+    g_passBusy.store(false, std::memory_order_release);
+  }
+  host->Release();
+  if (!ready || !g_smallSRV)
+    return false;
+
+  for (unsigned int i = 0; i < numViews; ++i)
+    substituted[i] = views[i];
+  // Borrowed, not addrefed: this module holds the only reference and keeps it
+  // for the session, and D3D11 takes its own the moment the view is bound.
+  substituted[slot] = g_smallSRV;
+
+  if (g_substitutions.fetch_add(1, std::memory_order_relaxed) == 0)
+    log("SSAA: engaged -- ", std::dec, hostDesc.Width, "x", hostDesc.Height,
+        " -> ", destWidth, "x", destHeight,
+        " substituted at the composite's sample (slot ", startSlot + slot, ")");
+  return true;
+}
+
+void ssaaClearContextState(ID3D11DeviceContext* context) {
+  if (!ssaaConfigured() || !context)
+    return;
+  clearMarker(context, IID_DuskSsaaComposite);
+}
+
+bool ssaaEngaged() {
+  return g_substitutions.load(std::memory_order_relaxed) > 0;
+}
+
+void ssaaFrameTick(IDXGISwapChain* swapChain) {
+  if (!ssaaConfigured())
+    return;
+  const uint64_t frame = g_frame.fetch_add(1, std::memory_order_relaxed) + 1;
+
+  // CONFIGURED, once, and with the sizes in it. Deferred to the first frame
+  // rather than logged at install because neither size exists at install time:
+  // Ayesha creates its device before its swap chain, and the main render size
+  // is learned from the first depth target after that.
+  static std::atomic<bool> announced{false};
+  if (!announced.load(std::memory_order_relaxed)) {
+    unsigned int mainWidth = 0, mainHeight = 0;
+    unsigned int sceneWidth = 0, sceneHeight = 0;
+    if (highResMainSize(&mainWidth, &mainHeight) &&
+        highResSceneSize(&sceneWidth, &sceneHeight) &&
+        !announced.exchange(true, std::memory_order_relaxed))
+      log("FIXES ssaa=", std::dec, ssaaPercent(), "% scene=", sceneWidth, "x",
+          sceneHeight, " display=", mainWidth, "x", mainHeight,
+          " sharpen=", int(ssaaSharpen() * 100.0f + 0.5f),
+          "% ('SSAA: composite identified' confirms attachment)");
+  }
+
+  // The one state in which everything below is wasted effort: without the
+  // high-resolution fix nothing ever learns a main render size, so the scene
+  // targets keep their hard-coded 1920x1080 and there is nothing enlarged to
+  // downscale. Said out loud, because the alternative is a log full of zeroes.
+  static std::atomic<bool> highResWarned{false};
+  if (!featureEnabled(Feature::HighResRendering) &&
+      !highResWarned.exchange(true, std::memory_order_relaxed))
+    log("SSAA: high-resolution fix is off; supersampling requires it and is"
+        " inactive");
+
+  // Risk 4: the tag lives on the resource, and ResizeBuffers replaces it. One
+  // GetBuffer per frame is cheap, and re-tagging is the whole repair.
+  if (swapChain) {
+    ID3D11Texture2D* back = nullptr;
+    if (SUCCEEDED(swapChain->GetBuffer(0, IID_ID3D11Texture2D,
+                                       reinterpret_cast<void**>(&back))) &&
+        back) {
+      if (!hasMarker(back, IID_DuskBackBuffer)) {
+        setMarker(back, IID_DuskBackBuffer);
+        if (g_backBufferRetags.fetch_add(1, std::memory_order_relaxed) == 0)
+          log("SSAA: the back buffer lost its tag and was re-identified"
+              " (a swap-chain resize); composite identification continues");
+      }
+      back->Release();
+    }
+  }
+
+  const uint64_t binds = g_compositeBinds.load(std::memory_order_relaxed);
+  const uint64_t subs = g_substitutions.load(std::memory_order_relaxed);
+
+  // The two silences worth naming, each once, after long enough that startup
+  // cannot explain either.
+  if (frame == 1800) {
+    if (!binds)
+      log("SSAA: configured but the composite was never identified after ",
+          std::dec, frame, " frames -- no bind ever carried the swap-chain back"
+          " buffer as a colour target. The scene is being resampled by the"
+          " engine's own bilinear filter instead (soft, but correct)."
+          " backBufferIdentified=",
+          g_backBufferKnown.load(std::memory_order_relaxed) ? 1 : 0);
+    else if (!subs)
+      log("SSAA: composite identified but no scene target was ever sampled"
+          " during it after ", std::dec, frame, " frames (compositeBinds=",
+          binds, ") -- the composite sets its shader resources before it binds"
+          " the back buffer, so the substitution never sees them");
+  }
+
+  if (frame % 600 == 0)
+    log("SSAA compositeBinds=", std::dec, binds,
+        " sceneSrvSubstitutions=", subs,
+        " downscales=", g_downscales.load(std::memory_order_relaxed),
+        " passFailures=", g_passFailures.load(std::memory_order_relaxed),
+        // Non-zero means the composite has more than one scene colour input and
+        // only the first is being downscaled. Not a malfunction -- the rest keep
+        // the engine's own resample -- but it is the measurement that would say
+        // a per-host destination texture is worth building.
+        " secondHostRefusals=",
+        g_secondHostRefusals.load(std::memory_order_relaxed));
 }
 
 }  // namespace atfix

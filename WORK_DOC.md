@@ -387,8 +387,10 @@ edges. It is `OptIn` on Ayesha and `Unsupported` on the other two.
 
 The passes are the Arland project's `src/smaa.cpp`, which is this project's own
 code (MIT), ported into `src/core/smaa.cpp` with the Arland-specific parts
-removed: no supersampling stand-in to antialias instead of the backbuffer, and
-no MSAA twin write-back, because neither exists here. The reference shader and
+removed: no MSAA twin write-back, because that does not exist here, and
+initially no supersampling stand-in either -- `smaaApplySceneColor` has since
+grown into that role and is what the supersampling downscale calls. The
+reference shader and
 the `AreaTex`/`SearchTex` lookup tables are vendored unchanged under
 `vendor/smaa/` (MIT) and compiled at runtime through `d3dcompiler`, at
 `SMAA_PRESET_ULTRA`. The wrapper around the reference entry points is Arland's
@@ -442,6 +444,29 @@ deferred-context draw hooks are where it would be found.
 That is why SMAA is `OptIn` while every other shipping fix here is on by
 default. The others have no trade-off to weigh; this one currently does.
 
+**The two paragraphs above are the record of why the Present path was written
+first, not a description of where SMAA runs today.** The scene/UI boundary was
+subsequently found -- this engine composites its interface onto the back buffer
+after the composite, so a scene colour target simply ceasing to be the render
+target *is* the boundary, observed rather than heuristically guessed the way
+each Arland title needed. `smaaApplySceneColor` is the pre-UI pass, and
+`SMAA: pre-UI active size=` is validated in game with text staying crisp.
+
+There are now three placements, and only one runs in any given session:
+
+| Configuration | Where SMAA runs | Size it runs at |
+|---|---|---|
+| SMAA on, supersampling off | `msaaNoteSceneBoundary`, on the scene colour host | display |
+| SMAA on, supersampling on | inside the supersampling downscale, on the display-sized result | display |
+| pre-UI never claimed a frame | `smaaApply` at Present, over the finished frame | display |
+
+Boundary SMAA stands down entirely whenever supersampling is configured. Two
+pre-UI passes would antialias the scene twice, and the boundary one is keyed on
+a transition that fires 5-22 times a frame -- see "Supersampling", "SMAA
+placement", for the rest of that argument. If supersampling is configured but
+never engages, the pre-UI path claims no frame and SMAA falls back to the
+Present line above, which announces itself.
+
 ### Diagnostics
 
 `DUSK_SMAA_DEBUG=1` replaces the frame with the edge-detection output (red
@@ -456,17 +481,20 @@ rest of the session without touching anything else.
 
 ## MSAA and supersampling
 
-Added alongside SMAA so the antialiasing options sit together. SMAA and MSAA are
-`OptIn` on Ayesha and `Unsupported` elsewhere, and both carry ini keys and
-launcher controls, unlike every other fix in this project: each trades frame
-rate for image quality, and which trade to take is exactly the judgement a
-setting exists for. Supersampling is `Unsupported` everywhere and has no control
-at all, for the measured reason given below.
+Added alongside SMAA so the antialiasing options sit together. All three are
+`OptIn` on Ayesha and `Unsupported` on the KTGL games, and all three carry ini
+keys and launcher controls, unlike every other fix in this project: each trades
+frame rate for image quality, and which trade to take is exactly the judgement a
+setting exists for. Supersampling is the most expensive thing this mod can do
+and can never be a default; the launcher presets put it only in the two top
+rungs.
 
 Both of these sections were rewritten after their first versions shipped
 conclusions that a runtime measurement then contradicted. That is worth noting
 at the top rather than burying: in both cases the mistake was reasoning from
-what the game **creates** to what the game **uses**.
+what the game **creates** to what the game **uses**. Supersampling then went on
+to be rewritten four times, three of them for ordering bugs, which is why its
+section leads with the ordering rule rather than with the mechanism.
 
 ### MSAA: the engine will not do it, so the mod does
 
@@ -803,103 +831,278 @@ Ayesha's scene test can never match (see the note in
 
 **Status: built and deployed, not yet validated in game.**
 
-### Supersampling: ported, but unproven on this engine
+### Supersampling: rebuilt on a positively identified composite
 
-`src/core/supersample.cpp` is the Arland implementation ported (this project's
-own code, MIT), box-filter downscale shader included. The mechanism: the game
-asks the device for a render-target view over the swap chain's back buffer and
-is handed one over a larger texture instead; at Present that texture is averaged
-down into the real back buffer. `CreateRenderTargetView` (device vtable slot 9)
-is hooked from `highres.cpp`, which already owns that vtable -- hooking one
-vtable from two files is how a disable/enable race gets written by accident.
+**Four implementations preceded this one and none of them worked.** The list is
+the useful part of this record, because three of the four failed on ordering and
+the fourth on an optimisation that contradicted a finding made minutes earlier.
 
-**Whether Ayesha renders into its back buffer that way is not established.** The
-Arland mod had to cope with builds that do not, and that guard is ported with
-it: `g_redirects` counts substitutions that really happened, and a zero count at
-the first Present logs
+| # | Design | Outcome |
+|---|---|---|
+| 1 | Back-buffer redirect (the Arland design, ported): substitute a larger texture when the game creates an RTV over the back buffer, average it down at Present | **Black screen.** Ayesha created exactly one such view, at startup, and never composited through it. The scene is never in the back buffer here. `redirects=1` was the only evidence. |
+| 2 | Enlarge the scene targets and let the engine's own composite resample them | Worked, but the engine samples through a bilinear sampler -- four taps, which only resamples correctly at a whole-number ratio. It also **silently disabled MSAA**, because "how big are the scene targets" was written down in both the resize and the MSAA scene test and the two disagreed the moment this was switched on. |
+| 3 | Own the downscale: a ratio-sized box filter (later with a sharpen folded in) substituted at the composite's sample | "Better but not much." It ran on every scene-to-non-scene transition, of which there are 5-22 per frame. |
+| 4 | Add a once-per-frame latch to (3) | **Black 3D scene, missing interface.** The first transition each frame is a post-processing bind, not the composite, so the composite was handed a copy of a half-finished scene. |
+
+The lesson, which the rebuild is built on: **"the engine stopped rendering into
+the scene target" is not "the composite is about to run".** It fires many times
+a frame while the post-processing chain steps in and out of the two ping-ponged
+scene colour targets. The composite has to be identified positively.
+
+#### The mechanism
+
+`highres.cpp` already rewrites this engine's pinned 1920x1080 scene targets to
+the main render size and carries the hard-coded viewport and scissor with them
+-- machinery validated in game at 1440p and 4K. Supersampling multiplies that
+one size. The engine then renders and post-processes at the enlarged size,
+untouched, and the mod intervenes at exactly one moment:
+
+1. The swap chain's back buffer is tagged at creation (`ssaaNoteBackBuffer`,
+   called from both swap-chain routes in `main.cpp`). Identity by **tag**, not
+   by a held reference (which would block `ResizeBuffers`) and not by raw
+   pointer (a freed address gets handed back out). `ssaaFrameTick` re-verifies
+   the tag once a frame and re-applies it if a resize dropped it.
+2. A bind whose colour render target carries that tag **is** the composite, and
+   nothing else in this renderer is. `ssaaNoteTargetsBound` sets a per-context
+   marker while it is bound and clears it otherwise.
+3. While that marker is set, the moment the engine binds a scene colour host as
+   a pixel-shader resource is the composite's sample -- and **that sample is the
+   resample**. `ssaaSubstituteShaderResources` box-filters the host down to
+   display size, runs SMAA on the result if it is enabled, and substitutes a
+   view over the display-sized copy **in the forwarded argument array of that
+   one call**.
+4. Nothing is latched across the call, so a post-processing pass sampling the
+   same texture later cannot inherit the substitution -- which is what made
+   attempt 4's picture black.
+5. **Nothing at all happens at Present** except counters. That is the design's
+   safety argument, not an optimisation: two of the four predecessors blacked
+   the screen out with a present-time pass painting over a finished frame, and
+   there is no longer such a pass to get wrong.
+
+Substituting at the **sample** rather than at the **bind** is also what resolves
+the ping-pong: the engine has two byte-identical scene colour targets, and only
+the view the composite actually binds says which one it reads.
+
+If identification never fires, the player sees attempt 2's picture -- the
+engine's own bilinear downscale of the enlarged scene, soft but correct -- and
+the log names that state rather than leaving it to be inferred from a counter
+that stays at zero.
+
+#### Ordering, which is a correctness requirement
+
+Three of the four failures were ordering bugs. The invariant is one sentence:
+**anything that reads a scene colour host must run after `msaaResolveReplaced`,
+because under MSAA the scene is in the multisample twin until that call lands
+it.**
+
+`hookedOMSetRenderTargets`, top to bottom (mirrored in
+`hookedOMSetRenderTargetsAndUnorderedAccessViews`, which leaves all four steps
+alone on the `D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL` sentinel):
+
+1. `msaaSubstituteTargets` -- decide the twins, set the displaced pair aside
+2. `msaaResolveReplaced` -- land the displaced twin into its host
+   *(everything below reads the host)*
+3. `msaaNoteSceneBoundary` -- tag arriving scene colour hosts; fire pre-UI SMAA
+   only when supersampling is off
+4. `ssaaNoteTargetsBound` -- set or clear the composite marker
+5. forward the bind
+
+`hookedPSSetShaderResources`:
+
+1. `msaaResolveShaderResources` -- the hosts become current
+2. `ssaaSubstituteShaderResources` -- only with the marker set and the re-entry
+   guard clear
+3. forward the possibly-substituted array
+
+`hookedFinishCommandList`: `msaaResolveBeforeFinish`, then
+`ssaaClearContextState` -- a list can be closed with the back buffer still
+bound, and the marker is per-context state the next recording must not inherit.
+
+#### Two rules inside the pass
+
+**Every internal bind goes through a trampoline.** Attempt 4 called
+`context->OMSetRenderTargets` inside its pass, re-entered the MSAA detour that
+hook lives in, and hung the game on the loading screen before the intro video
+could play. `Draw`, `RSSetViewports`, `RSSetScissorRects`, `PSSetShaderResources`
+and `OMSetRenderTargets` are all hooked in this project; the pass reaches every
+one of them through `d3d11OriginalsFor()` / `d3d11SetRenderTargets`.
+
+**A thread-local in-pass flag guards re-entry.** The pass calls SMAA, which
+binds shader resources through the public method; without the guard that bind
+walks straight back into `ssaaSubstituteShaderResources` with the composite
+marker still set.
+
+The state bracket (`ScopedPassState`) saves more than the pass itself touches:
+16 pixel-shader resource slots, 4 samplers, 4 constant buffers per stage, the IA
+state, raster, viewports, scissors, blend, depth-stencil, both shaders and the
+render targets. SMAA runs inside this bracket and binds up to ten shader
+resources while restoring only four, so the six it would leave behind are
+covered here rather than by editing a feature that is already validated in game.
+Restore order matches SMAA's and the engine's own: render targets first, shader
+resources last.
+
+#### One owner of every shared fact
+
+The second attempt disabled MSAA for a whole session because two places computed
+the scene size and drifted apart. So:
+
+| Fact | Sole owner |
+|---|---|
+| Main render size (display) | `highResMainSize()` |
+| Scene-target size (main x factor, clamped to 7680x4320, even) | `highResSceneSize()` -- consumed by the `CreateTexture2D` resize, the resize gate, the blur target (scene/2) and the MSAA scene test |
+| The supersampling factor and its clamp arithmetic | `ssaaPercent()` / `ssaaSceneSize()` |
+| Which colour+depth pair is the scene | `MsaaSceneTest` (`phyreSceneTargets`); `msaaNoteSceneBoundary` is the only writer of the scene-host tag |
+| Which resource is the back buffer | the private-data tag from `ssaaNoteBackBuffer` |
+
+#### SMAA placement
+
+After the downscale, at display resolution, inside the downscale pass's state
+bracket. Three reasons, first one decisive: SMAA is a morphological filter whose
+search distances are counted in pixels, so on a 2x scene target every edge is
+twice as wide as its thresholds expect. It is also a quarter of the work at
+2560x1440 that it is at 5120x2880, including the full-surface copy it starts
+with, and it reuses a bracket that is already held. It stays pre-UI by
+construction, because this engine draws its interface onto the back buffer after
+the composite.
+
+Boundary SMAA is therefore **suppressed** whenever supersampling is configured.
+If supersampling never engages, SMAA degrades to the Present path and its own
+one-shot says so.
+
+#### The log contract
+
+Every mechanism has to distinguish *configured*, *attached* and *doing
+something*, and each silent failure has to name itself. The maintainer verifies
+by reading logs.
 
 ```
-SSAA: the engine never rendered into the back buffer, so there is nothing to
-downscale; supersampling is inactive this session
+FIXES ssaa=off                                            -> CONFIGURED (off)
+FIXES ssaa=200% scene=5120x2880 display=2560x1440 sharpen=35%
+      ('SSAA: composite identified' confirms attachment)  -> CONFIGURED (on)
+HIGHRES: scene size 5120x2880 = main 2560x1440 x 200%     -> the single size fact
+SSAA: back buffer identified 2560x1440 format=87          -> identity anchor exists
+SSAA: composite identified -- bind whose colour target is the swap-chain back
+      buffer (frame N)                                    -> ATTACHED
+SSAA: engaged -- 5120x2880 -> 2560x1440 substituted at the composite's sample
+      (slot S)                                            -> DOING SOMETHING
+SSAA compositeBinds=A sceneSrvSubstitutions=B downscales=C passFailures=D
 ```
 
-and declines rather than averaging an empty target over the frame, which would
-black the screen out. Read that line before trusting a supersampled session. If
-it appears, the redirect is the wrong attachment point for this engine and the
-next thing to try is driving the size through `highres.cpp` instead, which
-already resizes the engine's own targets and rewrites the viewports to match.
+The periodic line is emitted every 600 frames. `A` should be about one per
+frame. `B == 0` with `A > 0` falsifies risk 1 below.
 
-### Two faults found on the first run, one fatal
+The named negative states, each a one-shot:
 
-**A black screen, from the hook eating its own passes.** The first supersampled
-session came up black with a log that looked perfect:
-`FIXES ssaa=150% render=3840x2160 display=2560x1440 taps/axis=2`, and no "never
-rendered into the back buffer" line, so the redirect had fired.
+- `SSAA: configured but the composite was never identified after 1800 frames`
+- `SSAA: composite identified but no scene target was ever sampled during it`
+- `SSAA: high-resolution fix is off; supersampling requires it and is inactive`
+- `SSAA: the downscale pass could not be prepared ...`
+- `SSAA: the back buffer lost its tag and was re-identified (a swap-chain resize)`
+- `D3D11HOOKS: WARNING the high-resolution fix is off ...` -- the `DUSK_HIGHRES=0`
+  trap, which kills MSAA and supersampling together and has cost a session before
 
-The cause was `ssaaDownscale` calling `CreateRenderTargetView` on the real back
-buffer -- through the very hook the redirect lives in, which duly handed it the
-render-resolution texture instead. The pass then bound `g_color` as its render
-target while sampling `g_color` as a shader resource. D3D11 resolves that
-conflict by unbinding the shader resource, so every sample read zero and the
-real back buffer was never written at all. `smaaApply` had the identical fault.
+The `FIXES ssaa=` on-line is emitted from `ssaaFrameTick` rather than from
+`d3d11_hooks.cpp` where the `off` line lives, and that split is deliberate:
+neither size exists at install time, because Ayesha creates its device before
+its swap chain and the main render size is learned from the first depth target
+after that. The alternative was a configured line reading `scene=unknown`.
 
-`ssaaSetPresentPass` now suspends the redirect around both passes in
-`hookedPresent`, so they get the back buffer they asked for. The general lesson
-is worth keeping: a hook that substitutes a resource has to be suspended around
-the mod's own use of the original, and the failure mode is a black screen with
-nothing in any log to explain it.
+Under supersampling the existing `MSAA: engaged ... size=` must show the SCENE
+size and `SMAA: pre-UI active size=` the DISPLAY size. That cross-check lives in
+one log and is the cheapest way to confirm the single-owner rule held.
 
-**The redirect is the wrong attachment point, and supersampling is off.**
-Instrumenting the redirect settled it in one run:
+#### Configuration
 
-```
-[     276] FIXES ssaa=150% render=3840x2160 display=2560x1440 taps/axis=2
-[     285] SSAA: back-buffer render target 1 redirected to 3840x2160
-[    1376] SSAA: first present, redirects=1
-```
+`[Rendering] Supersampling` as an integer percentage: 125, 150, 200, 300, 400,
+anything else off. A percentage rather than a decimal because `1.5` in an ini is
+a locale trap -- a comma-decimal locale parses it as `1`.
+`[Rendering] SupersamplingSharpen` is the post-downscale unsharp amount, also a
+percentage, default 35. `DUSK_SSAA` and `DUSK_SSAA_SHARPEN` override both.
 
-One view, created a second before the first present, and never another. A count
-that does not grow, together with a black screen, says the engine does not
-composite through that view. The likeliest reading is that the view was made for
-an initial clear and the per-frame path into the back buffer needs no view at
-all -- a `CopyResource` blit would not appear in this count. So the larger
-target stayed empty and the downscale painted it over a frame the game had
-already drawn correctly.
+`Feature::Supersampling` is `OptIn` on Ayesha and `Unsupported` on the KTGL
+games, and its `Descriptor` is **env-only despite the ini key existing**: the key
+holds an integer, and `featureEnabled`'s boolean path would seed the literal
+`false` into it the first time anything asked whether the feature was on.
+`ssaaPercent()` owns that key; the capability matrix still owns whether the
+running game supports the feature at all.
 
-`Feature::Supersampling` is therefore `Unsupported` on all three games and the
-launcher control is removed. Opt-in would have been the wrong gate: the failure
-blanks the screen, and that should not be reachable from a settings window. The
-guard that suspends the redirect during the present-time passes stays, because
-it fixed a real and separate fault.
+It cannot ever be a default. 200% is four times the shaded pixels, measured at
+**70% GPU on a 7900 XTX in the game's opening interior** -- close to the lightest
+scene in the game. With 4x MSAA that is sixteen geometry samples per displayed
+pixel.
 
-Nothing needs deleting to revive this. The downscale pass, its shader, the
-ceiling and the percentage handling are all independent of where the larger
-image comes from. What has to change is the source: `highres.cpp` should adopt
-the supersampled size as its main render size, so the engine renders its **own**
-targets larger and the existing raster correction carries the viewports with
-them -- machinery that is already validated at 4K -- and the downscale then
-averages that down. That also removes the need for the back-buffer redirect
-entirely, and with it the hook on `CreateRenderTargetView`.
+#### Risks carried, and what falsifies each
 
-**A note on the intermediate state, which was wrong in a second way.** Even with
-the black screen fixed, this would not have supersampled anything. `highres.cpp` learns its main render size from the
-swap chain (2560x1440 here), so the engine's own scene targets stay at the
-display resolution; only the final composite lands in the 3840x2160 redirect
-target, enlarged there by the raster correction's viewport rewrite. The
-downscale then averages that back to 1440p. Upscale followed by downscale is a
-slightly softer image and nothing else.
+1. **The composite may set its shader resources before it binds the back
+   buffer.** Falsified by `compositeBinds > 0` with `sceneSrvSubstitutions = 0`,
+   which has its own one-shot line. Contingency: on the marker being set, call
+   `PSGetShaderResources(0..15)` and re-set any slot carrying the scene-host tag.
+2. **Post-processing at enlarged sizes.** Largely cleared by an independent scan
+   of all 139 DXBC containers in `Res/x64/cg/commonShader.PSSG`: no
+   screen/viewport/target-size constant exists anywhere (the only name in that
+   family is `TexelSize`, a per-draw `$Params` float4 in two vertex shaders), and
+   no hard-coded resolution literal appears in any `SHDR`/`SHEX` chunk scanned as
+   a float32 stream. Attempt 2 additionally ran the full chain at 200% and the
+   image worked. Residual: fractional factors and the `scene/2` blur rounding.
+   Falsified by misplaced bloom at 150%.
+3. **A full-screen pass inside a `PSSetShaderResources` detour disturbs the
+   composite's setup.** Mitigated by the wide state bracket and trampoline-only
+   binds. This is the part with the least evidence behind it.
+4. **Back-buffer tag staleness after a buffer recreate.** Per-frame re-verify.
+5. **A UI pass sampling a scene host would get the substitute.** Normalised UVs
+   make it size-transparent. Accepted.
+6. **Cost.** See above; opt-in, and the launcher presets put supersampling only
+   in the two top rungs.
 
-Real supersampling needs the engine to render its scene at the render size,
-which means `highres.cpp` adopting `ssaaScale()` into the main render size
-rather than taking the swap chain's. That machinery already exists and is
-validated -- it is what resizes the pinned 1080p targets and rewrites the
-viewports to match -- so the change is small, but it moves supersampling from a
-self-contained pass into the resolution path, and it should be made only once
-the corrected frame has been confirmed.
+A seventh is worth writing down because it is untested rather than reasoned
+about: at **exactly 1080p with supersampling on**, the engine's swap-chain-sized
+targets are the same 1920x1080 the resize matches on, so a swap-sized target
+created after the main one is adopted would be enlarged along with the scene
+targets. Above 1080p the two sizes differ and the question does not arise. The
+test rig is 1440p, so this has never been exercised.
 
-Order at Present is SMAA, then downscale. Antialiasing the larger image and then
-averaging it is the right way round; the other order smooths an image that is
-about to be resampled anyway.
+#### Fractional factors
+
+Supported: `ceil(ratio)` taps per axis with a half-ratio backoff, each tap
+bilinear, which lands on texel centres for odd ratios as well as even ones. The
+restriction to whole-number factors belonged to attempt 2, where the ENGINE
+owned the resample; it outlived its reason by several builds and silently
+refused the setting the ini asked for. **150% is restored but unproven on this
+engine** -- no fractional factor has ever been run here.
+
+#### Depth, and a qualification on "no depth resolve needed"
+
+The MSAA work concluded that no depth-resolve pass is needed, on a run that
+measured `depthHostReads=0`. That measurement stands for the scenes tested, but
+the shader-bundle scan found `0x54718` -- a **DOF + glow composite** declaring
+four textures (`texture_`, `backBufferTexture`, **`BaseDepth`**, `SoftColor`)
+with `$Globals.DofParams`. It samples a full-screen colour texture and a depth
+texture in the same pass. Either it samples a copy rather than the scene depth
+host, or it is simply not used in those scenes.
+
+**Keep the `depthHostReads` counter and keep reading it.** If it ever goes
+non-zero the depth twin is stale for that pass and a shader-based depth resolve
+becomes real work again. The question is not closed.
+
+(That same shader is the strongest candidate for the final full-screen
+composite, which corroborates the identification strategy above but does not
+replace it: the mod identifies the composite by the back buffer being bound as a
+render target, which is a runtime fact and needs no shader knowledge.)
+
+#### Validation runs still owed
+
+Nothing below has been run. **Do not treat any of this as validated.**
+
+1. Supersampling off: regression guard -- `MSAA: engaged`, `twinPairs=2`,
+   `SMAA: pre-UI active`.
+2. `DUSK_SSAA=200`, MSAA off, SMAA off: the four SSAA lines in order; a sharper
+   image; the interface intact.
+3. 200% + MSAA 4x: `MSAA: engaged ... size=<scene>`; `depthHostReads=0`; ~70% GPU.
+4. 200% + MSAA 4x + SMAA: `SMAA: pre-UI active size=<display>`.
+5. `DUSK_SSAA=150`: the open fractional question; watch bloom placement.
+6. Launcher: walk the preset ladder, edit a control, reopen.
+
+**Status: built, not deployed, not validated in game.**
 
 ## The Dusk front-ends
 

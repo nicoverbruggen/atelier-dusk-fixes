@@ -663,13 +663,30 @@ bool smaaApplySceneColor(ID3D11DeviceContext* ctx, ID3D11Texture2D* scene) {
   }
   if (ran) {
     g_preUiProven.store(true, std::memory_order_relaxed);
-    static std::atomic<bool> announced{false};
-    if (!announced.exchange(true, std::memory_order_relaxed)) {
-      D3D11_TEXTURE2D_DESC d = {};
-      scene->GetDesc(&d);
+    // Reported whenever the SIZE CHANGES, not once.
+    //
+    // A one-shot here lies by omission the moment two paths can run it at
+    // different resolutions. With supersampling on, the boundary pass runs at
+    // scene resolution until supersampling engages, and the in-pass call takes
+    // over at display resolution afterwards -- a latched line announces the
+    // first and can never report the handover, which is exactly how an earlier
+    // `FIXES smaa=active size=` line hid which surface SMAA was working on for
+    // several sessions.
+    static std::atomic<uint32_t> announcedWidth{0};
+    static std::atomic<uint32_t> announcedHeight{0};
+    D3D11_TEXTURE2D_DESC d = {};
+    scene->GetDesc(&d);
+    const uint32_t previousWidth =
+      announcedWidth.exchange(d.Width, std::memory_order_relaxed);
+    const uint32_t previousHeight =
+      announcedHeight.exchange(d.Height, std::memory_order_relaxed);
+    if (previousWidth != d.Width || previousHeight != d.Height)
       log("SMAA: pre-UI active size=", std::dec, d.Width, "x", d.Height,
-          " (the interface is composited after this and is left alone)");
-    }
+          previousWidth ? " (moved from " + std::to_string(previousWidth) +
+                          "x" + std::to_string(previousHeight) + ")"
+                        : std::string(
+                            " (the interface is composited after this and is"
+                            " left alone)"));
   }
   if (!ran) {
     // Hand the frame back so the Present path can still antialias it. Claiming

@@ -52,6 +52,7 @@ else
   sources = files(
     'src/core/main.cpp',
     'src/core/config.cpp',
+    'src/core/crash_log.cpp',
     'src/core/d3d11_probe.cpp',
     'src/core/engine.cpp',
     'src/core/game.cpp',

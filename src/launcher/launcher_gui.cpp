@@ -10,12 +10,11 @@
 // with Play on the left and the skip-launcher checkbox beside it, the same
 // About page. Someone who has used one should not have to learn the other.
 //
-// It carries three of Arland's four pages. Image Quality is absent because this
-// mod has no image-quality options at all -- no MSAA, supersampling,
-// anisotropic filtering, shadow maps or SMAA -- and an empty tab would be worse
-// than a missing one. Debug is absent for the same reason: there are no
-// developer views to reach, and the diagnostics that do exist are environment
-// switches on purpose (WORK_DOC.md, "Configuration: dusk-fix.ini").
+// It carries the same four pages as the Arland launcher: Display, Image
+// Quality, Game and About. Arland's Debug page has no counterpart here --
+// there are no developer views to reach, and the diagnostics that do exist are
+// environment switches on purpose (WORK_DOC.md, "Configuration:
+// dusk-fix.ini").
 //
 // Two files are edited, and the split matters:
 //
@@ -61,6 +60,7 @@ enum : int {
   IDC_RES,
   IDC_WINMODE,
   IDC_LANG,
+  IDC_PRESET,
   IDC_SMAA,
   IDC_MSAA,
   IDC_SSAA,
@@ -69,7 +69,7 @@ enum : int {
   IDC_START,
   IDC_OPENLAUNCHER,   // Koei Tecmo's own launcher
   IDC_OPENENV,        // Koei Tecmo's own settings editor
-  IDC_PLAYVANILLA,    // the game with the mod stood down
+  IDC_PLAYVANILLA,    // the game with the mod turned off
   IDC_RESET,
   IDC_CLOSE,
   IDC_REPOLINK,
@@ -165,17 +165,26 @@ const Resolution kResolutions[] = {
 constexpr Resolution kAutoResolution = { 0, 0 };
 const int kResolutionCount = int(sizeof(kResolutions) / sizeof(kResolutions[0]));
 
-// The antialiasing values, as they are written to dusk-fix.ini. "0" for MSAA
-// means the engine's own choice is left alone; Ayesha already multisamples its
-// scene at 4x, so "off" and "game default" are genuinely different answers.
+// The antialiasing values, as they are written to dusk-fix.ini.
+//
+// There is no "game default" entry: the mod either multisamples the scene or
+// leaves it exactly as the engine made it, and msaaSamples() in
+// src/core/msaa.cpp treats every value outside {2,4,8} -- 0 and 1 alike -- as
+// off. An earlier version of this window offered both, on the belief that the
+// engine already multisampled its 3D scene at 4x and that "off" therefore
+// meant something different from "leave it alone". Draw-time instrumentation
+// disproved it and the feature was rewritten because of it: the engine creates
+// multisampled targets and renders into none of them, so the twins this mod
+// attaches are the only multisampling in the frame (WORK_DOC.md, "MSAA: the
+// engine will not do it, so the mod does"). "0" and "1" are one state with one
+// name, and matching a preset has to accept either (see presetFromControls).
 const ComboItem kMsaaItems[] = {
-  { L"Game default",  "0" },
-  { L"Off",           "1" },
+  { L"Off",           "0" },
   { L"2x",            "2" },
   { L"4x",            "4" },
   { L"8x",            "8" },
 };
-const int kMsaaCount = 5;
+const int kMsaaCount = 4;
 
 // The Arland launcher's ladder, and stored as percentages for the reason given
 // on ssaaPercent: a decimal in an ini is a locale trap.
@@ -193,6 +202,82 @@ const int kSsaaCount = 6;
 // multiplier that would silently be reduced. See supersample.cpp.
 const unsigned kMaxRenderWidth = 7680;
 const unsigned kMaxRenderHeight = 4320;
+
+// ---- image-quality presets -------------------------------------------------
+//
+// The ladder is the Arland project's, brought across so the two mods speak the
+// same words to the same player, and the tab below is laid out in the same
+// order for the same reason. Two of Arland's five rungs could not survive the
+// crossing, and neither difference was a choice.
+//
+// Arland's Low and Balanced differ ONLY in anisotropic filtering. That control
+// is gone from both launchers now -- it is on at 16x always, its cost is nil,
+// and a setting with no trade in it is not a setting. With that column removed
+// the two rungs hold identical values, so Low goes and Balanced takes the
+// floor.
+//
+// Balanced is what this mod ships with, so a fresh install opens on a named
+// rung rather than on Custom, and the launcher and the DLL agree about what
+// "default" means. That is only true because SMAA is now on by default here,
+// which became defensible when it moved to the pre-UI injection point and
+// stopped touching the interface.
+//
+// Shadow-map resolution is absent because this mod has no such feature. Arland
+// multiplies its shadow maps and rates its rungs partly on that; here the
+// engine's own 1024 map is all there is.
+//
+// Multisampling appears only at Medium, matching Arland: above it the budget
+// goes to supersampling instead, which antialiases geometry along with
+// everything else rather than only silhouettes. Both are reachable together
+// through Custom, and testing here rated 4x with 200% the best image of all --
+// but it is also the most expensive thing either mod can ask for, and a named
+// rung should not be the one that pins a 7900 XTX.
+struct Preset {
+  const wchar_t* label;
+  bool smaa;
+  int  msaa;   // samples, as written to the ini; 0 is off
+  int  ssaa;   // percent, as written to the ini; 100 is off
+};
+
+const Preset kPresets[] = {
+  //                          SMAA   MSAA  SSAA
+  { L"Balanced (default)",    true,     0,  100 },
+  { L"Medium",                true,     4,  100 },
+  { L"High",                  true,     0,  150 },
+  { L"Maximum",               true,     0,  200 },
+  // Describes the controls; never matched and never applied, so its values are
+  // sentinels rather than a fifth setting.
+  { L"Custom",                false,   -1,   -1 },
+};
+const int kPresetCount = 5;
+const int kPresetCustom = 4;
+// The rung a fresh install opens on, and what Reset returns to.
+const int kPresetDefault = 0;
+
+// Which rung a set of control values sits on, or Custom when none of them
+// describes it.
+//
+// This is the single definition of the preset<->controls mapping in this
+// window, and it is pure on purpose: it takes the three values and reads no
+// control, so the load path, every manual edit and the sanity pass after
+// applying a preset all get their answer from the same place. The alternative
+// -- a second mapping used only at load time -- is how the box ends up saying
+// one thing about a file and another about the identical settings typed in by
+// hand.
+//
+// Both 0 and 1 mean "no multisampling" (see kMsaaItems), and anything at or
+// below 100% means "no supersampling", so those are folded together before
+// matching rather than being treated as values a preset could miss.
+int presetFromControls(bool smaa, int msaa, int ssaa) {
+  const int samples = msaa <= 1 ? 0 : msaa;
+  const int percent = ssaa <= 100 ? 100 : ssaa;
+  for (int i = 0; i < kPresetCustom; ++i) {
+    if (kPresets[i].smaa == smaa && kPresets[i].msaa == samples &&
+        kPresets[i].ssaa == percent)
+      return i;
+  }
+  return kPresetCustom;
+}
 
 const ComboItem kWindowModeItems[] = {
   { L"Windowed",   "0" },
@@ -217,6 +302,7 @@ HWND g_hTabs = nullptr;
 HWND g_hGameLabel = nullptr;   // sits on the tab strip; painted transparent
 HWND g_hRes = nullptr, g_hWinMode = nullptr, g_hLang = nullptr;
 HWND g_hOutline = nullptr;
+HWND g_hPreset = nullptr;
 HWND g_hSmaa = nullptr, g_hMsaa = nullptr, g_hSsaa = nullptr;
 HWND g_hSkipLauncher = nullptr;
 HWND g_hStart = nullptr, g_hOpenLauncher = nullptr, g_hOpenEnv = nullptr;
@@ -371,19 +457,37 @@ bool supersamplingBase(unsigned* width, unsigned* height) {
   return desktopResolution(width, height);
 }
 
+// The list is filtered, so its positions are not kSsaaItems positions; the
+// item data carries the real index.
+int ssaaSelectedIndex() {
+  if (!g_hSsaa)
+    return 0;   // "Off", which is also what the DLL does with it
+  const LRESULT at = SendMessageW(g_hSsaa, CB_GETCURSEL, 0, 0);
+  if (at < 0)
+    return 0;
+  const LRESULT data = SendMessageW(g_hSsaa, CB_GETITEMDATA, WPARAM(at), 0);
+  if (data < 0 || data >= kSsaaCount)
+    return 0;
+  return int(data);
+}
+
 // Rebuild the supersampling list for the resolution now selected. Each entry
 // carries the size it produces, so "what does 1.5x actually render at?" is
 // answered in the list being chosen from rather than somewhere else in the
 // window; and anything past the 8K ceiling is left out rather than offered and
 // then quietly reduced by the DLL.
+//
+// The multiplier in front of the user is kept across the rebuild when the new
+// resolution still allows it, and falls back to Off when the ceiling has taken
+// it away. Callers have to re-derive the preset afterwards, because that
+// fallback changes a quality setting without anybody having edited one.
 void refillSupersampling() {
-  // Null while supersampling has no control; see the Image Quality page.
+  // Null before the Image Quality page has been built.
   if (!g_hSsaa)
     return;
-  char wanted[16] = "100";
-  const LRESULT current = SendMessageW(g_hSsaa, CB_GETCURSEL, 0, 0);
-  if (current >= 0 && current < kSsaaCount)
-    lstrcpynA(wanted, kSsaaItems[current].value, sizeof(wanted));
+  // Read through the item data rather than off the raw selection index: after
+  // the first filtered rebuild the two are not the same list.
+  const char* const wanted = kSsaaItems[ssaaSelectedIndex()].value;
 
   unsigned baseWidth = 0, baseHeight = 0;
   const bool haveBase = supersamplingBase(&baseWidth, &baseHeight);
@@ -393,10 +497,20 @@ void refillSupersampling() {
     const unsigned percent = unsigned(atoi(kSsaaItems[i].value));
     unsigned renderWidth = 0, renderHeight = 0;
     if (i && haveBase) {
-      renderWidth = (baseWidth * percent + 50) / 100;
-      renderHeight = (baseHeight * percent + 50) / 100;
-      if (renderWidth > kMaxRenderWidth || renderHeight > kMaxRenderHeight)
+      // Bit for bit what ssaaSceneSize computes in src/core/supersample.cpp,
+      // and deliberately so: truncating division, the ceiling tested on the
+      // untruncated-to-even value, then the even mask. This used to round to
+      // nearest and skip the mask, which made the size in the label something
+      // the DLL never allocates -- two definitions of one number, which is the
+      // failure this whole area was rewritten to stop repeating. (The rounding
+      // could not actually cross the ceiling for any multiplier on this ladder,
+      // but that held only by arithmetic accident of the five values.)
+      const unsigned exactWidth = (baseWidth * percent) / 100;
+      const unsigned exactHeight = (baseHeight * percent) / 100;
+      if (exactWidth > kMaxRenderWidth || exactHeight > kMaxRenderHeight)
         continue;
+      renderWidth = exactWidth & ~1u;
+      renderHeight = exactHeight & ~1u;
     }
     wchar_t label[96];
     if (i && haveBase)
@@ -412,18 +526,46 @@ void refillSupersampling() {
   SendMessageW(g_hSsaa, CB_SETCURSEL, selected, 0);
 }
 
-// The list is filtered, so its positions are not kSsaaItems positions; the
-// item data carries the real index.
-int ssaaSelectedIndex() {
+// ---- reading and writing the three quality controls ------------------------
+
+// The values the three controls currently hold, in the form the ini and
+// presetFromControls use. Nothing else converts between combo positions and
+// values, so a filtered list or a reordered table cannot make one caller
+// disagree with another.
+int msaaSelectedSamples() {
+  const LRESULT at = SendMessageW(g_hMsaa, CB_GETCURSEL, 0, 0);
+  if (at < 0 || at >= kMsaaCount)
+    return 0;
+  return atoi(kMsaaItems[at].value);
+}
+
+int ssaaSelectedPercent() {
+  return atoi(kSsaaItems[ssaaSelectedIndex()].value);
+}
+
+void selectMsaaSamples(int samples) {
+  char value[16];
+  wsprintfA(value, "%d", samples);
+  comboSelectByValue(g_hMsaa, kMsaaItems, kMsaaCount, value, 0);
+}
+
+// Select a multiplier by percentage, searching the list as it currently
+// stands. It can genuinely be absent -- the 8K ceiling drops entries at large
+// resolutions -- and Off is the only honest answer when it is, which is
+// exactly the case the sanity pass in applyPreset exists to notice.
+void selectSsaaPercent(int percent) {
   if (!g_hSsaa)
-    return 0;   // "Off", which is also what the DLL does with it
-  const LRESULT at = SendMessageW(g_hSsaa, CB_GETCURSEL, 0, 0);
-  if (at < 0)
-    return 0;
-  const LRESULT data = SendMessageW(g_hSsaa, CB_GETITEMDATA, WPARAM(at), 0);
-  if (data < 0 || data >= kSsaaCount)
-    return 0;
-  return int(data);
+    return;
+  const int count = int(SendMessageW(g_hSsaa, CB_GETCOUNT, 0, 0));
+  for (int at = 0; at < count; ++at) {
+    const LRESULT data = SendMessageW(g_hSsaa, CB_GETITEMDATA, WPARAM(at), 0);
+    if (data >= 0 && data < kSsaaCount &&
+        atoi(kSsaaItems[data].value) == percent) {
+      SendMessageW(g_hSsaa, CB_SETCURSEL, at, 0);
+      return;
+    }
+  }
+  SendMessageW(g_hSsaa, CB_SETCURSEL, 0, 0);   // Off is always offered
 }
 
 void refillResolutions(unsigned selectWidth, unsigned selectHeight,
@@ -589,6 +731,43 @@ void setChecked(HWND ctrl, bool on) {
     SendMessageW(ctrl, BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0);
 }
 
+// Show whichever rung the three controls now amount to. Called after loading,
+// after every manual edit, after applying a preset, and after a resolution
+// change has rebuilt the supersampling list -- everywhere the answer could
+// have changed, and always through the one mapping.
+void refreshPreset() {
+  if (!g_hPreset)
+    return;
+  SendMessageW(g_hPreset, CB_SETCURSEL,
+    presetFromControls(isChecked(g_hSmaa), msaaSelectedSamples(),
+                       ssaaSelectedPercent()), 0);
+}
+
+// Push a rung's values into the three controls.
+//
+// Custom applies nothing: it is the NAME for control values no rung describes,
+// not a seventh setting. But it does not leave the box alone either -- it
+// re-derives, because the box's one job is to describe the controls, and a user
+// who picks Custom while the controls happen to spell Normal must be shown
+// Normal rather than a label that has quietly stopped being true. Picking
+// Custom on genuinely custom controls re-derives to Custom and nothing moves.
+void applyPreset(int index) {
+  if (index < 0 || index >= kPresetCustom) {
+    refreshPreset();
+    return;
+  }
+  const Preset& preset = kPresets[index];
+  setChecked(g_hSmaa, preset.smaa);
+  selectMsaaSamples(preset.msaa);
+  selectSsaaPercent(preset.ssaa);
+  // Then ask what the controls actually ended up saying, rather than assuming
+  // they took the values just handed to them. They need not have: the 8K
+  // ceiling can leave a rung's supersampling multiplier out of the list at a
+  // large resolution, and the window has to say Custom then instead of naming
+  // a preset it did not manage to set.
+  refreshPreset();
+}
+
 // Everything the window can change, packed so two states can be compared. Used
 // only to decide whether closing needs to ask.
 struct UiState {
@@ -690,19 +869,26 @@ void loadFromIni() {
   // What is left is the same on all three games, which is why nothing here is
   // gated on the engine any more.
   // The antialiasing settings. Defaults repeat src/core/game.cpp: SMAA off
-  // (it currently antialiases the UI too), MSAA left to the engine, no
-  // supersampling.
+  // (it currently antialiases the UI too), MSAA off, no supersampling.
+  //
+  // These three keys are the only thing loaded here. The preset is not read
+  // from the file because it is not written to it: it is derived from them
+  // below, so a hand-edited ini and a set of controls holding the same values
+  // can never be described differently.
   setChecked(g_hSmaa, iniBool(g_iniPath, "Rendering", "SMAA", false));
   {
     char value[16] = { };
     iniString(g_iniPath, "Rendering", "MSAA", value, sizeof(value), "0");
     comboSelectByValue(g_hMsaa, kMsaaItems, kMsaaCount, value, 0);
-    iniString(g_iniPath, "Rendering", "Supersampling", value, sizeof(value), "100");
-    comboSelectByValue(g_hSsaa, kSsaaItems, kSsaaCount, value, 0);
     // Rebuild against the resolution just loaded, which is what decides both
-    // the sizes shown and which multipliers fit under the ceiling.
+    // the sizes shown and which multipliers fit under the ceiling, and only
+    // then select out of the list that produced.
     refillSupersampling();
+    iniString(g_iniPath, "Rendering", "Supersampling", value, sizeof(value),
+      "100");
+    selectSsaaPercent(atoi(value));
   }
+  refreshPreset();
 
   setChecked(g_hSkipLauncher,
     iniBool(g_iniPath, "Launcher", "SkipLauncher", false));
@@ -756,10 +942,15 @@ void resetToDefaults() {
   SendMessageW(g_hLang, CB_SETCURSEL, 1, 0);      // English
   setChecked(g_hOutline, true);
 
-  setChecked(g_hSmaa, false);
-  SendMessageW(g_hMsaa, CB_SETCURSEL, 0, 0);   // game default
-  SendMessageW(g_hSsaa, CB_SETCURSEL, 0, 0);   // off
+  // Rebuilt first, against the resolution just chosen, so the preset applies
+  // into the list it will actually be selecting from.
   refillSupersampling();
+  // Off, not the recommended rung. Reset is for getting back to a known state,
+  // and a reset that quietly switched multisampling and SMAA on would cost
+  // frame rate that nobody asked to spend -- on the weakest machine running
+  // this, which is where reset is most likely to be reached for. "Recommended"
+  // is where someone can see it: in the name of the Normal preset.
+  applyPreset(kPresetDefault);
   setChecked(g_hSkipLauncher, false);
 }
 
@@ -1380,15 +1571,13 @@ void createControls(HWND w) {
     Layout page(w, 0);
     g_hRes = mkCombo(w, 0, 0, 10, IDC_RES);
     page.row(L"Resolution:", g_hRes,
-      L"Written to the game's own settings, which is where it lives. Not "
-      L"filtered through Windows' display modes, so a mode your screen can "
-      L"use is never missing.");
+      L"What reaches the screen. Also written to the game's own settings.");
 
     g_hWinMode = mkCombo(w, 0, 0, 10, IDC_WINMODE);
     comboFill(g_hWinMode, kWindowModeItems, kWindowModeCount);
     page.row(L"Window mode:", g_hWinMode,
-      L"Fullscreen takes over the display; windowed is friendlier to "
-      L"alt-tab and to compositors.");
+      L"Fullscreen takes over the display; windowed does not, so alt-tab is "
+      L"instant.");
 
     // The stock front-ends are still reachable: this tool replaces them, it
     // does not remove them. Greyed out when the executable is not present.
@@ -1407,7 +1596,7 @@ void createControls(HWND w) {
       EnableWindow(g_hPlayVanilla, FALSE);
     page.fullNote(
       L"Koei Tecmo's own settings editor and launcher, unmodified. The third "
-      L"saves and starts the game with the mod stood down, changing nothing.");
+      L"saves and starts the game with the mod turned off, changing nothing.");
   }
 
   // ---------------- page 1: Image Quality ----------------
@@ -1416,28 +1605,38 @@ void createControls(HWND w) {
   // one place instead of scattering it through settings that have none.
   {
     Layout page(w, 1);
-    g_hSmaa = mkCheck(w, L"Smooth edges (SMAA)", 0, 0, 10, IDC_SMAA);
-    page.checkRow(g_hSmaa,
-      L"Smooths every edge in the finished image, including ones inside "
-      L"textures. Currently softens menu text too, so it is off by default.");
+
+    // The preset first, above the settings it sets: it is the row most people
+    // will use, and it reads as a summary of the three under it rather than as
+    // a fourth setting beside them.
+    g_hPreset = mkCombo(w, 0, 0, 10, IDC_PRESET);
+    for (int i = 0; i < kPresetCount; ++i)
+      SendMessageW(g_hPreset, CB_ADDSTRING, 0, (LPARAM)kPresets[i].label);
+    page.row(L"Preset:", g_hPreset, L"Sets the three options below.");
+
+    // Laid out in the Arland launcher's order -- supersampling, multisampling,
+    // then edge smoothing -- so a player who uses both mods finds the same
+    // controls in the same places. Anisotropic filtering and shadow detail sit
+    // between them there; neither exists here, so the rows are simply absent
+    // rather than present and inert.
+    g_hSsaa = mkCombo(w, 0, 0, 10, IDC_SSAA);
+    page.row(L"Supersampling:", g_hSsaa,
+      L"Renders higher, then scales down. The sharpest, and the costliest. "
+      L"Limited to 8K.");
 
     g_hMsaa = mkCombo(w, 0, 0, 10, IDC_MSAA);
     comboFill(g_hMsaa, kMsaaItems, kMsaaCount);
-    page.row(L"Multisampling:", g_hMsaa,
-      L"The game already multisamples its 3D scene at 4x. This raises or "
-      L"lowers that, and smooths model edges only.");
+    page.row(L"Anti-aliasing (MSAA):", g_hMsaa,
+      L"Smooths the edges of 3D models. Supersampling usually does more.");
 
-    // Supersampling is deliberately absent. It is implemented but its
-    // attachment point is wrong for this engine, and the failure is a black
-    // screen -- see the capability matrix in src/core/game.cpp. A control for
-    // something that cannot work is worse than no control, so it comes back
-    // when the fix does.
+    g_hSmaa = mkCheck(w, L"Edge smoothing", 0, 0, 10, IDC_SMAA);
+    page.checkRow(g_hSmaa,
+      L"Cheap, and smooths edges multisampling cannot -- including "
+      L"edges inside textures.");
 
     page.fullNote(
-      L"Both are off or left alone by default. Multisampling is nearly free "
-      L"here because the game is already doing it; SMAA is cheap but softens "
-      L"the interface until it can be injected before the interface is "
-      L"drawn.");
+      L"Anisotropic filtering is always on at 16x. It is effectively "
+      L"free, so there is no setting for it.");
   }
 
   // ---------------- page 2: Game ----------------
@@ -1673,9 +1872,25 @@ LRESULT CALLBACK WndProc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_COMMAND:
       // The supersampling list is computed from the selected resolution, so it
-      // has to follow every change to it.
+      // has to follow every change to it -- and the rebuild can drop the
+      // multiplier that was selected, which changes a quality setting, so the
+      // preset is re-derived afterwards like any other change to one.
       if (LOWORD(wp) == IDC_RES && HIWORD(wp) == CBN_SELCHANGE) {
         refillSupersampling();
+        refreshPreset();
+        return 0;
+      }
+      if (LOWORD(wp) == IDC_PRESET && HIWORD(wp) == CBN_SELCHANGE) {
+        applyPreset((int)SendMessageW(g_hPreset, CB_GETCURSEL, 0, 0));
+        return 0;
+      }
+      // Any hand-edited quality setting means the box may no longer describe
+      // what is selected, so it is re-derived rather than left claiming a rung
+      // the controls have moved off.
+      if ((HIWORD(wp) == CBN_SELCHANGE &&
+           (LOWORD(wp) == IDC_MSAA || LOWORD(wp) == IDC_SSAA)) ||
+          (HIWORD(wp) == BN_CLICKED && LOWORD(wp) == IDC_SMAA)) {
+        refreshPreset();
         return 0;
       }
       switch (LOWORD(wp)) {

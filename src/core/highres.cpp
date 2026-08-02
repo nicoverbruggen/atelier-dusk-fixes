@@ -31,8 +31,8 @@
 #include "config.h"
 #include "game.h"
 #include "highres.h"
-#include "supersample.h"
 #include "log.h"
+#include "supersample.h"
 #include "util.h"
 
 namespace atfix {
@@ -250,49 +250,37 @@ HRESULT STDMETHODCALLTYPE hookedCreateTexture2D(
       g_mainHeight.store(local.Height, std::memory_order_relaxed);
       log("HIGHRES: main render size ", std::dec, local.Width, "x",
           local.Height);
-      UINT ssW = 0;
-      UINT ssH = 0;
-      if (ssaaSceneSize(local.Width, local.Height, &ssW, &ssH))
-        log("FIXES supersampling=", std::dec, ssaaPercent(),
-            "% scene targets ", ssW, "x", ssH, " downscaled to ",
-            local.Width, "x", local.Height, " by the engine's own composite");
       action = "adoptedAsMain";
     } else {
-      const UINT mainWidth = g_mainWidth.load(std::memory_order_relaxed);
-      const UINT mainHeight = g_mainHeight.load(std::memory_order_relaxed);
-
-      // Supersampling rides this hook rather than owning one. It asks for the
-      // scene to be built larger than it will be displayed; everything after
-      // that is machinery this fix already has. The raster correction carries
-      // the viewport and scissor to whatever target is bound, so the scene pass
-      // follows the enlarged target without knowing anything changed, and the
-      // engine's own composite pass samples that target into the back buffer,
-      // which IS the downscale. See supersample.h for why this replaced a
-      // back-buffer redirect that had nothing to attach to on this engine.
-      //
-      // Note what is NOT scaled: the main size itself. It was learned from a
-      // swap-chain-sized target that the composite pass still pairs with the
-      // back buffer, and enlarging that would leave the two mismatched.
-      UINT sceneWidth = mainWidth;
-      UINT sceneHeight = mainHeight;
-      const bool supersampled =
-        ssaaSceneSize(mainWidth, mainHeight, &sceneWidth, &sceneHeight);
-      (void) mainHeight;
+      // The ONE definition of how big the scene targets are. Not recomputed
+      // here from the main size and a factor: the last time this arithmetic
+      // existed in two places -- once here and once in the MSAA scene test --
+      // enabling supersampling made them disagree, the test stopped matching,
+      // and MSAA silently declined every bind for a whole session while every
+      // log line it wrote looked healthy. See highResSceneSize.
+      unsigned int sceneWidth = 0;
+      unsigned int sceneHeight = 0;
+      const bool haveScene = highResSceneSize(&sceneWidth, &sceneHeight);
+      const bool supersampled = haveScene && ssaaConfigured();
 
       // Only ever scales up. At or below the pinned size there is nothing to
       // correct, and rewriting anyway would mean an ordinary 1080p session
       // taking a different path from the one the game shipped with. With
-      // supersampling on, the scene size is what has to clear that bar -- a
+      // supersampling on, the SCENE size is what has to clear that bar -- a
       // 1080p display at 200% wants the enlargement even though its main size
       // does not exceed the pinned one.
-      if (sceneWidth > kPinnedWidth && sceneHeight > kPinnedHeight) {
+      if (haveScene && sceneWidth > kPinnedWidth && sceneHeight > kPinnedHeight) {
         if (isPinnedFullTarget(local, initialData)) {
           local.Width = sceneWidth;
           local.Height = sceneHeight;
           action = supersampled ? "resizedFull+ssaa" : "resizedFull";
         } else if (isPinnedBlurTarget(local, initialData)) {
-          // The blur chain is defined relative to the scene it blurs, not to
-          // the display, so it scales with the scene target.
+          // The blur ladder is defined relative to the scene it blurs, not to
+          // the display, so it scales with the scene target. The engine's own
+          // shaders carry no screen-size constant and no hard-coded resolution
+          // literal -- all 139 of its DXBC containers were scanned for both --
+          // so a larger ladder is expected to be transparent to them. Expected,
+          // not proven: watch bloom placement on a fractional factor.
           local.Width = sceneWidth / 2;
           local.Height = sceneHeight / 2;
           action = supersampled ? "resizedBlur+ssaa" : "resizedBlur";
@@ -626,14 +614,30 @@ void highResNoteImmediateContext(ID3D11DeviceContext* context) {
 }
 
 bool highResSceneSize(unsigned int* width, unsigned int* height) {
+  // THE SOLE OWNER of "how big are the scene targets". Every consumer goes
+  // through here: the resize in hookedCreateTexture2D, the gate that decides
+  // whether to resize at all, the half-size blur target, and Ayesha's MSAA
+  // scene test in src/engines/phyre/scene_target.cpp. supersample.cpp owns the
+  // factor and the clamp; it does not own this answer.
   unsigned int mainWidth = 0;
   unsigned int mainHeight = 0;
   if (!highResMainSize(&mainWidth, &mainHeight))
     return false;
-  if (!ssaaSceneSize(mainWidth, mainHeight, width, height)) {
-    *width = mainWidth;
-    *height = mainHeight;
-  }
+
+  unsigned int sceneWidth = mainWidth;
+  unsigned int sceneHeight = mainHeight;
+  ssaaSceneSize(mainWidth, mainHeight, &sceneWidth, &sceneHeight);
+
+  // One line, once, naming both halves of the fact and the factor between them.
+  // Logged from here rather than from either consumer, so what the log says is
+  // by construction what the consumers were given.
+  static std::atomic<bool> announced{false};
+  if (!announced.exchange(true, std::memory_order_relaxed))
+    log("HIGHRES: scene size ", std::dec, sceneWidth, "x", sceneHeight,
+        " = main ", mainWidth, "x", mainHeight, " x ", ssaaPercent(), "%");
+
+  *width = sceneWidth;
+  *height = sceneHeight;
   return true;
 }
 

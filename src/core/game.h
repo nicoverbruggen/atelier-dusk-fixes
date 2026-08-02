@@ -36,10 +36,9 @@ const char* engineName(Engine e);
 // Enhancements the mod can apply. Order must match the matrix columns and the
 // descriptor rows in game.cpp.
 //
-// AtlasCache is the one that ships on by default. Six of the rest are
-// diagnostics, and the two field-jitter halves stay opt-in because nothing
-// about that port has been validated in-game yet. Every row but TargetCensus is
-// Ayesha-only.
+// AtlasCache, HighResRendering, and both field-jitter halves ship on by
+// default for Ayesha. Six of the remaining features are diagnostics, and every
+// row but TargetCensus is Ayesha-only.
 enum class Feature : uint8_t {
   AtlasStats,       // Ayesha font-atlas diagnostic counters (measurement only)
   AtlasTrace,       // Ayesha font-atlas lock/unlock sequence trace (one frame)

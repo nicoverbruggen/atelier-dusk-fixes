@@ -8,7 +8,7 @@ The mod builds with Meson and Ninja on Windows (MSVC) or Linux (MinGW cross buil
 
 The root `VERSION` file is the single version source for the Meson project and the Windows version resource. The build generates the numeric and string resource forms automatically.
 
-`scripts/build_linux.sh` cross-compiles both with MinGW inside the build container shared with the Arland project (set `$ATFIX_CONTAINER` to use a different container name). It takes an optional build type (default `release`), and finishes by running `scripts/check_exports.py` over both DLLs. That check is not a formality: both are proxies, so a missing or stdcall-decorated export is not a build error but a game that fails to start with no explanation.
+`scripts/build_linux.sh` cross-compiles all three targets with MinGW inside the build container shared with the Arland project (set `$ATFIX_CONTAINER` to use a different container name). It takes an optional build type (default `release`), verifies that all three artifacts landed, and finishes by running `scripts/check_exports.py` over both DLLs. That check is not a formality: both are proxies, so a missing or stdcall-decorated export is not a build error but a game that fails to start with no explanation.
 
 ## Windows
 
@@ -42,3 +42,7 @@ ninja -C build32
 Copy `build64/d3d11.dll` next to the game executable. Add `build64/dusk-fix-launcher.exe` and `build32/msimg32.dll` beside it for the launcher; both are optional, and with either missing the stock launcher comes up as before. Nothing is written to the games' own executables; all patching is in memory and gated on fingerprints.
 
 The launcher proxy is silent by design. To have it write `dusk-launcher.log` beside the game, add `-DDUSK_LAUNCHER_DIAGNOSTIC` to the 32-bit target's `cpp_args`.
+
+## Release checklist
+
+Before the first public release, build all three targets with `scripts/build_linux.sh`, run `scripts/check_exports.py` on the resulting DLLs, and complete the launcher validation session recorded in `WORK_DOC.md`. The Ayesha fixes also require a clean cache-verification run and a 4K target-census run for the release record. Escha & Logy and Shallie should be tested to confirm that their controls remain disabled and their engine-specific fixes remain hard-off.

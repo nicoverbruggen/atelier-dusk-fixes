@@ -3,9 +3,9 @@
 The working technical and investigation record for this early-stage mod. Keep
 it in sync with the code and with new runtime or binary-analysis evidence. It
 may contain shipped measurements, work in progress, open questions and
-unvalidated ports while the first version is being developed. `TECHNICAL.md`
-will be created from finalized, measured behaviour once the mod's first version
-is ready.
+unvalidated ports while the first version is being developed. `TECHNICAL.md` is
+the separate release-facing summary of finalized, measured behaviour; update it
+only when evidence is ready to be presented as a release guarantee.
 
 This project is much earlier than its Arland sibling. One fix ships — the Ayesha
 font-atlas read cache — plus the diagnostics that justified it. The opt-in
@@ -600,7 +600,7 @@ Implemented in `src/core/highres.cpp`, sharing its `CreateTexture2D` hook with
 the census that measured the defect. They are one subsystem: MinHook allows
 exactly one hook per target, so they could not be separate installs, and running
 them together is what makes "did this actually resize everything" answerable in
-one session. `[Rendering] HighResolution` / `DUSK_HIGHRES`.
+one session. `DUSK_HIGHRES`.
 
 ### Prior art, and what was taken from where
 
@@ -789,12 +789,104 @@ enlarges only when the bound surface is larger, and here none is. It also
 confirms the shadow pass and the whole blur pyramid submit self-consistent
 viewports, so they are untouched at any resolution.
 
-What remains unproven is the correction itself, which by construction cannot
-fire at 1080p. That needs one run above 1080p: `viewportRewrites` should become
-non-zero and stable, and the frame should fill the window. The feature stays
-`OptIn` until it has, and while the correction is unconfirmed the resize on its
-own makes the picture *worse* rather than better, so it should not be
-recommended to anyone in this state.
+### Confirmed at 4K
+
+The correction is confirmed on the English build at 3840x2160. The install is
+complete and the main target is adopted at the selected resolution rather than
+pinned:
+
+```
+Config:   HighResolution = on
+HIGHRES: context vtables immediate=0x6ffffa6c4410 deferred=0x6ffffa6c3ca0 (distinct, both hooked)
+HIGHRES: installed fix=1 census=0 contextVtables=2 hooksPerVtable=6
+Swap chain: 3840x2160 format=87 refresh=144/1 fullscreen
+HIGHRES: main render size 3840x2160
+```
+
+Compare the same line at 1080p (`main render size 1920x1080`) and with the fix
+off at 4K, where the scene targets stayed `rel=1920x1080`. The maintainer
+confirmed the frame in game: the picture is visibly sharper and correctly
+framed.
+
+That visual result is what settles the raster correction, and it is a stronger
+check than it sounds. The failure mode of a resize whose viewport did not follow
+is not a subtle one: the scene renders into the top-left quarter of a 4K target
+and the rest stays empty. A frame that is correctly framed *and* sharper is only
+producible if the viewport and scissor moved with the target.
+
+`Config: HighResolution = on` also confirms the promoted default end to end. The
+key had been cleared from `dusk-fix.ini` before the run, and `featureEnabled()`
+seeded it back from the capability matrix, so the automatic path is what ran
+rather than a leftover opt-in.
+
+Still uncaptured, and bookkeeping rather than a blocker: that run had `census=0`,
+so there is no `viewportRewrites` count on the record. One run with
+`DUSK_TARGET_CENSUS=1` at 4K would pin the number and the per-target
+`action=resizedFull` lines alongside the frame that has already been seen.
+
+### The defect, re-confirmed at 4K with the fix off
+
+A census run of the English build at 3840x2160 with the fix disabled is the
+cleanest statement of the problem the fix exists for. The swap chain is 4K and
+the engine's own targets are not:
+
+```
+HIGHRES: installed fix=0 census=1 contextVtables=0 hooksPerVtable=0
+Swap chain: 3840x2160 format=87 refresh=144/1 fullscreen
+TARGETCENSUS 3840x2160 rel=matchesSwapChain ... action=passthrough
+TARGETCENSUS 1920x1080 rel=1920x1080 ... action=passthrough   (x4)
+```
+
+The `rel=1920x1080` classification is the whole finding. At 1080p those same
+four targets report `rel=matchesSwapChain`, because at 1080p the pinned size and
+the swap-chain size are the same number and the two explanations are
+indistinguishable. At 4K they separate, and the targets stay at 1920x1080 while
+the swap chain follows the request. The engine renders the scene at 1080p and
+lets the presentation stretch it, which is the old-Arland defect exactly.
+
+Note `mainRT=0x0` and `rsViewports=0 draws=0` in that run's periodic lines:
+with `fix=0` no context vtable is hooked, so the raster counters have nothing to
+count. Only the `CreateTexture2D` census is live. A run with `fix=0` therefore
+says nothing about the correction either way, and should not be read as one.
+
+### A pitfall that cost a run: the environment beats the ini
+
+`featureEnabled()` checks a feature's environment variable *before* its ini key,
+so that a diagnostic run can override a persisted setting without editing the
+user's file. That is right for a diagnostic and actively wrong for a shipping
+feature whose switch is unconditionally exported by a wrapper script. The
+workspace's `04-run-ayesha.sh` passed `DUSK_HIGHRES="${DUSK_HIGHRES:-0}"` in the
+same block as the atlas diagnostics, which pinned the feature off no matter what
+`dusk-fix.ini` said; the run above is that bug, not a code fault. The default
+has been removed from the script, so the variable now exists only when someone
+sets it deliberately. Any future shipping feature that gains an environment
+override inherits this hazard.
+
+`logConfiguration()` reported only the three `[Fixes]` keys, which is why the
+run looked ambiguous rather than obviously misconfigured. `HighResolution` is
+now in that table, so the log states what is in force.
+
+### Why it is on by default
+
+The feature is `OnByDefault` for Ayesha, applied the way Arland applies its own
+correction: automatically, whenever the selected resolution is above 1080p. The
+trigger is not the capability matrix but the resize rule itself, which acts only
+while the learned main render size exceeds the pinned 1920x1080, the same
+`mainWidth > 1920 && mainHeight > 1080` test Arland uses. At 1080p and below the
+hooks install and every target passes through, so the default costs a 1080p
+player nothing and no one has to know the engine pins its targets.
+
+`DUSK_HIGHRES=0` remains as an escape hatch, and matters more here than for the
+other fixes: the failure mode is a visibly wrong picture rather than a silent
+regression, so a player who hits one needs a way to confirm what they are
+looking at. There is no ini key and no launcher control, because picking the
+resolution is already the decision this fix depends on.
+
+The promotion was made before the above-1080p run rather than after it, which
+was a real risk at the time: an unconfirmed correction shipping on by default,
+where a resize whose viewport did not follow would have left the picture worse
+than vanilla. The 4K run above closed it, and the order is worth remembering as
+something not to repeat rather than as a precedent.
 
 ## The launcher proxy
 
@@ -853,7 +945,7 @@ It edits two files, and the split is the interesting part:
 | File | Keys | Whose |
 |---|---|---|
 | `Setting.ini` | `[Graphics] ScreenWidth`/`ScreenHeight`/`Outline`, `[Window] FullScreen`, `[Lang] Language` | the game's own, read whether or not the mod is installed |
-| `dusk-fix.ini` | `[Rendering] HighResolution`, `[Fixes] AtlasCache`/`FieldEngineFix`/`FieldStabilizer`, `[Launcher] SkipLauncher`/`AutoResolution` | the mod's |
+| `dusk-fix.ini` | `[Launcher] SkipLauncher`/`AutoResolution` | the mod's |
 
 ### Auto resolution, and why it resolves in a different place than Arland's
 
@@ -917,12 +1009,18 @@ hooked, so the game as it shipped can be compared against without moving files
 out of the folder and having to remember to move them back. It is the Arland
 `ARLAND_DISABLE` mechanism under this project's prefix.
 
-The mod switches are enabled only on Ayesha, and are read and written only
-there. On Escha & Logy and Shallie the capability matrix hard-offs all three, so
-showing `AtlasCache` ticked-but-greyed would claim the cache is running on a
-game where nothing of the sort is installed; the controls stay visible and
-greyed instead, with a note saying why, so the window says the same thing about
-every game.
+The window offers the game's own settings and `SkipLauncher`, and none of the
+mod's fixes. Every one of them is on by default and none is a preference: the
+font-atlas cache and the field-jitter halves have nothing to trade off, and the
+high-resolution correction's only trade-off is the resolution itself, which the
+player has already chosen in this same window. Asking again with a checkbox
+would be the same question twice.
+
+A consequence worth noting: the window no longer varies by game at all. The
+engine flag that used to grey the Ayesha-only fix controls on Escha & Logy and
+Shallie has been removed along with the controls, so all three games get an
+identical window and the per-game difference lives entirely in the DLL's
+capability matrix.
 
 An earlier single-page version of this window was opened once and came up. The
 tabbed structure above has not been run: it compiles and is deployed to the
@@ -935,21 +1033,36 @@ without the mod".
 
 The project now has an ini layer, `src/core/config.{h,cpp}`, because the
 launcher needs somewhere to persist what it configures. It follows the Arland
-split exactly: **`dusk-fix.ini` is the user-facing surface and every environment
-switch is a diagnostic.** A diagnostic with an ini key would eventually be
+split exactly: **`dusk-fix.ini` is the user-facing surface, and an environment
+switch on its own is not one.** A diagnostic with an ini key would eventually be
 turned on by someone following a forum post, and these diagnostics are slow on
 purpose.
 
-So the capability matrix's `Descriptor` now carries an optional section and key
-alongside its environment variable, and only the three user-facing features have
-one:
+So the capability matrix's `Descriptor` carries an optional section and key
+alongside its environment variable, and only the features a user is meant to
+choose between have one:
 
 | Key | Feature |
 |---|---|
 | `[Launcher] SkipLauncher` | start the game directly, skipping both front-ends |
-| `[Fixes] AtlasCache` | the shipping font-atlas read cache |
-| `[Fixes] FieldEngineFix` | experimental field-jitter threshold rescale |
-| `[Fixes] FieldStabilizer` | experimental field-jitter resting stabilizer |
+| `[Launcher] AutoResolution` | remembers that Auto was picked, so the launcher keeps following the desktop |
+
+Having a key is therefore not the same as being on by default, and the shipping
+fixes are the case that separates them. The font-atlas read cache and both
+field-jitter halves ship on and have no key at all. Nothing about them is a
+judgement a player can make: the cache is strictly faster with no visual
+difference, and the field halves are one coupled fix (the stabilizer refuses to
+run without the rescale), so the only combinations a key could express are the
+fix and a broken half of it. `DUSK_ATLAS_CACHE=0` and `DUSK_FIELD_ENGINE_FIX=0`
+cover the A/B, which is the only reason to stand either down.
+
+The high-resolution correction looked like the counter-example that would keep
+this from being a blanket rule, and it is not one. Rendering at 4K instead of
+1080p does cost real performance, so there is a decision -- but the player makes
+it when they choose a resolution, and the fix only makes that choice honest. A
+key asking whether the chosen resolution should be the one rendered is the same
+preference asked twice. An option a user cannot usefully answer is not an
+option, and putting it in the file only invites turning it off.
 
 Precedence is environment, then ini, then the matrix default, and
 `Support::Unsupported` remains a hard off that neither can turn on. Only
@@ -1057,15 +1170,58 @@ ground-contact change, dumps a short ring of frames either side of the event. It
 only writes inside those windows, so a character resting quietly produces no
 output at all.
 
-### Open field-jitter investigation
+### The field-jitter fix
 
-The opt-in Ayesha field-jitter implementation is a static port of Arland's
-threshold rescale and resting stabilizer. Its anchors resolve in both Ayesha
-builds, but an in-game test established that the current implementation does not
-fix the problem. Static homology therefore has not established either the
-Ayesha-specific mechanism or the carried-over live controller layout. Keep both
-switches experimental while the controller update and collision path are
-reinvestigated; do not promote either one from the address matches alone.
+The Ayesha field-jitter implementation is a port of Arland's threshold rescale
+and resting stabilizer. Its anchors resolve in both Ayesha builds. An early
+in-game test reported that it did not fix the problem, and it was held OptIn on
+that basis; a later session with **both** switches on confirmed that it does, and
+both are now OnByDefault.
+
+The earlier negative is worth keeping rather than deleting, because the most
+likely reading of it is a configuration result rather than a code one: the
+stabilizer refuses to run without the rescale, so a test that enabled only one of
+them, or that relied on an ini key while an environment variable pinned it off,
+would report exactly that failure. `04-run-ayesha.sh` did unconditionally export
+`DUSK_HIGHRES=0` for months, and `featureEnabled()` reads the environment before
+the ini, so the hazard is demonstrably real in this workspace. Neither switch
+should be judged again without a log line confirming what was actually in force.
+
+What is measured and what is inferred, stated plainly: the defect and its shape
+are measured (below), and the fix is confirmed by playthrough. The mechanism
+described here, gravity integrating against the surface while sub-threshold moves
+are discarded, is the reading the code comments and the measured sawtooth agree
+on, not something a trace has confirmed instruction by instruction.
+
+#### The controller offsets, confirmed on both builds
+
+The offsets were carried over from Arland and were for a long time the one part
+of this the evidence did not cover. They have now been checked statically
+against both Ayesha builds, scoped to the controller update
+(EN `0x739fa0`, ML `0x75c4a0`), and every one holds. The two the stabilizer
+actually *writes* are the two with the strongest evidence:
+
+| Offset | Use | Evidence |
+|---|---|---|
+| `+0x54` | vertical velocity (**written**) | accumulated (`addss xmm1, [rbx+0x54]` then stored back) and clamped with `mov dword [rbx+0x54], 0xc1a00000`, i.e. `-20.0f` terminal velocity |
+| `+0xb8` | air timer (**written**) | reset to zero, then accumulated by frame time and stored back |
+| `+0x50` | velocity vector | written as a whole with `movdqa`/`movups`, so `+0x54` is its Y as assumed |
+| `+0x60` / `+0x70` | live position / entry copy | the resolver reverts a discarded move with `movaps xmm0,[rsi+0x70]` then `movdqa [rsi+0x60],xmm0`, and differences them componentwise at `0x738955` |
+| `+0xb0` | foot height | read against position in both the update and the resolver |
+
+`+0x38` needed a correction rather than a confirmation. It is not a flags word:
+`+0x38` and `+0x39` are two adjacent **byte** flags, and ground contact is the
+one at `+0x39` (set to 1 in the same breath as the air-timer reset at
+`0x73a0c1`, cleared alongside the velocity write at `0x73a136`). Reading a
+`uint32` at `+0x38` and masking `0x100` therefore lands on byte `+0x39` bit 0
+and is correct in effect, which is why it has always worked, but the constant is
+doing something less direct than `kGroundedOffset`/`kGroundedBit` suggest. It is
+only sound while that byte holds 0 or 1, which is what every write site in both
+builds does.
+
+Both builds are structurally identical here: same offsets, same instruction
+shapes, at the same relative positions within the update (`0x73a0c1` against
+`0x75c5c1`, and so on).
 
 | Anchor | Ayesha EN | Ayesha multilingual | Static evidence |
 |---|---:|---:|---|
@@ -1077,6 +1233,108 @@ Further work must begin with the trace and fresh Ayesha-specific analysis rather
 than another blind port. Confirm the reported fields and offsets against the
 live controller, then trace the controller update and collision path to find the
 actual frame-rate-dependent state before allowing any new write.
+
+#### A measured baseline, and what its shape rules out
+
+A 1920x1080 60 fps capture of a 144 Hz session (`FieldEngineFix = off`,
+`FieldStabilizer = off`, so this is vanilla behaviour rather than a failing fix)
+was measured by collapsing each frame to a 1-D intensity profile and recovering
+sub-pixel displacement by SSD with a parabolic refinement. Ayesha is standing on
+the atelier's interior steps. The clip separates cleanly into four phases:
+
+| Frames | Background vertical | Character vertical | Character horizontal | Reading |
+|---|---:|---:|---:|---|
+| 0-59 | 0.00 | 0.01 | 0.00 | pixel-identical, nothing moving |
+| 60-99 | 12.89 | 26.89 | 7.26 | she moves; camera follows |
+| 100-179 | 2.4-3.5 | 11.6-17.7 | 0.5-6.0 | **the jitter** |
+| 180-237 | 0.00 | 0.01 | 0.00 | pixel-identical again |
+
+(peak-to-peak pixels within each 20-frame block)
+
+Three properties of the jitter window matter more than its amplitude:
+
+- **It is vertical only.** Horizontal character displacement falls to ~0.5 px
+  after frame 120 while vertical stays at 12-18 px for a further second. She is
+  horizontally at rest and still oscillating, which is the resting case rather
+  than a movement-integration case.
+- **It does not decay.** Amplitude is as large at frame 170 as at frame 105.
+  This is a sustained relaxation oscillation, not an overshoot settling out. The
+  per-cycle shape is a slow ramp of 1-3 px over five or six captured frames, then
+  a single frame displaced 13-18 px, then a snap back to the base position.
+- **It stops absolutely.** At frame ~179 the whole frame becomes pixel-identical
+  and stays so for a second. Nothing damps; it simply ceases.
+
+That shape is the **sawtooth this file already describes** in the comment on
+`applyRestingStabilizer`: "gravity keeps integrating against a surface, so a
+frame still breaks through every few frames". Under that reading the ramp is
+gravity accumulating vertical velocity while the resolver discards each
+sub-threshold move, and the single displaced frame is the accumulated move
+finally clearing the 0.0085 threshold and being applied whole. The measurement
+is independent corroboration of that mechanism, arrived at from screen space
+without reference to it, and it is the first time the sawtooth has been
+quantified rather than described.
+
+It is emphatically **not** evidence that the ported implementation fails, because
+the capture was made with both switches off. The resting stabilizer exists for
+exactly this case and was not running. What the baseline gives is the thing to
+measure any candidate fix against: the same spot, same capture settings, with the
+switches on, should flatten the 12-18 px vertical excursion toward the ~0 px the
+settled phases already show.
+
+The static side of the resolver has been mapped to support that work; see the
+next subsection.
+
+Three runs are worth capturing together, none of which has been done:
+`DUSK_FIELD_TRACE=1` over this spot (which needs neither switch on and reports
+windows around contact changes), the same spot with both switches on, and the
+same spot at 60 Hz rather than 144 Hz.
+
+Capture caveat: the recording samples a 144 Hz session at 60 fps, so every
+frequency here belongs to the capture and not to the game. The amplitudes and
+the phase structure survive the aliasing; a period in Hz does not, and none is
+claimed.
+
+#### Static map of the collision resolver
+
+Ayesha EN `0x738670`, a single `.pdata` function of `0xb9b` bytes. Every
+constant it loads, decoded:
+
+| RVA | Value | Reading |
+|---|---:|---|
+| `0x1627f20` | `0.0085` | the documented move threshold, read at `0x738c69` |
+| `0x10f8bc8` | `1.0471976` | pi/3, i.e. a 60 degree limit, tested at `0x738c55` |
+| `0x10f8bd4` | `-0.8` | dot-product threshold, `0x738935` |
+| `0x9b4dbc` / `0x10f8bd0` | `+/-1.1920929e-05` | symmetric dead band |
+| `0xd2c904` / `0xd2c910` | `+/-0.0011920929` | second symmetric dead band |
+| `0x9896f8` | `0.01` | |
+| `0x98c308` | `4.0` | multiplier on the `0.0011920929` band, `0x738947` |
+| `0xbcaf9c` | `-5.0` | |
+| `0x989138` | `1.0` | |
+
+Two structures in it matter for this investigation.
+
+**The 60 degree test at `0x738c48`.** A value built from a normalize-and-dot
+chain is compared against pi/3, and on the greater-than side the function stores
+`r14d` to `[rsi+0x54]`. `+0x54` is the controller's vertical velocity (confirmed
+below), so this is a slope limit that kills upward or downward velocity on a
+surface too steep to stand on, not a flag write.
+
+**The candidate-vector selection at `0x738926`-`0x738986`.** Guarded by three
+tests (a magnitude against the `0.0011920929` band, the `-0.8` dot threshold, and
+a magnitude against `4.0x` that band), the function picks between two movement
+vectors before taking its length:
+
+- the delta `[rsi+0x70..0x78] - [rsi+0x60..0x68]`, the difference between the
+  controller's live position (`+0x60`) and the copy taken on entry (`+0x70`);
+- otherwise a vector already in registers, the raw requested motion.
+
+A `-0.8` dot threshold selects on *direction reversal* of roughly 143 degrees or
+more, which is the shape of an anti-oscillation guard the engine already carries.
+Whether it is failing to engage in the resting case, or engaging and being
+defeated downstream by the threshold, is the question a trace should settle
+before any new write is designed. Nothing here has been confirmed against the
+live controller, and none of it should be treated as more than a map until it
+has been.
 
 ## Runtime memory manipulation
 

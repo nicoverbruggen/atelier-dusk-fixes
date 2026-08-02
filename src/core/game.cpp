@@ -36,14 +36,29 @@ Title detectTitle() {
 }
 
 // Where a feature's overrides live. `env` is always present; `section`/`key`
-// are set only for the options a user is meant to configure, and null for the
-// diagnostics.
+// are set only for the options a user is meant to configure.
 //
 // That asymmetry is the Arland rule carried over: dusk-fix.ini is the
-// user-facing surface and every environment switch is a diagnostic. Giving a
-// diagnostic an ini key would eventually get it turned on by someone following
-// a forum post, and these diagnostics are slow on purpose -- AtlasVerify adds a
-// real atlas lock and a ~1 MB comparison per verified read.
+// user-facing surface, and an environment switch on its own is not one. Giving
+// a diagnostic an ini key would eventually get it turned on by someone
+// following a forum post, and these diagnostics are slow on purpose --
+// AtlasVerify adds a real atlas lock and a ~1 MB comparison per verified read.
+//
+// The shipping fixes are env-only for the opposite reason: not because they are
+// dangerous, but because they are not choices. A fix that is simply correct,
+// on by default, and has no configuration a user could reason about is not a
+// setting, and a key in the file is an invitation to turn it off. That covers
+// every fix this mod ships: the font-atlas read cache, both field-jitter halves
+// (further coupled -- the stabilizer needs the rescale), and the
+// high-resolution correction. Their environment switches remain so an A/B or a
+// bug report can stand one down for a session.
+//
+// The high-resolution correction is the one that looks like a counter-example
+// and is not. Rendering at 4K instead of 1080p does cost real performance, so
+// there is a decision here -- but the player already makes it when they pick a
+// resolution. The fix only makes the resolution they chose the one actually
+// rendered. A separate key asking whether the chosen resolution should be used
+// is not a preference, it is the same preference asked twice.
 struct Descriptor {
   const char* env;
   const char* section;
@@ -58,10 +73,10 @@ const Descriptor& descriptor(Feature f) {
     /* AtlasCensus     */ { "DUSK_ATLAS_CENSUS",      nullptr, nullptr },
     /* D3D11WriteProbe */ { "DUSK_D3D11_WRITE_PROBE", nullptr, nullptr },
     /* TargetCensus    */ { "DUSK_TARGET_CENSUS",     nullptr, nullptr },
-    /* HighRes         */ { "DUSK_HIGHRES",  "Rendering", "HighResolution" },
-    /* AtlasCache      */ { "DUSK_ATLAS_CACHE",       "Fixes", "AtlasCache" },
-    /* FieldEngineFix  */ { "DUSK_FIELD_ENGINE_FIX",  "Fixes", "FieldEngineFix" },
-    /* FieldStabilizer */ { "DUSK_FIELD_STABILIZER",  "Fixes", "FieldStabilizer" },
+    /* HighRes         */ { "DUSK_HIGHRES",           nullptr, nullptr },
+    /* AtlasCache      */ { "DUSK_ATLAS_CACHE",       nullptr, nullptr },
+    /* FieldEngineFix  */ { "DUSK_FIELD_ENGINE_FIX",  nullptr, nullptr },
+    /* FieldStabilizer */ { "DUSK_FIELD_STABILIZER",  nullptr, nullptr },
   };
   return table[static_cast<int>(f)];
 }
@@ -100,15 +115,31 @@ constexpr Support X = Support::OnByDefault;
 // 3 atlases per 248 ms drain, plus a per-frame steady-state drip -- and the
 // measured effect is an 85% reduction in menu-build time at a 95.5% hit rate
 // (WORK_DOC.md "Repeated font-atlas reads", "The lifetime is frame-scoped, and
-// there are two problems", "Repeated font-atlas reads"). `DUSK_ATLAS_CACHE=0`
-// turns it off, which is what an A/B or a bug report wants.
+// there are two problems", "Repeated font-atlas reads"). Like the field-jitter
+// fix it has no ini key and no launcher control; `DUSK_ATLAS_CACHE=0` turns it
+// off, which is what an A/B or a bug report wants.
 //
-// The two field-jitter halves are Ayesha-only and stay OptIn. They are ported
-// from Arland (where both are on by default) but nothing has been measured on
-// Ayesha: no run has confirmed the high-refresh jitter is present here. The
-// stabilizer additionally writes into the controller object at offsets not yet
-// confirmed for this build -- see the comment on stabilizerEnabled in
-// field_physics.cpp. They must not be promoted alongside the cache.
+// The two field-jitter halves are Ayesha-only and ship ON BY DEFAULT, as they
+// do in Arland. They were held OptIn while nothing had been measured on Ayesha;
+// that gap is now closed at both ends. The defect was quantified from a capture
+// of the atelier's interior steps -- 12-18 px of vertical excursion while the
+// character is horizontally at rest, a gravity-versus-threshold sawtooth rather
+// than a bob -- and an in-game session with both switches on confirmed the fix
+// (WORK_DOC.md "The field-jitter fix").
+//
+// They are one feature in two keys, not two features. The stabilizer needs the
+// rescale it builds on and refuses to run without it (installFieldPhysics), so
+// promoting the rescale alone would have left the resting case unfixed, and
+// promoting the stabilizer alone does nothing at all. That is also why neither
+// appears in the launcher and neither has an ini key: two coupled switches for
+// a single fix that is simply correct is not a setting. `DUSK_FIELD_ENGINE_FIX=0`
+// stands the whole thing down for one session, which is what an A/B or a bug
+// report wants and is the only override that exists.
+//
+// The offsets the stabilizer writes through were the last thing here resting on
+// carry-over rather than evidence. They have since been confirmed against both
+// Ayesha builds -- see the comment on the offset constants in field_physics.cpp
+// -- so nothing about this fix is now inherited on trust.
 //
 // TargetCensus is the one diagnostic that is NOT Ayesha-only. It reads nothing
 // but the D3D11 resources the game creates, so it needs no mapped address and
@@ -118,19 +149,32 @@ constexpr Support X = Support::OnByDefault;
 // three games (WORK_DOC.md "Ayesha's resolution path"). It stays OptIn
 // everywhere: it hooks CreateTexture2D, which no shipping configuration should.
 //
-// HighResRendering is Ayesha-only and OptIn *for now*. The defect it fixes is
-// measured and the mechanism is TellowKrinkle's, proven on this engine family
-// and refined in the Arland project, so this is not an experiment in the way
-// the field-jitter switches are. It stays opt-in only until a playthrough has
-// confirmed the corrected frame, because the failure mode -- a viewport or a
-// target that did not move with the rest -- is a visibly wrong picture rather
-// than a silent regression, and that is worth one round of eyes before it
-// becomes the default. Escha & Logy and Shallie are Unsupported rather than
-// OptIn because their renderer has not been censused at all; enabling this
-// there would apply a rule derived from a different engine.
+// HighResRendering is Ayesha-only and ships ON BY DEFAULT, applied the same way
+// the Arland project applies its own correction: automatically, whenever the
+// resolution the player selected is higher than 1080p. Nothing here asks the
+// user to know that the engine pins its internal targets. The trigger is not in
+// this matrix at all -- highres.cpp resizes only while the learned main render
+// size exceeds the pinned 1920x1080 (kPinnedWidth/kPinnedHeight), which is
+// Arland's `mainWidth > 1920 && mainHeight > 1080` rule carried over. At 1080p
+// and below every hook stays installed and every target passes through, so
+// being on by default costs a player at 1080p nothing.
+//
+// `DUSK_HIGHRES=0` stands it down for a session, which matters more here than
+// for the other fixes: the failure mode is a visibly wrong picture (a viewport
+// or a target that did not move with the rest) rather than a silent regression,
+// so a player who hits one needs a way to confirm what they are looking at. It
+// has no ini key and no launcher control, for the reason given on Descriptor.
+//
+// The defect is measured and the mechanism is TellowKrinkle's, proven on this
+// engine family and refined in the Arland project, so this is not an experiment
+// in the way the field-jitter switches are.
+//
+// Escha & Logy and Shallie are Unsupported rather than OptIn because their
+// renderer has not been censused at all; enabling this there would apply a rule
+// derived from a different engine.
 constexpr Support kMatrix[3][static_cast<int>(Feature::Count)] = {
   //                Stats Trace Verfy Censu Probe Targt HiRes Cache Field Stab
-  /* Ayesha  */   {   O,    O,    O,    O,    O,    O,    O,    X,    O,    O },
+  /* Ayesha  */   {   O,    O,    O,    O,    O,    O,    X,    X,    X,    X },
   /* Escha   */   {   U,    U,    U,    U,    U,    O,    U,    U,    U,    U },
   /* Shallie */   {   U,    U,    U,    U,    U,    O,    U,    U,    U,    U },
 };

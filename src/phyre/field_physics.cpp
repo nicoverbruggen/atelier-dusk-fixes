@@ -26,11 +26,21 @@ namespace {
 using FieldUpdateProc = void (STDMETHODCALLTYPE*)(uintptr_t, float);
 FieldUpdateProc originalFieldUpdate = nullptr;
 
-// Controller offsets carried over from the Arland implementation. Ayesha's
-// Update is a strong static homologue, but its live layout is not confirmed and
-// the current port did not fix the problem. Do not treat these as established
-// Ayesha fields without runtime evidence.
-constexpr uintptr_t kGroundedOffset = 0x38;   // flags word; bit 8 = ground contact
+// Controller offsets. Carried over from the Arland implementation, and since
+// confirmed against both Ayesha builds by scanning the controller update
+// (EN 0x739fa0, ML 0x75c4a0) for every access to each one. The two this file
+// writes carry the strongest evidence: +0x54 is accumulated and then clamped to
+// -20.0f terminal velocity, and +0xb8 is reset to zero and accumulated by frame
+// time. See WORK_DOC.md, "The controller offsets, confirmed on both builds".
+//
+// kGroundedOffset/kGroundedBit are the one indirect pair. The object holds two
+// adjacent BYTE flags at +0x38 and +0x39, not a flags word, and ground contact
+// is the byte at +0x39. Reading a uint32 at +0x38 and masking 0x100 lands on
+// that byte's bit 0, so it is correct as long as the byte holds 0 or 1, which
+// every write site in both builds does. Left as-is rather than rewritten to a
+// byte read because the mask is what the Arland side uses and the two want to
+// stay comparable; if that ever stops being true, read the byte directly.
+constexpr uintptr_t kGroundedOffset = 0x38;   // see above: really byte +0x39
 constexpr uintptr_t kVelOffset = 0x50;        // three contiguous floats
 constexpr uintptr_t kVelYOffset = 0x54;
 constexpr uintptr_t kPosOffset = 0x60;

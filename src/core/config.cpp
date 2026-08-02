@@ -79,6 +79,7 @@ void logConfiguration() {
   // running game does not support is hard off and has no ini key at all, which
   // is exactly what "unsupported" should look like in a log.
   static const struct { Feature feature; const char* name; } kReported[] = {
+    { Feature::HighResRendering, "HighResolution" },
     { Feature::AtlasCache,      "AtlasCache" },
     { Feature::FieldEngineFix,  "FieldEngineFix" },
     { Feature::FieldStabilizer, "FieldStabilizer" },

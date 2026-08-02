@@ -160,6 +160,21 @@ HRESULT STDMETHODCALLTYPE hookedCreateSwapChain(
 void hookFactoryForSwapChain(ID3D11Device* device) {
   if (!device || originalCreateSwapChain || !dusk::initializeEngineFixes())
     return;
+  // This is engine-agnostic, so it cannot assume an engine module has already
+  // initialized MinHook. On Ayesha the Phyre module does and this used to be
+  // invisible; on Escha & Logy and Shallie nothing does, and the hook failed
+  // with MH_ERROR_NOT_INITIALIZED on every run. That cost nothing while no fix
+  // installs on KTGL, but it silently removes the swap-chain size, which is
+  // what the render-target census classifies every target against -- so the
+  // census would have reported a wrong `rel=` for all of them. Same idiom as
+  // highres.cpp: a second call answers MH_ERROR_ALREADY_INITIALIZED, which is
+  // a success here.
+  const MH_STATUS init = MH_Initialize();
+  if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
+    log("Failed to initialize MinHook for the frame boundary: ",
+        MH_StatusToString(init));
+    return;
+  }
   IDXGIDevice* dxgiDevice = nullptr;
   IDXGIAdapter* adapter = nullptr;
   IDXGIFactory* factory = nullptr;

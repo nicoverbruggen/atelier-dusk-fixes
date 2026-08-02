@@ -60,12 +60,8 @@ enum : int {
   IDC_TABS = 1001,
   IDC_RES,
   IDC_WINMODE,
-  IDC_HIGHRES,
   IDC_LANG,
   IDC_OUTLINE,
-  IDC_ATLASCACHE,
-  IDC_FIELDFIX,
-  IDC_FIELDSTAB,
   IDC_SKIPLAUNCHER,
   IDC_START,
   IDC_OPENLAUNCHER,   // Koei Tecmo's own launcher
@@ -91,28 +87,28 @@ const int kPageCount = 3;   // Display, Game, About
 // installed side by side, so which is present is not the question -- which to
 // start is (see gameExeForLanguage).
 //
-// `phyre` marks the PhyreEngine game. It is the only one any mod fix applies
-// to, so it is what greys the fix controls out for the other two rather than
-// offering switches the capability matrix would hard-off anyway.
+// There is deliberately no engine flag here any more. Every mod fix is on by
+// default and has no control in this window, so nothing it shows depends on
+// which engine the game runs: the window is identical for all three, and the
+// per-game difference lives entirely in the DLL's capability matrix.
 struct Game {
   const char*    english;
   const char*    multilingual;
   const char*    stockLauncher;
   const char*    stockEnv;
   const wchar_t* name;
-  bool           phyre;
 };
 
 const Game kGames[] = {
   { "Atelier_Ayesha_EN.exe", "Atelier_Ayesha.exe",
     "Atelier_AyeshaLauncher.exe", "Atelier_AyeshaEnv.exe",
-    L"Atelier Ayesha DX", true },
+    L"Atelier Ayesha DX" },
   { "Atelier_Escha_and_Logy_EN.exe", "Atelier_Escha_and_Logy.exe",
     "Atelier_Escha_and_LogyLauncher.exe", "Atelier_Escha_and_LogyEnv.exe",
-    L"Atelier Escha & Logy DX", false },
+    L"Atelier Escha & Logy DX" },
   { "Atelier_Shallie_EN.exe", "Atelier_Shallie.exe",
     "Atelier_ShallieLauncher.exe", "Atelier_ShallieEnv.exe",
-    L"Atelier Shallie DX", false },
+    L"Atelier Shallie DX" },
 };
 const int kGameCount = 3;
 
@@ -123,7 +119,6 @@ char g_gameDir[MAX_PATH] = {};       // its folder, used as the working director
 const wchar_t* g_gameName = nullptr;
 int g_game = -1;                     // index into kGames, -1 when none found
 
-bool gamePhyre() { return g_game >= 0 && kGames[g_game].phyre; }
 
 // ---- combo box contents ----------------------------------------------------
 
@@ -189,8 +184,8 @@ const int kLangCount = 4;
 HWND g_hTabs = nullptr;
 HWND g_hGameLabel = nullptr;   // sits on the tab strip; painted transparent
 HWND g_hRes = nullptr, g_hWinMode = nullptr, g_hLang = nullptr;
-HWND g_hOutline = nullptr, g_hAtlasCache = nullptr, g_hHighRes = nullptr;
-HWND g_hFieldFix = nullptr, g_hFieldStab = nullptr, g_hSkipLauncher = nullptr;
+HWND g_hOutline = nullptr;
+HWND g_hSkipLauncher = nullptr;
 HWND g_hStart = nullptr, g_hOpenLauncher = nullptr, g_hOpenEnv = nullptr;
 HWND g_hPlayVanilla = nullptr;
 HWND g_hRepoLink = nullptr;
@@ -497,19 +492,14 @@ struct UiState {
   int  resolution;
   int  windowMode;
   int  language;
-  bool highRes;
   bool outline;
-  bool atlasCache;
-  bool fieldFix;
-  bool fieldStab;
   bool skipLauncher;
 
   bool operator == (const UiState& o) const {
     return resolution == o.resolution && windowMode == o.windowMode &&
-           language == o.language && highRes == o.highRes &&
+           language == o.language &&
            outline == o.outline &&
-           atlasCache == o.atlasCache && fieldFix == o.fieldFix &&
-           fieldStab == o.fieldStab && skipLauncher == o.skipLauncher;
+           skipLauncher == o.skipLauncher;
   }
 };
 
@@ -518,11 +508,7 @@ UiState currentState() {
   state.resolution = int(SendMessageW(g_hRes, CB_GETCURSEL, 0, 0));
   state.windowMode = int(SendMessageW(g_hWinMode, CB_GETCURSEL, 0, 0));
   state.language = int(SendMessageW(g_hLang, CB_GETCURSEL, 0, 0));
-  state.highRes = isChecked(g_hHighRes);
   state.outline = isChecked(g_hOutline);
-  state.atlasCache = isChecked(g_hAtlasCache);
-  state.fieldFix = isChecked(g_hFieldFix);
-  state.fieldStab = isChecked(g_hFieldStab);
   state.skipLauncher = isChecked(g_hSkipLauncher);
   return state;
 }
@@ -530,14 +516,6 @@ UiState currentState() {
 UiState g_savedState;
 void markSaved() { g_savedState = currentState(); }
 bool hasUnsavedChanges() { return !(currentState() == g_savedState); }
-
-// The stabilizer is meaningless without the rescale it builds on, so it follows
-// it rather than being separately settable while inert.
-void syncFieldControls() {
-  EnableWindow(g_hFieldStab, gamePhyre() && isChecked(g_hFieldFix));
-  if (!isChecked(g_hFieldFix))
-    setChecked(g_hFieldStab, false);
-}
 
 void loadFromIni() {
   // ---- the game's own Setting.ini
@@ -571,30 +549,22 @@ void loadFromIni() {
   setChecked(g_hOutline,
     GetPrivateProfileIntA("Graphics", "Outline", 1, g_settingsPath) != 0);
 
-  const bool phyreEarly = gamePhyre();
-  setChecked(g_hHighRes,
-    phyreEarly && iniBool(g_iniPath, "Rendering", "HighResolution", false));
-
   // ---- the mod's dusk-fix.ini
   //
-  // The defaults repeat src/core/game.cpp's capability matrix, which is the
-  // source of truth: AtlasCache ships on, the two field-jitter halves are
-  // opt-in because nothing about that port has been validated in game.
+  // Every shipping fix is on by default and absent from this window: the
+  // font-atlas read cache, the two field-jitter halves, and the
+  // high-resolution correction. None of them is a choice. The last is the one
+  // that had to be argued rather than assumed -- rendering at 4K costs real
+  // performance -- but choosing the resolution IS that decision, and the fix
+  // only makes the resolution already chosen honest. A second checkbox asking
+  // whether the chosen resolution should actually be used is not a preference.
+  // Each has an environment switch for the A/B a bug report needs.
   //
-  // Read only for the game they apply to. On Escha & Logy and Shallie the
-  // matrix hard-offs all three, so showing AtlasCache ticked-but-greyed would
-  // claim the cache is running there when nothing of the sort is installed.
-  const bool phyre = gamePhyre();
-  setChecked(g_hAtlasCache,
-    phyre && iniBool(g_iniPath, "Fixes", "AtlasCache", true));
-  setChecked(g_hFieldFix,
-    phyre && iniBool(g_iniPath, "Fixes", "FieldEngineFix", false));
-  setChecked(g_hFieldStab,
-    phyre && iniBool(g_iniPath, "Fixes", "FieldStabilizer", false));
+  // What is left is the same on all three games, which is why nothing here is
+  // gated on the engine any more.
   setChecked(g_hSkipLauncher,
     iniBool(g_iniPath, "Launcher", "SkipLauncher", false));
 
-  syncFieldControls();
   markSaved();
 }
 
@@ -620,16 +590,6 @@ void saveToIni() {
   WritePrivateProfileStringA("Graphics", "Outline",
     isChecked(g_hOutline) ? "1" : "0", g_settingsPath);
 
-  // Only written for the game they apply to. Writing an Ayesha key into an
-  // Escha & Logy ini would be inert -- the capability matrix hard-offs it -- but
-  // it would also be a lie about what that install can do.
-  if (gamePhyre()) {
-    iniWriteBool(g_iniPath, "Rendering", "HighResolution",
-      isChecked(g_hHighRes));
-    iniWriteBool(g_iniPath, "Fixes", "AtlasCache", isChecked(g_hAtlasCache));
-    iniWriteBool(g_iniPath, "Fixes", "FieldEngineFix", isChecked(g_hFieldFix));
-    iniWriteBool(g_iniPath, "Fixes", "FieldStabilizer", isChecked(g_hFieldStab));
-  }
   iniWriteBool(g_iniPath, "Launcher", "SkipLauncher",
     isChecked(g_hSkipLauncher));
 }
@@ -647,13 +607,7 @@ void resetToDefaults() {
   SendMessageW(g_hLang, CB_SETCURSEL, 1, 0);      // English
   setChecked(g_hOutline, true);
 
-  const bool phyre = gamePhyre();
-  setChecked(g_hHighRes, false);      // the matrix default, opt-in for now
-  setChecked(g_hAtlasCache, phyre);   // the matrix default, on
-  setChecked(g_hFieldFix, false);
-  setChecked(g_hFieldStab, false);
   setChecked(g_hSkipLauncher, false);
-  syncFieldControls();
 }
 
 // ---- starting things -------------------------------------------------------
@@ -1282,15 +1236,6 @@ void createControls(HWND w) {
       L"Fullscreen takes over the display; windowed is friendlier to "
       L"alt-tab and to compositors.");
 
-    g_hHighRes = mkCheck(w, L"Render at the selected resolution", 0, 0, 10,
-      IDC_HIGHRES);
-    page.checkRow(g_hHighRes, gamePhyre()
-      ? L"Without this the scene is drawn at 1080p and scaled up, however "
-        L"high the resolution above. Off by default until it has been played "
-        L"through."
-      : L"Ayesha only so far. This game's renderer has not been measured.");
-    EnableWindow(g_hHighRes, gamePhyre());
-
     // The stock front-ends are still reachable: this tool replaces them, it
     // does not remove them. Greyed out when the executable is not present.
     page.heading(L"The game as it shipped");
@@ -1323,30 +1268,6 @@ void createControls(HWND w) {
     g_hOutline = mkCheck(w, L"Character outlines", 0, 0, 10, IDC_OUTLINE);
     page.checkRow(g_hOutline,
       L"The game's own outline rendering. On as it shipped.");
-
-    page.heading(L"Fixes");
-    g_hAtlasCache = mkCheck(w, L"Much faster menus", 0, 0, 10, IDC_ATLASCACHE);
-    page.checkRow(g_hAtlasCache, gamePhyre()
-      ? L"Font-atlas read cache. Measured: menu construction 248 ms to 38 ms. "
-        L"Turn off only to compare, or for a bug report."
-      : L"Ayesha only. This game's text layer shares none of that code, so "
-        L"there is nothing here to fix.");
-
-    page.heading(L"Experimental");
-    g_hFieldFix = mkCheck(w, L"High-refresh field-jitter rescale", 0, 0, 10,
-      IDC_FIELDFIX);
-    page.checkRow(g_hFieldFix, gamePhyre()
-      ? L"Not a validated fix: tested in game and it did not solve the "
-        L"jitter. Leave off unless investigating."
-      : L"Ayesha only.");
-    g_hFieldStab = mkCheck(w, L"Hold the character while at rest", 0, 0, 10,
-      IDC_FIELDSTAB);
-    page.checkRow(g_hFieldStab,
-      L"Builds on the rescale above, and needs it. It writes into the live "
-      L"controller object at offsets not yet confirmed for this game.");
-
-    EnableWindow(g_hAtlasCache, gamePhyre());
-    EnableWindow(g_hFieldFix, gamePhyre());
   }
 
   // ---------------- page 2: About ----------------
@@ -1568,9 +1489,6 @@ LRESULT CALLBACK WndProc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_COMMAND:
       switch (LOWORD(wp)) {
-        case IDC_FIELDFIX:
-          syncFieldControls();
-          return 0;
         case IDC_START:
           if (startGame(w, false))
             DestroyWindow(w);

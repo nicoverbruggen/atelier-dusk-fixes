@@ -10,19 +10,21 @@
 
 namespace atfix {
 
-// Experimental Ayesha field-jitter investigation. The implementation is a
-// static port of Arland's threshold rescale and resting stabilizer, but an
-// Ayesha runtime test established that it does not fix the problem. The anchor
-// addresses are verified; the Ayesha-specific cause and live controller layout
-// are not. Both writes therefore remain opt-in investigation switches.
+// The Ayesha field-jitter fix: a port of Arland's threshold rescale and resting
+// stabilizer, confirmed in game and on by default. The anchor addresses are
+// verified, and so is the live controller layout the stabilizer writes through:
+// every offset was checked against both Ayesha builds' controller update.
+//
+// The two halves are one fix. The stabilizer needs the rescale and refuses to
+// run without it, so turning the rescale off turns both off.
 //
 // DUSK_FIELD_TRACE=1 logs the carried-over controller fields around each
-// ground-contact change. Use it for fresh Ayesha-specific analysis; plausible
-// output alone does not validate the current fix.
+// ground-contact change, and installs on its own without either fix. It is the
+// instrument for any further Ayesha-specific analysis.
 //
-// DUSK_FIELD_ENGINE_FIX requests the threshold rescale.
-// DUSK_FIELD_STABILIZER requests the controller-object writes and requires the
-// rescale. See WORK_DOC.md, "Open field-jitter investigation".
+// DUSK_FIELD_ENGINE_FIX overrides the threshold rescale.
+// DUSK_FIELD_STABILIZER overrides the controller-object writes and requires the
+// rescale. See WORK_DOC.md, "The field-jitter fix".
 // `exeBuild` selects the address pack (BuildEnglish / BuildMultilingual); the
 // caller has already fingerprinted the executable. Nothing else about the Phyre
 // descriptor is relevant here -- the field fix shares no address with the atlas

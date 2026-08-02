@@ -23,7 +23,7 @@ This is the sibling of `../atelier-arland-fixes`. Read that repository's `AGENTS
 
 ## Documentation policy
 
-This repository is still pre-release. `WORK_DOC.md` is its detailed technical and investigation record and may contain shipped measurements, work in progress, open questions and unvalidated ports. Keep it current as code and evidence change. The concise task queue is `../atelier-re-tools/DUSK.md`; do not create a second TODO or handoff file. There is no `TECHNICAL.md` yet. Create one from finalized, measured behaviour only when the first version of the mod is ready.
+This repository is still pre-release. `WORK_DOC.md` is its detailed technical and investigation record and may contain shipped measurements, work in progress, open questions and unvalidated ports. Keep it current as code and evidence change. The concise task queue is `../atelier-re-tools/DUSK.md`; do not create a second TODO or handoff file. `TECHNICAL.md` is the release-facing draft of finalized, measured behavior only; do not move open investigations or unvalidated ports into it. Refresh it as the first version approaches release.
 
 ## Game copies
 

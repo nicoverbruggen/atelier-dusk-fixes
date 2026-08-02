@@ -14,6 +14,7 @@
 #include <cstring>
 
 #include "field_physics.h"
+#include "../core/game.h"
 #include "../core/log.h"
 #include "../core/mem.h"
 
@@ -85,34 +86,31 @@ const FieldPhysicsAddrs* addressesFor(uint8_t exeBuild) {
 
 float* g_moveThreshold = nullptr;   // null unless verified and made writable
 
-// OPT-IN. The threshold address and its single reader are verified statically,
-// but an Ayesha runtime test established that this Arland-derived rescale does
-// not fix the problem. Keep it only as an investigation switch.
+// ON BY DEFAULT, through the capability matrix. The threshold address and its
+// single reader are verified statically, and the fix is confirmed in game.
+//
+// This MUST go through featureEnabled() rather than reading the environment
+// directly. Both halves once did the latter, which silently pinned them off
+// after the matrix promoted them: the log reported `FieldEngineFix = on` from
+// the matrix while installFieldPhysics saw false and logged
+// `FIXES field_physics=off`. featureEnabled() is the only thing that knows
+// about the matrix, the Unsupported hard-off, and the environment override,
+// and every gate in this tree has to ask it rather than reimplement a third of
+// it.
 bool engineFixEnabled() {
-  static const bool enabled = [] {
-    const char* value = std::getenv("DUSK_FIELD_ENGINE_FIX");
-    return value && value[0] != '0';
-  }();
-  return enabled;
+  return featureEnabled(Feature::FieldEngineFix);
 }
 
-// OPT-IN, and the more dangerous of the two: unlike the rescale, which writes one
-// verified constant, the stabilizer WRITES INTO THE CONTROLLER OBJECT at offsets
-// (kVelYOffset, kAirTimerOffset) carried over from the Arland builds. Those
-// offsets are established in Arland only. Ayesha's Update matches on prologue
-// and homologue vote, but its layout has NOT been confirmed, the current port
-// failed its runtime test, and a wrong offset here corrupts live game state
-// rather than merely failing.
+// ON BY DEFAULT, and the half that writes into live game state: unlike the
+// rescale, which writes one verified constant, the stabilizer writes into the
+// CONTROLLER OBJECT at kVelYOffset and kAirTimerOffset. Those offsets came from
+// the Arland builds and have since been confirmed against both Ayesha builds
+// (see the comment on the offset constants above), which is what allowed this
+// to ship on rather than as an investigation switch.
 //
-// DUSK_FIELD_TRACE=1 reads the same offsets and is the starting point for fresh
-// analysis. Plausible values are necessary but no longer sufficient evidence
-// that this stabilizer is correct.
+// Same rule as engineFixEnabled: ask featureEnabled(), never getenv.
 bool stabilizerEnabled() {
-  static const bool enabled = [] {
-    const char* value = std::getenv("DUSK_FIELD_STABILIZER");
-    return value && value[0] != '0';
-  }();
-  return enabled;
+  return featureEnabled(Feature::FieldStabilizer);
 }
 
 // Rescale the resolver's minimum-movement threshold for this frame's duration,

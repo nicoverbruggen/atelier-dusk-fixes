@@ -1193,6 +1193,31 @@ described here, gravity integrating against the surface while sub-threshold move
 are discarded, is the reading the code comments and the measured sawtooth agree
 on, not something a trace has confirmed instruction by instruction.
 
+#### A second configuration trap, in the same shape as the first
+
+Promoting the two halves in the capability matrix did not turn them on. The
+matrix said `OnByDefault`, `logConfiguration()` printed `FieldEngineFix = on`
+and `FieldStabilizer = on`, and the module still logged
+`FIXES field_physics=off` on the next run.
+
+The cause was `engineFixEnabled()` and `stabilizerEnabled()` in
+`field_physics.cpp`, which each read their environment variable directly with
+`std::getenv` and returned false when it was absent. They predated the matrix
+carrying these features and were never rewired, so the promotion had no path to
+reach them: `phyre.cpp` asked `featureEnabled()` and installed the module, and
+the module then asked itself and declined. Both now call `featureEnabled()`,
+which is the only thing that knows about the matrix, the `Unsupported` hard-off
+and the environment override at once.
+
+This is the same failure as the `DUSK_HIGHRES=0` pin in `04-run-ayesha.sh`: a
+second, partial answer to "is this feature on" that disagrees with the real one.
+It is also the second time the log's `Config:` block is what made it findable,
+which is the argument for keeping every shipping fix listed there even though
+none of them has an ini key any more. A sweep for `getenv` outside
+`featureEnabled()` now finds only `DUSK_FIELD_TRACE` (a diagnostic with no
+matrix entry) and `DUSK_DISABLE` (the global kill switch), which are both
+legitimately direct.
+
 #### The controller offsets, confirmed on both builds
 
 The offsets were carried over from Arland and were for a long time the one part

@@ -1,0 +1,145 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Build the released binaries with MSVC rather than the local MinGW cross-build.
+# MSVC output is less likely to trip antivirus ML heuristics, and one job per
+# architecture keeps the compiler environment unambiguous: x64 for the game DLL
+# and launcher, x86 for the 32-bit front-end proxy.
+jobs:
+  build-x64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+      - run: pip install meson ninja
+      - uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+      # Static CRT linking means the drop-in release does not require a Visual
+      # C++ redistributable installed separately on the player's machine.
+      - run: meson setup build64 --buildtype release -Db_vscrt=static_from_buildtype
+      # Resource compilers embed manifests without validating their XML. Windows
+      # otherwise reports only a vague side-by-side configuration failure.
+      - name: Check launcher manifest
+        run: python -c "import xml.dom.minidom; xml.dom.minidom.parse('src/launcher/dusk-fix-launcher.manifest')"
+      - run: meson compile -C build64
+      - name: Check d3d11 proxy exports
+        run: python scripts/check_exports.py build64/d3d11.dll
+      - uses: actions/upload-artifact@v7
+        with:
+          name: d3d11
+          path: |
+            build64/d3d11.dll
+            build64/dusk-fix-launcher.exe
+
+  build-x86:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+      - run: pip install meson ninja
+      - uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x86
+      - run: meson setup build32 --buildtype release -Db_vscrt=static_from_buildtype
+      - run: meson compile -C build32
+      - name: Check msimg32 proxy exports
+        run: python scripts/check_exports.py build32/msimg32.dll
+      - uses: actions/upload-artifact@v7
+        with:
+          name: msimg32
+          path: build32/msimg32.dll
+
+  # Assemble the archive on every build so the tested artifact has the same
+  # layout users will receive from a tagged release.
+  package:
+    needs: [build-x64, build-x86]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+      - uses: actions/download-artifact@v8
+        with:
+          name: d3d11
+          path: dist
+      - uses: actions/download-artifact@v8
+        with:
+          name: msimg32
+          path: dist
+      - name: Check version
+        run: python3 scripts/read_version.py VERSION
+      - name: Assemble the archive
+        run: |
+          mkdir -p dist/dusk-fix
+          cp README.md CHANGELOG.md ADVANCED.md TECHNICAL.md LICENSE dist/dusk-fix/
+          mkdir -p dist/dusk-fix/LICENSES
+          cp vendor/minhook/LICENSE.txt dist/dusk-fix/LICENSES/MinHook.txt
+          cd dist
+          zip -r ../dusk-fix.zip \
+            d3d11.dll dusk-fix-launcher.exe msimg32.dll dusk-fix
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dusk-fix
+          path: dusk-fix.zip
+
+  release:
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
+        with:
+          name: dusk-fix
+      - name: Name the archive for this tag
+        run: mv dusk-fix.zip "dusk-fix-${GITHUB_REF_NAME}.zip"
+      - name: Publish tagged release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          extract_notes() {
+            awk -v heading="## $1" '
+              $0 == heading || index($0, heading " (") == 1 { found = 1; next }
+              found && /^## v/ { exit }
+              found { print }
+              END { if (!found) exit 1 }
+            ' CHANGELOG.md
+          }
+          BASE_TAG="$(echo "${GITHUB_REF_NAME}" | sed -E 's/-?pre[0-9]*$//I')"
+          if extract_notes "${GITHUB_REF_NAME}" > changes.md; then
+            echo "Release notes from ## ${GITHUB_REF_NAME}"
+          elif [ "${BASE_TAG}" != "${GITHUB_REF_NAME}" ] && \
+               extract_notes "${BASE_TAG}" > changes.md; then
+            echo "No ## ${GITHUB_REF_NAME} heading; using ## ${BASE_TAG}"
+          elif [ "${BASE_TAG}" != "${GITHUB_REF_NAME}" ]; then
+            echo "CHANGELOG.md has neither a ## ${GITHUB_REF_NAME} nor a ## ${BASE_TAG} heading" >&2
+            exit 1
+          else
+            echo "CHANGELOG.md has no ## ${GITHUB_REF_NAME} heading" >&2
+            exit 1
+          fi
+          if echo "${GITHUB_REF_NAME}" | grep -qi 'pre'; then
+            PRERELEASE="--prerelease"
+          else
+            PRERELEASE="--latest"
+          fi
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release edit "${GITHUB_REF_NAME}" --notes-file changes.md $PRERELEASE
+            gh release upload "${GITHUB_REF_NAME}" "dusk-fix-${GITHUB_REF_NAME}.zip" --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" "dusk-fix-${GITHUB_REF_NAME}.zip" \
+              --verify-tag --notes-file changes.md --title "${GITHUB_REF_NAME}" $PRERELEASE
+          fi

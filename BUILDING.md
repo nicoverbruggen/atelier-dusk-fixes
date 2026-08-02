@@ -37,6 +37,10 @@ meson setup build32 --cross-file build-win32.txt --buildtype release
 ninja -C build32
 ```
 
+## Continuous integration
+
+GitHub Actions builds the x64 targets and the x86 launcher proxy with MSVC, checks the required proxy exports, assembles the release archive, and publishes it for version tags. The workflow is `.github/workflows/build.yml`. The local Linux cross-build remains the day-to-day development path and produces the same three artifacts.
+
 ## Deploying
 
 Copy `build64/d3d11.dll` next to the game executable. Add `build64/dusk-fix-launcher.exe` and `build32/msimg32.dll` beside it for the launcher; both are optional, and with either missing the stock launcher comes up as before. Nothing is written to the games' own executables; all patching is in memory and gated on fingerprints.

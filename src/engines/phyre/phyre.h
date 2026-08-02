@@ -42,6 +42,11 @@ struct PhyreGame {
   uintptr_t atlasLockRva;
   uintptr_t atlasUnlockRva;
   std::array<BYTE, 16> unlockExpected;
+  // The CS-guarded pad-create wrapper (core/pad_rescan.h). Its prologue is
+  // displacement-free for only twelve bytes and then carries a per-build
+  // rip-relative operand, so the window is per-row like unlockExpected.
+  uintptr_t padCreateWrapperRva;
+  std::array<BYTE, 16> padCreateExpected;
   uint8_t exeBuild;
 };
 

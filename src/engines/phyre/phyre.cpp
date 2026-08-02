@@ -17,6 +17,7 @@
 #include "scene_target.h"
 #include "worldmap_fix.h"
 #include "../../core/game.h"
+#include "../../core/pad_rescan.h"
 #include "../../core/log.h"
 #include "../../../vendor/minhook/include/MinHook.h"
 
@@ -45,11 +46,17 @@ constexpr PhyreGame kGames[] = {
     0x078320, 0x74bd90, 0x581420, 0x581460,
     { 0x44, 0x8b, 0xc2, 0x33, 0xd2, 0xe9, 0x01, 0xff,
       0xa7, 0xff, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc },
+    0x584fb0,
+    { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b,
+      0xd9, 0x48, 0x8b, 0x0d, 0x80, 0x51, 0x4e, 0x01 },
     BuildEnglish },
   { "Atelier_Ayesha.exe", 0x9a9604,
     0x07a8d0, 0x76e290, 0x5a3920, 0x5a3960,
     { 0x44, 0x8b, 0xc2, 0x33, 0xd2, 0xe9, 0x01, 0xda,
       0xa5, 0xff, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc },
+    0x5a74b0,
+    { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b,
+      0xd9, 0x48, 0x8b, 0x0d, 0xf8, 0xa8, 0x65, 0x01 },
     BuildMultilingual },
 };
 
@@ -124,6 +131,13 @@ bool initializePhyreFixes() {
     // frame instead of per second, in a different subsystem.
     if (wantWorldMap)
       installWorldMapFix(g_base, g_game->exeBuild);
+
+    // Not a Phyre fix at all: the pad layer is Gust framework code shared by all
+    // six DX ports, so core owns the mechanism and this module only supplies the
+    // row. It gates itself on its own feature, which is why there is no `want`
+    // flag here.
+    atfix::installPadRescanBackoff(g_base,
+      { g_game->padCreateWrapperRva, g_game->padCreateExpected });
 
     return true;
   }();

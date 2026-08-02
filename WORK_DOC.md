@@ -243,11 +243,26 @@ whole rasterize-then-read-back round trip; serving reads only would forfeit most
 of the saving. Synthetic locks are tracked per thread and each holds its snapshot
 alive by `shared_ptr`, so a clear or invalidation on another thread cannot free a
 buffer a caller is still reading, and only a matching synthetic unlock is
-suppressed. **Any unmatched real unlock invalidates that texture's snapshot**,
-because the glyph atlas is a single mutable, demand-paged surface and without
-this a glyph paged in after the snapshot is served stale and blits blank — the
-Arland missing-kanji bug. Hooks arm behaviour only after all four install, so a
-partial install is pass-through rather than half-caching.
+suppressed. **Any unmatched real unlock invalidates that texture's snapshot**, so
+a write the mod did not see cannot be served stale. Hooks arm behaviour only
+after all four install, so a partial install is pass-through rather than
+half-caching.
+
+**Correction, from the high-resolution text study.** This paragraph used to say
+the invalidation was needed "because the glyph atlas is a single mutable,
+demand-paged surface", and reasoned about "a glyph paged in after the snapshot"
+producing the Arland missing-kanji bug. The disassembly says otherwise. The
+512×512 surface is **not a packed atlas at all** — it is a **one-glyph scratch**,
+written at (0,0) and read back from (0,0), once per character per pass, with the
+blit reading the mapping base with no glyph offset (`0x74c03a`, `mov rax, [rsp+0x28]`).
+
+So the cache is correct for a stronger reason than paging stability: it serves
+**both** the write and the read from the same buffer, which makes the writer and
+the reader agree by construction. That is also why serving reads alone would have
+been wrong, and why `snapshotDrops=0` is the expected result rather than a lucky
+one. The unmatched-unlock invalidation is still right — it is what keeps a writer
+the mod did not intercept from being papered over — but the "missing kanji under
+paging" risk this section carried as unvalidated does not exist in this shape.
 
 English build, same operations with the cache off and on:
 
@@ -2383,7 +2398,7 @@ it for a live second defect without runtime evidence.
 
 ## The system-save wipe
 
-> **TL;DR**: Escha & Logy and Shallie lose their system save — settings, gallery, costumes, bonus flags — and the cause is not the writer. A failed *load* reports success, a zero-filled buffer is installed over the live data, the deserializer accepts it silently, and the next settings change writes the defaults back over a healthy file. Four independent missing checks. All four KTGL builds are affected.
+> **TL;DR**: Escha & Logy and Shallie lose their system save — settings, gallery, costumes, bonus flags — and the cause is not the writer. A failed *load* reports success, a zero-filled buffer is installed over the live data, the deserializer accepts it silently, and the next settings change writes the defaults back over a healthy file. Four independent missing checks. All four KTGL builds are affected. **Defect reproduced and fix validated in game.**
 
 ### Where it lives
 
@@ -2474,6 +2489,25 @@ All four builds share the defect byte-for-byte at the shared exit, despite Shall
 | `saveSystemData` — no guard | `0x40730` | `0x45ba0` | `0xd7610` | — |
 | shared exit | `0x138ecb` | `0x13fb3b` | `0xc270f` | `0xc3f5f` |
 
+### Reproduced, and the fix validated
+
+**2026-08-02, Escha & Logy EN.** `SYSDATA.pcsave` was backed up and truncated to 0 bytes, then the game was launched with the guard active:
+
+```
+[  17] FIXES system_save=active load_rva=0x138df0 save_rva=0x138a70
+[1644] SYSSAVE load reported success having read 0 bytes -- forced to the
+       engine's read-failure state, and system-data saves are now refused (n=1)
+[1856] SYSSAVE refusing system-data save ...
+```
+
+Three things are established by that run, and the first two are about the *defect* rather than the fix:
+
+1. **Mechanisms 1 and 2 are observed, not inferred.** The game read a zero-byte file, declared success and set its completion flag. No error dialog appeared, which also confirms mechanism 4 — the deserializer accepts an empty blob silently.
+2. **The destructive write was refused, and the file survived.** `SYSDATA.pcsave` was still 0 bytes afterwards. Without the guard it would by then have been a valid ~3 KB file of defaults, which is the irreversible half of the defect.
+3. **`GAMEDATA00.pcsave` was byte-identical to its backup.** This was the outcome most worth checking: both save kinds share `Load::step` and `Save::step`, and a wrong `isSystemData` test would have blocked ordinary game saves. It did not.
+
+The 212-tick gap between the two `SYSSAVE` lines is the shape of the defect in the wild — the load fails silently at startup, and the overwrite happens later, only when the player touches the Options screen.
+
 ### What to measure
 
 Static work is done; three cheap checks close it, and the first is decisive.
@@ -2496,6 +2530,181 @@ None need a new file format and none touch on-disk data. An external backup — 
 
 - These binaries **do** import `GetPrivateProfileSectionW` and `GetPrivateProfileSectionNamesW`. The earlier claim was about `GetPrivateProfileInt`/`String`, which are genuinely absent, but "imports no `GetPrivateProfile*`" would be wrong. The custom key/value reader is still where `Setting.ini` is read, and the system save is a wholly separate mechanism.
 - `nosteam/games/05-escha/Saves/` is **game data** (`Bonus.xml`, `SysMess.xml`, `WorkData.xml`), not save data. Nothing user-writable lives in the game directory.
+
+## KTGL antialiasing feasibility
+
+> **TL;DR**: Both KTGL games are **forward** renderers with a single scene colour + depth pair, so the twin-resource MSAA design ports over. The engine probes for multisampling and then passes a literal zero everywhere, and never calls `ResolveSubresource` at all. Cost is one new hook slot and a scene test whose size predicate is much weaker than Ayesha's.
+
+### Forward, verified by census rather than impression
+
+Every DXBC container under `Data/x64/Shader/*.g1s` (Escha 853, Shallie 1050):
+
+| | Escha | Shallie |
+|---|---|---|
+| PS writing 1 `SV_Target` | 136 | 181 |
+| PS writing 0 `SV_Target` | 17 | 18 |
+| **PS writing >= 2 `SV_Target`** | **0** | **0** |
+
+**No MRT pixel shader exists in either game** — there is no G-buffer writer — and **no `texture2dms` declaration anywhere**, so no shader is written to read a multisampled resource. The zero-target shaders are exactly the shadow casters plus Shallie's `RenderTerrainShadowMap`, not a depth prepass. Bind names are a pure forward material set (`sDiffuse`, `sSpecular`, `sToon`, `sShadow`, `sLit`, ...), and `MapSTD`'s pixel shader does lighting and the 16-tap PCF inline.
+
+The post chain confirms it independently: `Data/x64/PostEffect/pe_pack.elixir.gz` holds 49 (Escha) / 52 (Shallie) fullscreen passes, every one single-target, every one sampling `texScene` and nothing else beyond a glow ladder and a capture texture. Shallie's DOF pass is a 2-tap blur with **no depth input**. There is no deferred lighting pass.
+
+### The engine's MSAA plumbing is complete and never engaged
+
+The graphics layer is byte-identical between the two games. The probe is real — device vtable **slot 30** (`+0xf0`, taken from the MinGW header), three call sites per binary — and walks AA levels 0..2 across 125 formats, storing `min(quality)-1` into `renderer+0x3070/3074/3078`. The sample ladder is `1, 2, 4, 0`, identical to Ayesha's. The view creators are MSAA-aware, picking RTV/DSV dimension 6/7 (`TEXTURE2DMS`) off the descriptor's sample count.
+
+**But the AA level is a hardcoded literal zero at every scene-target creation**, traced argument by argument through the whole factory chain: the scene pair, the shadow pair, the general texture factory and Escha's extra pool all pass a freshly-zeroed register.
+
+**And neither binary calls `ResolveSubresource`.** Exhaustive byte search for context slot 57 finds exactly two hits per binary and both are ordinary C++ virtual calls on game objects.
+
+That kills the cheap alternative: forcing the engine's own AA level would produce multisampled targets that nothing resolves, sampled through `Texture2D` declarations. **The mod has to do it, exactly as on Ayesha.** There is no live setting either — `Setting.ini` carries only `ScreenWidth`/`ScreenHeight`/`Outline` (plus `Shadow` on Shallie).
+
+### Bind flags are computed, not literal — and that is the discriminator
+
+This resolves an "unresolved" left by the shadow investigation, which correctly found no `0x40`/`0x48` literal in either binary. The flags are computed by two sibling factories:
+
+- **`0x3d3f70`** (Shallie `0x3ad250`): `cmovne` picks `0x20` or `0x40`, then **`or eax, 8` unconditionally** → `0x28` / `0x48`.
+- **`0x3d4110`** (Shallie `0x3ad3f0`): the same `cmovne`, and **never ORs in `SHADER_RESOURCE`** → `0x20` / `0x40`.
+
+This cross-validates AGT's runtime-observed shadow descriptor (1024², format 44, BindFlags `0x40`) by a second, independent method: the shadow depth is allocated through the only factory that cannot produce an SRV.
+
+**Side finding that revises the shadow item.** The shipped Escha **1.0.0.1** binary still routes its shadow depth through `0x3d4110`, so it still creates it `DEPTH_STENCIL`-only. Whatever patch 1.01 changed, **it was not the shadow depth's bind flags.**
+
+### The scene pair, and the rule
+
+Both games, from `0x505260` / `0x566280`:
+
+| | colour | depth |
+|---|---|---|
+| size | swap-chain size | swap-chain size |
+| BindFlags | **0x28** `RENDER_TARGET \| SHADER_RESOURCE` | **0x48** `DEPTH_STENCIL \| SHADER_RESOURCE` |
+| format | typeless BGRA8 (90, inferred) | `R24G8_TYPELESS` (44, inferred) |
+| mips / slices / samples | 1 / 1 / 1 | 1 / 1 / 1 |
+
+The rule is Ayesha's with "colour is typeless" swapped for "colour is exactly RT\|SRV". As on Ayesha it must be a **pair** test; neither half is sufficient.
+
+What else in the frame matches:
+
+- **Shadow pair** — excluded twice: wrong size *and* depth is `0x40` not `0x48`. The naive rule the brief warned about is defeated by the depth predicate alone.
+- **Back buffer** — `0x20` from the swap chain; fails the colour predicate.
+- **The real weak point.** Unlike Ayesha, which pins its scene to 1920×1080 while everything else is another shape, **KTGL allocates its scene targets at swap-chain size** — so `matchesSwapChain` is true for the scene pair, the back buffer, the UI composites, and **in Escha only** three further screen-size `0x28` colour targets from a ping-pong pool at `0x50c040`. Those satisfy the colour predicate and are excluded only while never bound alongside the `0x48` depth. **Shallie has no equivalent** — `homolog` cannot find that pool in it at all.
+
+So the existing `MSAA: WARNING a second distinct target pair matched the scene test` diagnostic is **load-bearing on this engine**, not decoration. And the descriptors being identical between the two games does not mean the allocators are: Escha has a whole extra render-target pool Shallie lacks.
+
+### What would break the twin design
+
+**(a) Compute-shader reads of the scene — a new hook is required.** The particle/effect compute shaders embedded in both executables bind the scene colour *and* depth (`texSource`/`texDepth`, `texDepth`/`texNormal`). `msaa.cpp` hooks `PSSetShaderResources` only; it needs **`CSSetShaderResources`, context slot 67 (`+0x218`)**. Without it a compute pass samples an unresolved host and `depthHostReads` reads **zero while depth is being read** — precisely the silent-success failure the rewrite exists to prevent.
+
+**(b) The scene depth carries `SHADER_RESOURCE` in both games** (`0x48`, unlike the shadow depth's `0x40`), so the depth-host-read question is live rather than theoretical. `ResolveSubresource` rejects depth formats, so a non-zero `depthHostReads` means the shader depth-resolve pass has to be written. Note TellowKrinkle's `impl.cpp` strips `SHADER_RESOURCE` off its depth twin — that would be wrong here.
+
+**(c) `CopyResource`/`CopySubresourceRegion`** are already hooked, so covered. The earlier "~9 KTGL-only `CopyResource` sites" figure should be treated as **unconfirmed**: most byte hits are ordinary C++ virtual calls on game objects, not the context.
+
+**(d) UAVs.** `0x3d3f70` can set `BIND_UNORDERED_ACCESS` and one thunk forwards that argument. The accepted risk "UAVs are not saved across a resolve" should be re-checked from the census — look for a scene-size line whose bind flags contain `0x80`.
+
+**(e) Static call-site enumeration of context methods does not work on this engine.** `CSSetShaderResources` has *zero* direct call sites despite the shaders needing it, because KTGL dispatches per-stage setters through computed tables. Vtable hooking is unaffected, but "I found N call sites" is never an upper bound here.
+
+### The one run that settles the rest
+
+`DUSK_TARGET_CENSUS=1`, one session that **reaches a field map** rather than just the title screen:
+
+1. `samples=` on every line should be `1`. Any `2`/`4` falsifies "the engine never multisamples".
+2. The scene pair: two `matchesSwapChain` lines, one `bindFlags=0x28 format=90`, one `bindFlags=0x48 format=44`.
+3. **How many distinct shapes carry `bindFlags=0x28` at swap-chain size** — expect ~1 in Shallie and ~4 in Escha. That count is the direct measure of how ambiguous the scene test is, per game.
+4. The shadow pair, which also re-confirms that 1.01 did not widen the bind flags.
+5. Any scene-size line with `0x80` in the bind flags.
+6. `callerRva` will not discriminate here — every texture funnels through one wrapper. The shape has to carry the rule.
+
+### Cost
+
+Not needed: shader replacement, G-buffer handling, or any change to the resolve model. Needed: a `MsaaSceneTest` in `src/engines/ktgl/` mirroring `scene_target.cpp`; **one additional hook slot, `CSSetShaderResources` (67)**; and a decision on the depth-resolve pass once `depthHostReads` is measured *with the CS hook in place*.
+
+## High-resolution text: Ayesha
+
+> **TL;DR**: There is no rasterizer to re-target — the font is a pre-rendered bitmap asset. What is reachable is Arland's approach: upscale the engine's own composed string bitmap. And it is *easier* here than in Arland, because everything downstream of the bitmap is normalized, so the most fragile piece of the Arland implementation is not needed.
+
+### There is no font rasterizer
+
+- **No font APIs.** `GDI32.dll` imports exactly one symbol, `GetStockObject`. No `CreateFontIndirect`, no `GetGlyphOutline`, no `AddFontMemResourceEx`, no DirectWrite, no FreeType. Identical in both builds.
+- **No embedded font.** Zero `glyf` and zero `cmap` tag occurrences; no sfnt/OTTO/ttcf table directory.
+- **The shipped asset is a baked bitmap font.** `Res/x64/font/` holds only `ArlandDX_font_jp.g1n` and `ArlandDX_font_ch.g1n` — and the `_ch` file is **md5-identical to Rorona's, Totori's and Meruru's**. The filename says `ArlandDX`: Gust reused the Arland DX text pipeline wholesale.
+- **G1N parsed**: magic `_N1G0000`, sub-image count at `+0x18` (jp 152, ch 175), each carrying a 16-entry palette of the exact form `ffffff00, ffffff11 … ffffffff` — white with a 16-step alpha ramp — over uncompressed 4-bit alpha.
+- **The TTF/OTF paths are dead legacy.** `FOT-NewCinemaAStd-D.otf`, `Uhei00m.ttf`, `bGTR00B.ttf`, `Tuffy.ttf` appear as `.rdata` strings in a language-indexed table at `0x1487ca0`, but **`Res/font/` does not exist in the install** and no font file ships anywhere. Rorona and Meruru carry the same dead strings — PhyreEngine's `PFontWin` path, orphaned by the DX port.
+
+**So "rasterize at display resolution" is impossible without supplying a new font.** That closes the obvious framing outright.
+
+### Size is baked, not derived from resolution
+
+Inside `renderText` (EN `0x74bd90`, ML `0x76e290`) a single `cmove` picks a glyph cell height of **48 or 32 pixels** off a flag at `+0x1c8`; neither branch reads the display size. Per-glyph advances are **hard-coded integers** built into a `(codepoint, width)` table by `0x748320` (ML `0x76a820`, MATCH 87 votes), and all layout is integer pixel arithmetic.
+
+There is **no fixed virtual canvas** the way KTGL has one — the text quad is placed by a transform and sized as `height × aspect`. So there is no clean `display / canvas` factor to attack. This does not affect feasibility; the design below is scale-agnostic.
+
+### The 512×512 surface is a one-glyph scratch
+
+This is the finding that reshapes the item, and it corrects the atlas-cache section above.
+
+`renderText` runs each string **twice** — pass 0 measures and allocates, pass 1 rasterizes and blits — which is exactly the census's `27,568 / 13,784 = 2.000` write:read ratio. Per character, pass 1 does one write-begin, one read-lock, one blit, one unlock. And the blit reads **the mapping base with no glyph offset**:
+
+```
+0x74c020  call 0x3abc                 ; lock -> eax = RowPitch, *out = pData
+0x74c03a  mov  rax, qword [rsp+0x28]  ; the mapped base, unmodified
+0x74c06e  movzx ecx, byte ptr [rax+3] ; alpha of a BGRA texel
+0x74c072  mov  byte ptr [r8+rdx], cl  ; -> 8bpp string bitmap
+```
+
+So each glyph is decoded into the top-left of the surface and read straight back. **"Rasterizing at 2× needs 4× the atlas area" does not apply** — a 48×48 cell in a 512×512 surface has ~113× headroom, and there is no packing or paging problem to solve. The mod's `isMutableFontAtlas` 512×512 assumption stays valid, since the surface shape does not change.
+
+### Everything downstream is normalized — which removes Arland's most fragile hook
+
+`renderText` rounds the composed extent up to a power of two and returns `potW`, `potH`, an 8bpp buffer, and four **fractions** (`usedW/potW`, `usedH/potH`, `lineHeight/potH`). The consumer `setText` (EN `0x74db60`, ML `0x770060`, MATCH 37 votes) creates a texture at exactly `potW × potH`, expands 8bpp alpha to BGRA, frees the buffer with the engine's own free, writes four **normalized** UV pairs, and stores **only an aspect ratio** at widget `+0x348`:
+
+```
+0x74de77  mulss xmm1, xmm6      ; potW * (usedW/potW)
+0x74de83  mulss xmm0, xmm7      ; potH * (usedH/potH)
+0x74de8c  divss xmm1, xmm0      ; usedW / usedH
+```
+
+`+0x348` is read only as `width = height × aspect`, where the height comes from the widget rather than from `potH`.
+
+**So a uniform k× of the bitmap changes nothing on screen.** UVs are fractions and the aspect is invariant under uniform scaling. Arland needed `hiResTextRestoreDims()` because its auto-size widgets read the raw dimensions back; on the static evidence **Ayesha does not need that hook at all**. That is the largest difference from Arland and it removes its most fragile piece.
+
+`setText` is the single funnel — 16 confirmed callers through thunk `0x4ae3` — and `renderText` has exactly three entries, so hooking `renderText` covers all of them.
+
+### Addresses this study establishes
+
+| anchor | Ayesha EN | Ayesha ML | evidence |
+|---|---|---|---|
+| `setText` | `0x74db60` | `0x770060` | homolog MATCH 37/0, prologue identical |
+| `setText` thunk | `0x4ae3` | — | 16 confirmed callers |
+| glyph metrics / prepare | `0x748320` | `0x76a820` | MATCH 87/1, size `0x2827` both |
+| text-bitmap alloc (thunk) | `0x2d9510` | `0x2e4800` | EN verified; ML inferred from byte shape |
+| text-bitmap free | `0x2d93b0` | `0x2e46a0` | MATCH 20/0 |
+| font-path table (dead) | `0x1487ca0` | — | 5 entries, none of which ship |
+
+Thunk resolution cross-checks the existing hook map exactly: `0x3abc -> 0x581420` (lock), `0x1163 -> 0x581460` (unlock stub), `0x136b -> 0x581470` (unlock impl).
+
+### Designs, ranked
+
+**A — upscale the engine's own composed bitmap. Recommended.** Hook `renderText`; on return, allocate `2*potW × 2*potH` through the engine allocator, bilinear-upscale with alpha-coverage steepening, free the old buffer, write back. Keep all four fractions. **No consumer hook and no dimension restore.** Preserves layout, alignment, multi-line and the game's icon glyphs exactly, because the content is the engine's own. It buys smoothness, not detail — a 48 px glyph with 16 alpha levels has no more information to recover. `atelier-arland-fixes/src/font_hires.cpp` already contains this code; the port *removes* a hook rather than adding one.
+
+**B — re-render from a bundled scalable font.** Genuine detail, but it must honour the hard-coded integer advances rather than the font's own metrics, or line breaks move. Blocked on the multilingual build by CJK coverage. Medium risk on EN, high on ML.
+
+**C — render text to a higher-resolution overlay.** Rejected: the UI is transformed quads composited into the scene, not a separate 2D pass, and it would collide with the SSAA back-buffer redirect and the high-res target substitution.
+
+**D — force the 48 px variant everywhere.** Rejected: the advance table is size-dependent, so this changes metrics, which means it changes layout.
+
+### What would falsify it
+
+1. **The scale-invariance claim itself** — the cheapest and most important test. Substitute doubled dimensions while leaving the bitmap content alone. Text at the same size (garbled but the same box) confirms the analysis; text at double size means an absolute-pixel reader exists and Arland's restore hook must be ported after all. Five lines, one run.
+2. **Aspect drift.** `+0x348` must be bit-identical with the feature on and off for a fixed string.
+3. **Multi-line and alignment** — save-slot lists, item descriptions, quest text, the synthesis recipe list. Line breaks must fall on the same words.
+4. **Icon glyphs**, which are glyphs in the same G1N.
+5. **Language switch and the ML build** — a kanji-heavy string, Simplified and Traditional Chinese, and RSS over a long session.
+6. **Interaction with the atlas cache.** Design A runs *after* `renderText`, so atlas traffic must be unchanged and `snapshotDrops` must stay 0. Measure with the cache off and on.
+7. **Memory ceiling.** `potW` is a power of two with no upper clamp, so the substitution must refuse above a byte budget as Arland's does.
+
+### Licensing
+
+The G1N carries no name table, so the baked face is not identifiable from the asset. The dead path strings name proprietary PS3-era faces. **Design A never ships a font**, which is most of the reason to prefer it. Design B's coverage bar is set by the multilingual build — Latin-1, full-width ASCII, CJK brackets, Roman numerals, kana, kanji, Simplified and Traditional Chinese — where the only realistic openly licensed answer is Noto Sans CJK / Source Han Sans (SIL OFL) at roughly 20 MB per weight per variant. That is why the Arland project wired substitution to the **English builds only**, and the same restriction should be the default here.
 
 ## The KTGL shadow subsystem
 
@@ -2595,7 +2804,7 @@ The "byte-identical" pattern that has held everywhere else **breaks on this subs
 
 ## Shallie's control-hint panel
 
-> **TL;DR**: The bottom-corner controls hint is not driven by an SCL animator — it is a hand-rolled easing loop in one function, `ButtonHelp::Update` (EN `0x48da0`, ML `0x48b80`). Suppressing the slide is a one-function hook that passes a larger `dt`; nothing is patched and nothing is forced into a state the object could not reach itself. Escha does not have this panel at all.
+> **TL;DR**: The bottom-**right** controls hint is not driven by an SCL animator — it is a hand-rolled easing loop in one function, `ButtonHelp::Update` (EN `0x48da0`, ML `0x48b80`). Suppressing the slide is a one-function hook that passes a larger `dt`; nothing is patched and nothing is forced into a state the object could not reach itself. Escha does not have this panel at all. **Shipped and validated in game.**
 
 ### The animator lead was wrong, and cleanly so
 
@@ -2646,17 +2855,17 @@ Most likely the containing UI manager is reconstructed per game mode or event st
 
 A three-value per-frame probe settles it: the singleton pointer `0xded5a0`, `[obj+0xd39]`, and pane 0's `x`. A changing pointer means recreation; a toggling flag means the suppression path; neither means re-flow.
 
-### A discrepancy to check in game
+### The position discrepancy, resolved
 
-The report says lower-**left**. Everything in the binary says bottom-**right**: panes park at `x = 1280` (the right edge of the 1280×720 authoring canvas), lay out leftwards from 1240, sit at `y = 678`, and the shade stretches to 1280. The 9-slice art `gen_common03_helpbg` has `edge_margin="271,16,96,61"` — a wide decorated *left* cap and a plain right end that runs off screen, which fits a right-anchored bar whose left end is the part that moves.
+The report said lower-**left**; everything in the binary said bottom-**right**, and **the binary was right** — confirmed in game. Recording the reasoning because it is the kind of disagreement that is cheap to resolve and expensive to guess at: everything in the binary said bottom-**right**: panes park at `x = 1280` (the right edge of the 1280×720 authoring canvas), lay out leftwards from 1240, sit at `y = 678`, and the shade stretches to 1280. The 9-slice art `gen_common03_helpbg` has `edge_margin="271,16,96,61"` — a wide decorated *left* cap and a plain right end that runs off screen, which fits a right-anchored bar whose left end is the part that moves.
 
 The alternatives were ruled out rather than assumed. `Saves/ui/common/uil_line_help.xml` has genuine SCL `anim_ctrl` fade animations and would have been a perfect fit for "replays its entrance animation" — but **its name does not appear in the executable at all**, nor does `uil_prompt`. The shipped `Saves/ui` tree includes the whole authoring set, samples included, so unreferenced layouts are expected. A scan of `.rdata` for bottom-left park coordinates found one unrelated hit.
 
-**Discriminator:** if the panel slides in horizontally, this is the right element. If it fades in on the spot, the analysis needs redoing.
+**Discriminator, now resolved:** the panel slides in horizontally, so this was the right element. Both the position and the mechanism check out.
 
 ### Suppression options, ranked
 
-**1 — Force the ease to converge in one frame. Recommended.** Hook `Update` and call the original with `dt = 0.1f`. `dt` is consumed at exactly one instruction, and the step is `|delta| * 10.0f * xmm10`; at `xmm10 = 0.1` that is `|delta| * 1.0`, so each pane lands exactly on target in one frame using the game's own overshoot guards. No patched bytes, no unreachable state, switchable per frame. The `0.1` also reaches `CLayout::Update`, which clamps internally to `1/60` — and neither layout carries any `anim_ctrl`, so that is inert. Residual: the *exit* runs at 4000 px/s, so departing prompts still take ~3 frames; raise the forced `dt` if that reads as motion, since the clamp makes it free.
+**1 — Force the ease to converge in one frame. SHIPPED, and validated in game.** Hook `Update` and call the original with `dt = 0.1f`. `dt` is consumed at exactly one instruction, and the step is `|delta| * 10.0f * xmm10`; at `xmm10 = 0.1` that is `|delta| * 1.0`, so each pane lands exactly on target in one frame using the game's own overshoot guards. No patched bytes, no unreachable state, switchable per frame. The `0.1` also reaches `CLayout::Update`, which clamps internally to `1/60` — and neither layout carries any `anim_ctrl`, so that is inert. Residual: the *exit* runs at 4000 px/s, so departing prompts still take ~3 frames; raise the forced `dt` if that reads as motion, since the clamp makes it free.
 
 **2 — Hide the panel outright.** No-op `Draw` (EN `0x49550`, ML `0x49330`). `Update` keeps running, so all internal state stays coherent and only display-list submission is skipped. `0x49550` has a second caller at `0x7ab05` on the same global object, which the no-op also covers. This is the bigger behavioural change and should be the option rather than the default.
 
@@ -2935,9 +3144,70 @@ A claim that it works must survive all four:
 
 Passing (2) while failing (1) is the classic false positive here, and this project's history has several.
 
+## Controller-absence rescan
+
+> **TL;DR**: All six DX ports share one Gust input layer that rescans for a pad once per 60 input-update ticks while none is present, and stops permanently once one is found. The shape matches the reported stutter. The suspected cost is DirectInput enumeration under Proton, which is **not measured**. No code yet.
+
+### The hypothesis that turned out to be wrong
+
+The reported symptom — repeated stutter with no controller connected — has a classic cause: polling all four XInput slots every frame with no backoff, since `XInputGetState` on an empty slot is historically expensive. **These games do not do that**, and the standard remedy for it would not help here.
+
+- Every executable imports exactly **two** XInput entries, **by ordinal**, from `XINPUT1_3.dll`: ord 2 `XInputGetState`, ord 3 `XInputSetState`. Ordinals confirmed against the `xinput1_3.dll` in the game prefixes. No `XInputGetCapabilities`, no `XInputEnable`, no `RegisterRawInputDevices`, no `HidD_*`, no `joyGetPosEx`.
+- `XInputGetState` has exactly **two** static call sites per executable: the pad create and the pad update.
+- The `0..3` loop in the create function is a **free-slot search over an internal occupancy bitmask**, not an XInput enumeration. It exits at the first clear bit and issues exactly one `XInputGetState` — always slot 0 when nothing is allocated.
+- The pad update path is reachable only for a pad that was created over XInput, so with no controller it never runs at all.
+- **A backoff already exists.** `cmp eax, 0x3c` gates the rescan to once per 60 input-update ticks, and a non-null `g_pad0` skips the block outright.
+
+The engine split does not apply here: Ayesha's pad-create is byte-identical to Escha's and Rorona's modulo displacements. This is Gust's own pad layer, shared across all six ports, PhyreEngine and KTGL alike.
+
+### Where the two engines do diverge, and why it decides the fix
+
+- **Ayesha and the three Arland games** run the descriptor **twice** per rescan. `test ebx,ebx / cmove r8, rsi` forces the `IDirectInput8*` field to NULL on pass 0, taking the XInput branch, then restores it on pass 1 for the DirectInput branch. Cost per rescan: one `XInputGetState(0)` **plus** one `IDirectInput8::EnumDevices(DI8DEVCLASS_GAMECTRL, cb, ref, DIEDFL_ATTACHEDONLY)`.
+- **Escha & Logy and Shallie** make a single attempt and always pass the live `IDirectInput8*`, so `PadCreate`'s `cmp [rcx+8], 0` never takes the XInput branch. **Their XInput code is dead unless `DirectInput8Create` itself failed**, and their entire controller-absence cost is DirectInput enumeration. They also retry a keyboard device and a third device in the same block.
+
+So hooking `XInputGetState` — the textbook remedy — would do **nothing** for two of the three Dusk games and would remove only the cheap half in the third.
+
+### Addresses (EN builds)
+
+| | Ayesha | Escha | Shallie | Rorona | Totori | Meruru |
+|---|---|---|---|---|---|---|
+| input update (holds gate) | `0x1a2260` | — | — | `0x13cef0` | `0x1975c0` | `0x15ca00` |
+| `cmp eax, 0x3c` gate | `0x1a239f` | `0x4d29b4` | `0x54f834` | `0x13d018` | `0x1976e8` | `0x15cb28` |
+| `EnsurePad` | `0x1a2b50` | `0x4d29a0` | `0x54f820` | `0x13d2c0` | `0x197ae0` | `0x15cda0` |
+| PadCreate wrapper (CS-guarded) | `0x584fb0` | `0x5d0640` | `0x5d5170` | `0x3f1e60` | `0x4d58a0` | `0x3eb980` |
+| PadCreate (DI-or-XInput branch) | `0x585010` | `0x5d0690` | `0x5d51c0` | `0x3f1eb0` | `0x4d58f0` | `0x3eb9d0` |
+| XInput pad create | `0x585220` | `0x5d0830` | `0x5d5360` | `0x3f2050` | `0x4d5a90` | `0x3ebb70` |
+| XInput pad update | `0x585d60` | `0x5d1140` | `0x5d5c70` | `0x3f2960` | `0x4d63a0` | `0x3ec480` |
+| `g_pad0` | `0x166c0e0` | `0x10c3040` | `0x10d0bb0` | `0x10e6b50` | `0xcddc00` | `0xfe74a0` |
+| retry counter | `0x166d2f0` | `0x10c3058` | `0x10d0bc8` | `0x10e7768` | `0xcde818` | `0xfe83c0` |
+
+Every wrapper and `EnsurePad` RVA is a confirmed primary function start. Ayesha's chain routes through incremental-link thunks (`0x8e72`, `0x124b3`, `0x1ea5b`, `0x2944c`) and had to be enumerated through them; Escha, Shallie and the Arland games call directly. Escha's `IDirectInput8*` global is `0x10c31d0`, written by the `DirectInput8Create` caller `0x4d3670`.
+
+Ayesha's XInput IAT slots sit at implausible-looking RVAs (`0x50dbbd08`, `0x50dbb128`) — that is real, not a parsing error: its `.data` has `VirtualSize = 0x4fa861f1`, pushing every later section past `0x50000000`.
+
+### What is not established
+
+That `EnumDevices` under Proton is expensive enough to be visible. Wine routes it through the HID/SetupDi device tree, which is plausibly multi-millisecond on a machine with several HID devices — but that is reasoning about Wine, not evidence from these binaries. The XInput half is almost certainly negligible: one call, one slot, once per ~61 ticks.
+
+The cadence is also inferred rather than measured. The gate counts calls to the input-update entry point, not wall time. That entry has 33 static callers in Ayesha, 16 in Rorona, 7 in Escha — the shape of one "poll input" helper called once per iteration of whichever loop is active. If that is once per rendered frame, the period is ~1 s at 60 Hz and ~0.42 s at the 144 Hz this project tests at.
+
+### The measurement that settles it
+
+1. Boot each game with **no** controller, then **with** one, and confirm the stutter appears only in the first case.
+2. Put a QPC timer around the PadCreate wrapper and log the duration. A periodic spike ≥ 3 ms confirms the mechanism; consistently < 0.5 ms falsifies it and the stutter is something else entirely.
+3. Log the wall-clock interval between successive wrapper entries. That converts the 60-tick gate into an observed period, settles the cadence question, and can be compared directly against the observed stutter period.
+
+### The fix, if it is confirmed
+
+Hook the **PadCreate wrapper** and return NULL without calling through unless N seconds of wall clock have elapsed since the last *failed* attempt. That is precisely scoped to the pad, leaves Escha's and Shallie's keyboard and third-device retries alone, and preserves hot-plug at a longer period. All six targets are primary function starts, so the house `matches(target, *Expected)` + `installMinHookDetour` idiom applies unchanged; the ML builds would need `homolog` runs.
+
+Rejected alternatives: hooking `EnsurePad` also suppresses the other device creations in the KTGL games; patching the `cmp eax, 0x3c` immediate tops out at `0x7f` because it is an imm8; vtable-hooking `IDirectInput8::EnumDevices` (slot 4) reaches the actual cost but needs the live object read out of the global after startup and is the most fragile of the four.
+
+Arland carries the mechanism instruction-for-instruction, so one hook table covers all six games. It has also shipped a long time with no such report, which is weak evidence against the hypothesis.
+
 ## The "Loadning system data." typo
 
-> **TL;DR**: Escha & Logy and Shallie misspell "Loading" on the first screen of the game. The word is a plain string literal in each executable's `.rdata`, so the mod corrects the 22 bytes in the loaded image at startup. First fix shipped for the KTGL module. Nothing on disk is touched.
+> **TL;DR**: Escha & Logy and Shallie misspell "Loading" on the first screen of the game. The word is a plain string literal in each executable's `.rdata`, so the mod corrects the 22 bytes in the loaded image at startup. **Validated in game in both titles** — the KTGL module's first shipped fix. Nothing on disk is touched.
 
 ### The defect
 
@@ -3023,13 +3293,19 @@ read out of one specific compile. The per-build RVA moved into `atfix::KtglGame`
 in `ktgl.h`, mirroring `atfix::PhyreGame`: the module entry point recognizes the
 executable once and hands each fix the base plus the verified descriptor.
 
-### Not yet confirmed in game
+### Confirmed in game
 
-The correction is verified statically — the bytes, the addresses and the
-references are all read out of the four shipped executables — but no run has been
-made to see the corrected line on screen. That is a one-launch check on Escha &
-Logy: start the game and read the status line on the first screen. The log line
-to look for is `FIXES loading_text=active rva=0x...`.
+**Validated in both games** — the corrected line reads `Loading system data.` on
+the first screen of Escha & Logy and of Shallie. This is the KTGL module's first
+shipped fix.
+
+One operator note from that validation, worth keeping because it cost a run: the
+first Shallie test appeared to fail, and the cause was that only Ayesha had been
+redeployed — Shallie was still running a DLL from earlier in the day.
+`tools/build-deploy-dusk.sh` fans out to all three games by default, so the fix
+is to use it rather than copying by hand. Deploying over a *running* process is
+the other half of the same trap: the script renames into place rather than
+overwriting the inode, but a game already running keeps the old DLL mapped.
 
 ## Runtime memory manipulation
 

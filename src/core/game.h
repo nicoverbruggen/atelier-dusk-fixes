@@ -57,6 +57,9 @@ enum class Feature : uint8_t {
   AnisotropicFiltering, // any game: upgrade trilinear samplers (sampler.h)
   WorldMapCursor,   // Ayesha: travel-map cursor moves per second, not per frame
   LoadingTextTypo,  // Escha & Logy, Shallie: "Loadning" -> "Loading"
+  SystemSaveGuard,  // Escha & Logy, Shallie: refuse to overwrite a failed load
+  ControlPromptHold,// Shallie: the control-hint panel stops replaying its slide
+  PadRescanBackoff, // any game: rate-limit the controller rescan (unmeasured)
   Count,
 };
 

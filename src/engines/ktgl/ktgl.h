@@ -21,6 +21,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#include <array>
 #include <cstdint>
 
 namespace atfix {
@@ -37,7 +38,16 @@ namespace atfix {
 struct KtglGame {
   const char* executable;
   DWORD textSize;
-  uintptr_t loadingTextRva;   // the "Loadning system data." literal in .rdata
+  uintptr_t loadingTextRva;       // the "Loadning system data." literal in .rdata
+  uintptr_t systemLoadStepRva;    // PlatformSteam::Load::step  (system_save_fix.h)
+  uintptr_t systemSaveStepRva;    // PlatformSteam::Save::step  (system_save_fix.h)
+  uintptr_t controlPromptUpdateRva; // ButtonHelp::Update, Shallie only
+  uintptr_t controlPromptDrawRva;   // ButtonHelp::Draw, Shallie only
+  uintptr_t padCreateWrapperRva;  // the CS-guarded pad create (core/pad_rescan.h)
+  // The pad wrapper's prologue is displacement-free for only twelve bytes and
+  // then carries a per-build rip-relative operand, so this window cannot be
+  // shared the way the save-path ones are.
+  std::array<BYTE, 16> padCreateExpected;
   uint8_t exeBuild;
 };
 

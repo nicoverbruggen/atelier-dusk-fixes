@@ -11,8 +11,12 @@
 
 #include "ktgl.h"
 
+#include "control_prompt_fix.h"
 #include "loading_text_fix.h"
+#include "system_save_fix.h"
 #include "../../core/game.h"
+#include "../../core/pad_rescan.h"
+#include "../../../vendor/minhook/include/MinHook.h"
 #include "../../core/hook_util.h"
 #include "../../core/log.h"
 
@@ -39,11 +43,30 @@ using atfix::log;
 // loadingTextRva is the "Loadning system data." literal in each build's .rdata,
 // derived in WORK_DOC.md, "The 'Loadning system data.' typo". All four differ
 // because these are four separate compiles.
+// A zero in any RVA column means "this fix has no row for this build" and the
+// fix declines. controlPrompt* is zero for both Escha builds because Escha does
+// not have that panel at all -- not because the address is unknown.
 constexpr KtglGame kGames[] = {
-  { "Atelier_Escha_and_Logy_EN.exe", 0x715e8c, 0x7ceed8, BuildEnglish },
-  { "Atelier_Escha_and_Logy.exe",    0x73739c, 0x85e978, BuildMultilingual },
-  { "Atelier_Shallie_EN.exe",        0x6bca4c, 0x76f320, BuildEnglish },
-  { "Atelier_Shallie.exe",           0x6ff53c, 0x7c89c0, BuildMultilingual },
+  { "Atelier_Escha_and_Logy_EN.exe", 0x715e8c, 0x7ceed8,
+    0x138df0, 0x138a70, 0, 0, 0x5d0640,
+    { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b,
+      0xd9, 0x48, 0x8b, 0x0d, 0x98, 0x28, 0xaf, 0x00 },
+    BuildEnglish },
+  { "Atelier_Escha_and_Logy.exe",    0x73739c, 0x85e978,
+    0x13fa60, 0x13f6e0, 0, 0, 0x5f1b70,
+    { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b,
+      0xd9, 0x48, 0x8b, 0x0d, 0x68, 0xef, 0xe7, 0x00 },
+    BuildMultilingual },
+  { "Atelier_Shallie_EN.exe",        0x6bca4c, 0x76f320,
+    0x0c2670, 0x0c28d0, 0x48da0, 0x49550, 0x5d5170,
+    { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b,
+      0xd9, 0x48, 0x8b, 0x0d, 0x98, 0x78, 0xaf, 0x00 },
+    BuildEnglish },
+  { "Atelier_Shallie.exe",           0x6ff53c, 0x7c89c0,
+    0x0c3ec0, 0x0c4120, 0x48b80, 0x49330, 0x617b60,
+    { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b,
+      0xd9, 0x48, 0x8b, 0x0d, 0xa8, 0xa1, 0xe0, 0x00 },
+    BuildMultilingual },
 };
 
 }  // namespace
@@ -89,7 +112,32 @@ bool initializeKtglFixes() {
       return true;
     }
 
+    // The loading-text correction rewrites bytes and hooks nothing, so it runs
+    // before MinHook exists and would still work if MinHook failed entirely.
     installLoadingTextFix(id.base, *game);
+
+    // Everything below detours something, and until this change nothing in this
+    // module ever did -- so MinHook was never initialized on these two games and
+    // every install here failed with MH_ERROR_NOT_INITIALIZED while reporting a
+    // matched prologue. That is the same trap `hookFactoryForSwapChain` fell
+    // into: the Phyre module was the only thing initializing MinHook, and it
+    // does not load on KTGL. A second call answers MH_ERROR_ALREADY_INITIALIZED,
+    // which is a success here.
+    const MH_STATUS init = MH_Initialize();
+    if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
+      log("ktgl: MH_Initialize failed (", MH_StatusToString(init),
+          "); installing no hooks");
+      return true;
+    }
+
+    installSystemSaveFix(id.base, *game);
+    installControlPromptFix(id.base, *game);
+    // The pad rescan is engine-agnostic machinery with a per-executable address,
+    // so core owns the mechanism and this module supplies the row. See
+    // core/pad_rescan.h; the prologue is displacement-free for twelve bytes and
+    // then per-build, which is why the window is stored here rather than shared.
+    atfix::installPadRescanBackoff(id.base,
+      { game->padCreateWrapperRva, game->padCreateExpected });
     return true;
   }();
   return initialized;

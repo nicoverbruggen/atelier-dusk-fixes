@@ -59,6 +59,7 @@ else
     'src/core/hook_util.cpp',
     'src/core/d3d11_hooks.cpp',
     'src/core/highres.cpp',
+    'src/core/mix_card.cpp',
     'src/core/msaa.cpp',
     'src/core/pad_rescan.cpp',
     'src/core/sampler.cpp',

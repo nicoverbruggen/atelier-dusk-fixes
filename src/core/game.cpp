@@ -98,6 +98,8 @@ const Descriptor& descriptor(Feature f) {
                           { "DUSK_CONTROL_PROMPT", "Interface", "SteadyControlPrompt" },
     /* PadRescanBackoff */
                           { "DUSK_PAD_RESCAN",   "Interface", "PadRescanBackoff" },
+    /* SynthesisAnimationRate */
+                          { "DUSK_SYNTH_RATE",        nullptr, nullptr },
   };
   return table[static_cast<int>(f)];
 }
@@ -279,9 +281,9 @@ constexpr Support X = Support::OnByDefault;
 // the extent come from the initializer instead and each static_assert below
 // fails loudly the next time a Feature is added without extending every row.
 //                    Stats Trace Verfy Censu Probe Targt HiRes Cache Field Stab Smaa Msaa Ssaa Aniso WMap Typo
-constexpr Support kAyesha[]  = { O,    O,    O,    O,    O,    O,    X,    X,    X,    X,   X,   O,   O,   X,    X,   U,   U,   U,   O };
-constexpr Support kEscha[]   = { U,    U,    U,    U,    U,    O,    U,    U,    U,    U,   U,   U,   U,   O,    U,   X,   X,   U,   O };
-constexpr Support kShallie[] = { U,    U,    U,    U,    U,    O,    U,    U,    U,    U,   U,   U,   U,   O,    U,   X,   X,   O,   O };
+constexpr Support kAyesha[]  = { O,    O,    O,    O,    O,    O,    X,    X,    X,    X,   X,   O,   O,   X,    X,   U,   U,   U,   O,   U };
+constexpr Support kEscha[]   = { U,    U,    U,    U,    U,    O,    U,    U,    U,    U,   U,   U,   U,   O,    U,   X,   X,   U,   O,   X };
+constexpr Support kShallie[] = { U,    U,    U,    U,    U,    O,    U,    U,    U,    U,   U,   U,   U,   O,    U,   X,   X,   O,   O,   X };
 
 constexpr std::size_t kColumns = static_cast<std::size_t>(Feature::Count);
 static_assert(std::size(kAyesha) == kColumns,  "Ayesha row is not one entry per Feature");

@@ -48,6 +48,7 @@ struct KtglGame {
   // then carries a per-build rip-relative operand, so this window cannot be
   // shared the way the save-path ones are.
   std::array<BYTE, 16> padCreateExpected;
+  uintptr_t mixCardUpdateRva;     // Card::Update, the synthesis pump (core/mix_card.h)
   uint8_t exeBuild;
 };
 

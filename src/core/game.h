@@ -60,6 +60,7 @@ enum class Feature : uint8_t {
   SystemSaveGuard,  // Escha & Logy, Shallie: refuse to overwrite a failed load
   ControlPromptHold,// Shallie: the control-hint panel stops replaying its slide
   PadRescanBackoff, // any game: rate-limit the controller rescan (unmeasured)
+  SynthesisAnimationRate, // Escha & Logy, Shallie: synthesis cards tick at 59.94 Hz
   Count,
 };
 

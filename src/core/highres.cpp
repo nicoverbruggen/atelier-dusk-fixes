@@ -12,37 +12,28 @@
 // a resolution hack for these games; none of its code is used here, and it was
 // not consulted for this.
 //
-// Vtable slots, verified the same way the other hooks in this tree are:
-//
-//   IUnknown             : QueryInterface, AddRef, Release            -- 0-2
-//   ID3D11Device         : its own methods in declaration order, from 3
-//   ID3D11DeviceChild    : GetDevice, Get/SetPrivateData,
-//                          SetPrivateDataInterface                    -- 3-6
-//   ID3D11DeviceContext  : its own methods in declaration order, from 7
-//
-// ID3D11Device's first four are CreateBuffer, CreateTexture1D,
-// CreateTexture2D, CreateTexture3D, so CreateTexture2D is slot 5 (3+2).
-//
-// On the context, counting from VSSetConstantBuffers (7), RSSetViewports is the
-// 38th of its own methods (7+37 = 44) and RSSetScissorRects the 39th (45).
-// These are consistent with the numbers already verified in d3d11_probe.cpp
-// against the same header: Map at 14, CopySubresourceRegion/CopyResource/
-// UpdateSubresource at 46/47/48.
+// This file owns the resolution fix, the census that measured the need for it,
+// and the detours both work through -- but NOT the vtables those detours are
+// installed into. d3d11_hooks.cpp owns those, and owns which of them go in.
+// See that header for why one module holds them: this file used to, and ended
+// up hosting five detours belonging to MSAA, a feature it has nothing to do
+// with.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <d3d11.h>
 
 #include <atomic>
 #include <cstdint>
-#include <cstddef>
+#include <cstdlib>
 #include <string>
 #include <unordered_map>
 
+#include "config.h"
 #include "game.h"
 #include "highres.h"
+#include "supersample.h"
 #include "log.h"
 #include "util.h"
-#include "../../vendor/minhook/include/MinHook.h"
 
 namespace atfix {
 
@@ -241,17 +232,13 @@ bool isPinnedBlurTarget(const D3D11_TEXTURE2D_DESC& desc,
          desc.SampleDesc.Count == 1;
 }
 
-using PFN_CreateTexture2D = HRESULT (STDMETHODCALLTYPE *) (
-  ID3D11Device*, const D3D11_TEXTURE2D_DESC*, const D3D11_SUBRESOURCE_DATA*,
-  ID3D11Texture2D**);
-
-PFN_CreateTexture2D originalCreateTexture2D = nullptr;
+}  // namespace
 
 HRESULT STDMETHODCALLTYPE hookedCreateTexture2D(
     ID3D11Device* self, const D3D11_TEXTURE2D_DESC* desc,
     const D3D11_SUBRESOURCE_DATA* initialData, ID3D11Texture2D** texture) {
   if (!desc)
-    return originalCreateTexture2D(self, desc, initialData, texture);
+    return d3d11DeviceOriginals().createTexture2D(self, desc, initialData, texture);
 
   D3D11_TEXTURE2D_DESC local = *desc;
   const char* action = "passthrough";
@@ -263,26 +250,66 @@ HRESULT STDMETHODCALLTYPE hookedCreateTexture2D(
       g_mainHeight.store(local.Height, std::memory_order_relaxed);
       log("HIGHRES: main render size ", std::dec, local.Width, "x",
           local.Height);
+      UINT ssW = 0;
+      UINT ssH = 0;
+      if (ssaaSceneSize(local.Width, local.Height, &ssW, &ssH))
+        log("FIXES supersampling=", std::dec, ssaaPercent(),
+            "% scene targets ", ssW, "x", ssH, " downscaled to ",
+            local.Width, "x", local.Height, " by the engine's own composite");
       action = "adoptedAsMain";
     } else {
       const UINT mainWidth = g_mainWidth.load(std::memory_order_relaxed);
       const UINT mainHeight = g_mainHeight.load(std::memory_order_relaxed);
+
+      // Supersampling rides this hook rather than owning one. It asks for the
+      // scene to be built larger than it will be displayed; everything after
+      // that is machinery this fix already has. The raster correction carries
+      // the viewport and scissor to whatever target is bound, so the scene pass
+      // follows the enlarged target without knowing anything changed, and the
+      // engine's own composite pass samples that target into the back buffer,
+      // which IS the downscale. See supersample.h for why this replaced a
+      // back-buffer redirect that had nothing to attach to on this engine.
+      //
+      // Note what is NOT scaled: the main size itself. It was learned from a
+      // swap-chain-sized target that the composite pass still pairs with the
+      // back buffer, and enlarging that would leave the two mismatched.
+      UINT sceneWidth = mainWidth;
+      UINT sceneHeight = mainHeight;
+      const bool supersampled =
+        ssaaSceneSize(mainWidth, mainHeight, &sceneWidth, &sceneHeight);
+      (void) mainHeight;
+
       // Only ever scales up. At or below the pinned size there is nothing to
       // correct, and rewriting anyway would mean an ordinary 1080p session
-      // taking a different path from the one the game shipped with.
-      if (mainWidth > kPinnedWidth && mainHeight > kPinnedHeight) {
+      // taking a different path from the one the game shipped with. With
+      // supersampling on, the scene size is what has to clear that bar -- a
+      // 1080p display at 200% wants the enlargement even though its main size
+      // does not exceed the pinned one.
+      if (sceneWidth > kPinnedWidth && sceneHeight > kPinnedHeight) {
         if (isPinnedFullTarget(local, initialData)) {
-          local.Width = mainWidth;
-          local.Height = mainHeight;
-          action = "resizedFull";
+          local.Width = sceneWidth;
+          local.Height = sceneHeight;
+          action = supersampled ? "resizedFull+ssaa" : "resizedFull";
         } else if (isPinnedBlurTarget(local, initialData)) {
-          local.Width = mainWidth / 2;
-          local.Height = mainHeight / 2;
-          action = "resizedBlur";
+          // The blur chain is defined relative to the scene it blurs, not to
+          // the display, so it scales with the scene target.
+          local.Width = sceneWidth / 2;
+          local.Height = sceneHeight / 2;
+          action = supersampled ? "resizedBlur+ssaa" : "resizedBlur";
         }
       }
     }
   }
+
+  // MSAA used to ride this hook, raising the sample count on targets the engine
+  // had already created multisampled. That is gone, and the reason is worth
+  // keeping: those targets were never rendered into. The census reports what
+  // the game CREATES, and six 4-sample targets it allocates at startup and
+  // abandons are indistinguishable, at creation time, from six it uses. Draw
+  // instrumentation settled it -- `drawsToMsaa=0` over 7200 frames -- and the
+  // feature that reported itself active while changing nothing on screen was
+  // this one. MSAA now lives in msaa.cpp, attached to binds rather than
+  // creations, because a bind is the only event that proves use.
 
   // Reported before forwarding and from the descriptor the game asked for, so
   // the census keeps saying what the game wanted; `action` says what it got.
@@ -290,18 +317,21 @@ HRESULT STDMETHODCALLTYPE hookedCreateTexture2D(
     censusReport(*desc, censusCallerRva(), action);
 
   const HRESULT hr =
-    originalCreateTexture2D(self, &local, initialData, texture);
+    d3d11DeviceOriginals().createTexture2D(self, &local, initialData, texture);
   // A resize the driver refuses is not survivable silently: the game would get
   // no texture at all where it expected one. Retry with exactly what it asked
   // for, so the worst case is the unfixed 1080p frame rather than a broken one.
-  if (FAILED(hr) && (local.Width != desc->Width || local.Height != desc->Height)) {
+  if (FAILED(hr) && (local.Width != desc->Width || local.Height != desc->Height ||
+                     local.SampleDesc.Count != desc->SampleDesc.Count)) {
     log("HIGHRES: resize to ", std::dec, local.Width, "x", local.Height,
         " was refused (hr=0x", std::hex, uint32_t(hr), std::dec,
         "); falling back to the game's own ", desc->Width, "x", desc->Height);
-    return originalCreateTexture2D(self, desc, initialData, texture);
+    return d3d11DeviceOriginals().createTexture2D(self, desc, initialData, texture);
   }
   return hr;
 }
+
+namespace {
 
 // ---- raster state ---------------------------------------------------------
 //
@@ -338,65 +368,17 @@ RasterState& rasterStateFor(ID3D11DeviceContext* context) {
   return context == g_immediateContext ? g_immediateRaster : g_deferredRaster;
 }
 
-// Forward declaration: the detours below are referenced by the install table.
-void STDMETHODCALLTYPE hookedRSSetViewports(
-  ID3D11DeviceContext*, UINT, const D3D11_VIEWPORT*);
-void STDMETHODCALLTYPE hookedRSSetScissorRects(
-  ID3D11DeviceContext*, UINT, const D3D11_RECT*);
-
-using PFN_RSSetViewports = void (STDMETHODCALLTYPE *) (
-  ID3D11DeviceContext*, UINT, const D3D11_VIEWPORT*);
-using PFN_RSSetScissorRects = void (STDMETHODCALLTYPE *) (
-  ID3D11DeviceContext*, UINT, const D3D11_RECT*);
-using PFN_Draw = void (STDMETHODCALLTYPE *) (
-  ID3D11DeviceContext*, UINT, UINT);
-using PFN_DrawIndexed = void (STDMETHODCALLTYPE *) (
-  ID3D11DeviceContext*, UINT, UINT, INT);
-using PFN_DrawInstanced = void (STDMETHODCALLTYPE *) (
-  ID3D11DeviceContext*, UINT, UINT, UINT, UINT);
-using PFN_DrawIndexedInstanced = void (STDMETHODCALLTYPE *) (
-  ID3D11DeviceContext*, UINT, UINT, UINT, INT, UINT);
-
-// The originals, one set per context vtable.
-//
-// This is the part the first two attempts got wrong, and it cost two runs to
-// find. MinHook hooks a function ADDRESS, and an address comes from a vtable --
-// so hooking the immediate context's vtable hooks only contexts of that class.
-// D3D11 implementations give deferred contexts a different class with a
-// different vtable, and this engine issues its draws and its raster state on a
-// DEFERRED context: an instrumented 1080p run recorded rsViewports=0 and
-// draws=0 across 1500 frames with all six hooks installed and reporting
-// success, while the device-level CreateTexture2D hook on the same run fired
-// normally.
-//
-// (That also explains why d3d11_probe.cpp's Map hook has always worked on the
-// immediate context: texture uploads go through it. Drawing does not.)
-//
-// So both vtables are hooked, and each detour dispatches to the originals
-// belonging to the vtable its context actually came from.
-struct ContextOriginals {
-  PFN_RSSetViewports rsSetViewports = nullptr;
-  PFN_RSSetScissorRects rsSetScissorRects = nullptr;
-  PFN_Draw draw = nullptr;
-  PFN_DrawIndexed drawIndexed = nullptr;
-  PFN_DrawInstanced drawInstanced = nullptr;
-  PFN_DrawIndexedInstanced drawIndexedInstanced = nullptr;
-};
-
-ContextOriginals g_immediateOriginals;
-ContextOriginals g_deferredOriginals;
-void** g_immediateVtable = nullptr;
-
-// Which set to forward to, decided from the context's own vtable pointer rather
-// than from the object identity: the engine may hold several deferred contexts
-// and they all share one vtable.
-const ContextOriginals& originalsFor(ID3D11DeviceContext* context) {
-  return *reinterpret_cast<void***>(context) == g_immediateVtable
-    ? g_immediateOriginals : g_deferredOriginals;
-}
 
 // The size of whatever is bound as render target 0, or depth-stencil if there
 // is no colour target. Nothing is assumed about which of the two is present.
+// Draws counted by the sample count of the target they landed on. This is the
+// only thing that answers "is the scene actually multisampled" -- the census
+// reports targets the game CREATES, and a 4-sample texture that nothing renders
+// into proves nothing about the picture on screen.
+std::atomic<uint64_t> g_drawsSingleSample{0};
+std::atomic<uint64_t> g_drawsMultiSample{0};
+std::atomic<uint64_t> g_maxBoundSamples{0};
+
 bool boundTargetSize(ID3D11DeviceContext* context, UINT* width, UINT* height) {
   ID3D11RenderTargetView* rtv = nullptr;
   ID3D11DepthStencilView* dsv = nullptr;
@@ -417,6 +399,16 @@ bool boundTargetSize(ID3D11DeviceContext* context, UINT* width, UINT* height) {
       *width = desc.Width;
       *height = desc.Height;
       found = true;
+      if (desc.SampleDesc.Count > 1) {
+        g_drawsMultiSample.fetch_add(1, std::memory_order_relaxed);
+        uint64_t previous = g_maxBoundSamples.load(std::memory_order_relaxed);
+        while (desc.SampleDesc.Count > previous &&
+               !g_maxBoundSamples.compare_exchange_weak(previous,
+                 desc.SampleDesc.Count, std::memory_order_relaxed)) {
+        }
+      } else {
+        g_drawsSingleSample.fetch_add(1, std::memory_order_relaxed);
+      }
       texture->Release();
     }
     resource->Release();
@@ -548,7 +540,7 @@ void updateViewportScissor(ID3D11DeviceContext* context) {
     rewroteScissor = true;
   }
 
-  const ContextOriginals& originals = originalsFor(context);
+  const ContextOriginals& originals = d3d11OriginalsFor(context);
   if (rewroteViewport && originals.rsSetViewports) {
     originals.rsSetViewports(context, 1, &viewport);
     g_viewportRewrites.fetch_add(1, std::memory_order_relaxed);
@@ -559,9 +551,11 @@ void updateViewportScissor(ID3D11DeviceContext* context) {
   }
 }
 
+}  // namespace
+
 void STDMETHODCALLTYPE hookedRSSetViewports(
     ID3D11DeviceContext* self, UINT count, const D3D11_VIEWPORT* viewports) {
-  originalsFor(self).rsSetViewports(self, count, viewports);
+  d3d11OriginalsFor(self).rsSetViewports(self, count, viewports);
   g_rsViewportCalls.fetch_add(1, std::memory_order_relaxed);
   if (g_fixEnabled)
     rasterStateFor(self).dirty.store(true, std::memory_order_release);
@@ -569,7 +563,7 @@ void STDMETHODCALLTYPE hookedRSSetViewports(
 
 void STDMETHODCALLTYPE hookedRSSetScissorRects(
     ID3D11DeviceContext* self, UINT count, const D3D11_RECT* rects) {
-  originalsFor(self).rsSetScissorRects(self, count, rects);
+  d3d11OriginalsFor(self).rsSetScissorRects(self, count, rects);
   g_rsScissorCalls.fetch_add(1, std::memory_order_relaxed);
   if (g_fixEnabled)
     rasterStateFor(self).dirty.store(true, std::memory_order_release);
@@ -583,7 +577,7 @@ void STDMETHODCALLTYPE hookedDraw(
   g_drawCalls.fetch_add(1, std::memory_order_relaxed);
   if (g_fixEnabled)
     updateViewportScissor(self);
-  originalsFor(self).draw(self, vertexCount, startVertex);
+  d3d11OriginalsFor(self).draw(self, vertexCount, startVertex);
 }
 
 void STDMETHODCALLTYPE hookedDrawIndexed(
@@ -592,7 +586,7 @@ void STDMETHODCALLTYPE hookedDrawIndexed(
   g_drawCalls.fetch_add(1, std::memory_order_relaxed);
   if (g_fixEnabled)
     updateViewportScissor(self);
-  originalsFor(self).drawIndexed(self, indexCount, startIndex, baseVertex);
+  d3d11OriginalsFor(self).drawIndexed(self, indexCount, startIndex, baseVertex);
 }
 
 void STDMETHODCALLTYPE hookedDrawInstanced(
@@ -601,7 +595,7 @@ void STDMETHODCALLTYPE hookedDrawInstanced(
   g_drawCalls.fetch_add(1, std::memory_order_relaxed);
   if (g_fixEnabled)
     updateViewportScissor(self);
-  originalsFor(self).drawInstanced(self, vertexCountPerInstance, instanceCount,
+  d3d11OriginalsFor(self).drawInstanced(self, vertexCountPerInstance, instanceCount,
                                    startVertex, startInstance);
 }
 
@@ -611,211 +605,46 @@ void STDMETHODCALLTYPE hookedDrawIndexedInstanced(
   g_drawCalls.fetch_add(1, std::memory_order_relaxed);
   if (g_fixEnabled)
     updateViewportScissor(self);
-  originalsFor(self).drawIndexedInstanced(self, indexCountPerInstance,
+  d3d11OriginalsFor(self).drawIndexedInstanced(self, indexCountPerInstance,
                                           instanceCount, startIndex,
                                           baseVertex, startInstance);
 }
 
-// Same ordering discipline as the other installers in this tree: every
-// MH_CreateHook is attempted before any MH_EnableHook, so a failure partway
-// through leaves every target un-enabled (pass-through) rather than some hooks
-// live and others not. That matters more here than anywhere else -- a live
-// CreateTexture2D hook with a dead raster correction resizes the targets and
-// leaves the viewport behind, which is a visibly broken frame rather than an
-// unfixed one.
-//
-// The first version of this could reach exactly that state silently: the
-// context hooks were skipped when no context was available, and it still
-// logged a flat "installed fix=1". The log now names every hook, and a fix
-// that cannot install its raster correction declines to install at all rather
-// than half-applying itself.
-bool installHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
-  // The Phyre module initializes MinHook for Ayesha, but this subsystem is the
-  // only thing in the tree that hooks anything on Escha & Logy or Shallie, so
-  // it cannot assume someone else has. MinHook answers a second call with
-  // MH_ERROR_ALREADY_INITIALIZED, which is a success for our purposes.
-  const MH_STATUS init = MH_Initialize();
-  if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
-    log("HIGHRES: MH_Initialize failed (", MH_StatusToString(init),
-        "), installing nothing");
-    return false;
-  }
+HighResWants highResResolveWants() {
+  g_fixEnabled = featureEnabled(Feature::HighResRendering);
+  g_censusEnabled = featureEnabled(Feature::TargetCensus);
+  return HighResWants{ g_fixEnabled || g_censusEnabled, g_fixEnabled };
+}
 
-  auto** deviceVtable = *reinterpret_cast<void***>(device);
-  void* createTarget = deviceVtable[5];
-
-  // Context vtable slots, counted from the MinGW/Wine d3d11.h this cross-build
-  // uses: RSSetViewports and RSSetScissorRects are the 45th and 46th entries
-  // (44 and 45 zero-based), and the four draws are Draw 13, DrawIndexed 12,
-  // DrawInstanced 21, DrawIndexedInstanced 20. The same table puts Map at 14
-  // and CopyResource at 47, which is what d3d11_probe.cpp already hooks
-  // successfully -- so the numbering is confirmed against working code, not
-  // just read off a header.
-  // Context vtable slots, counted from the MinGW/Wine d3d11.h this cross-build
-  // uses: RSSetViewports and RSSetScissorRects are the 45th and 46th entries
-  // (44 and 45 zero-based), DrawIndexed 12, Draw 13, DrawIndexedInstanced 20,
-  // DrawInstanced 21. The same table puts Map at 14, which is what
-  // d3d11_probe.cpp already hooks successfully, so the numbering is confirmed
-  // against working code rather than only read off a header.
-  struct HookSpec {
-    int slot;
-    void* detour;
-    size_t originalOffset;   // into ContextOriginals
-    const char* name;
-  };
-  #define ORIGINAL_AT(member) offsetof(ContextOriginals, member)
-  const HookSpec contextHooks[] = {
-    { 44, reinterpret_cast<void*>(&hookedRSSetViewports),
-      ORIGINAL_AT(rsSetViewports), "RSSetViewports" },
-    { 45, reinterpret_cast<void*>(&hookedRSSetScissorRects),
-      ORIGINAL_AT(rsSetScissorRects), "RSSetScissorRects" },
-    { 12, reinterpret_cast<void*>(&hookedDrawIndexed),
-      ORIGINAL_AT(drawIndexed), "DrawIndexed" },
-    { 13, reinterpret_cast<void*>(&hookedDraw),
-      ORIGINAL_AT(draw), "Draw" },
-    { 20, reinterpret_cast<void*>(&hookedDrawIndexedInstanced),
-      ORIGINAL_AT(drawIndexedInstanced), "DrawIndexedInstanced" },
-    { 21, reinterpret_cast<void*>(&hookedDrawInstanced),
-      ORIGINAL_AT(drawInstanced), "DrawInstanced" },
-  };
-  #undef ORIGINAL_AT
-  constexpr int kContextHookCount =
-    int(sizeof(contextHooks) / sizeof(contextHooks[0]));
-
-  // The census alone needs no raster correction, so the context hooks go in
-  // only when the fix is on. A diagnostic that changed raster state would not
-  // be a diagnostic.
-  const bool wantContextHooks = g_fixEnabled;
-  if (wantContextHooks && !context) {
-    log("HIGHRES: no immediate context available, so the raster correction"
-        " cannot be installed; declining to resize targets without it");
-    return false;
-  }
-
-  // Hook one context's vtable, filling `originals` with its trampolines.
-  // Enabling is done here rather than in a second pass because the two vtables
-  // are independent: a deferred context that cannot be hooked is a reason to
-  // decline, and the caller undoes the immediate set in that case.
-  auto hookContextVtable =
-      [&](ID3D11DeviceContext* target, ContextOriginals& originals,
-          const char* which) -> bool {
-    auto** vtable = *reinterpret_cast<void***>(target);
-    auto* base = reinterpret_cast<uint8_t*>(&originals);
-    for (int i = 0; i < kContextHookCount; ++i) {
-      void* fn = vtable[contextHooks[i].slot];
-      void** slot = reinterpret_cast<void**>(base + contextHooks[i].originalOffset);
-      const MH_STATUS created =
-        MH_CreateHook(fn, contextHooks[i].detour, slot);
-      // The two vtables can legitimately share an entry -- an implementation is
-      // free to give both context types the same function for a method that
-      // does not differ. MinHook refuses the second hook on that address, which
-      // is not an error: the first install already covers it. Reuse the
-      // trampoline it produced, which is the one recorded in the immediate
-      // set, since that vtable is always hooked first.
-      if (created == MH_ERROR_ALREADY_CREATED) {
-        auto* immediateBase = reinterpret_cast<uint8_t*>(&g_immediateOriginals);
-        *slot = *reinterpret_cast<void**>(
-          immediateBase + contextHooks[i].originalOffset);
-        continue;
-      }
-      if (created != MH_OK) {
-        log("HIGHRES: MH_CreateHook(", which, "::", contextHooks[i].name,
-            ") failed: ", MH_StatusToString(created));
-        return false;
-      }
-      if (MH_EnableHook(fn) != MH_OK) {
-        log("HIGHRES: MH_EnableHook(", which, "::", contextHooks[i].name,
-            ") failed");
-        return false;
-      }
-    }
-    return true;
-  };
-
-  if (MH_CreateHook(createTarget, reinterpret_cast<void*>(&hookedCreateTexture2D),
-                    reinterpret_cast<void**>(&originalCreateTexture2D)) != MH_OK ||
-      MH_EnableHook(createTarget) != MH_OK) {
-    log("HIGHRES: could not hook CreateTexture2D, installing nothing");
-    return false;
-  }
-
-  int hookedVtables = 0;
-  if (wantContextHooks) {
-    g_immediateVtable = *reinterpret_cast<void***>(context);
-    if (!hookContextVtable(context, g_immediateOriginals, "immediate")) {
-      MH_DisableHook(createTarget);
-      return false;
-    }
-    ++hookedVtables;
-
-    // And the deferred context's vtable, which is where this engine actually
-    // draws. One is created purely to read its vtable and then released; every
-    // deferred context the game makes shares that vtable, so hooking through
-    // ours covers all of them.
-    ID3D11DeviceContext* deferred = nullptr;
-    const HRESULT hr = device->CreateDeferredContext(0, &deferred);
-    if (FAILED(hr) || !deferred) {
-      log("HIGHRES: CreateDeferredContext failed (hr=0x", std::hex,
-          uint32_t(hr), std::dec, "); the raster correction would miss every"
-          " draw this engine issues, so installing nothing");
-      MH_DisableHook(createTarget);
-      return false;
-    }
-    void** deferredVtable = *reinterpret_cast<void***>(deferred);
-    const bool distinct = deferredVtable != g_immediateVtable;
-    log("HIGHRES: context vtables immediate=",
-        reinterpret_cast<void*>(g_immediateVtable),
-        " deferred=", reinterpret_cast<void*>(deferredVtable),
-        distinct ? " (distinct, both hooked)" : " (shared, one hook set)");
-    bool ok = true;
-    if (distinct) {
-      ok = hookContextVtable(deferred, g_deferredOriginals, "deferred");
-      if (ok)
-        ++hookedVtables;
-    } else {
-      // One vtable serves both; the immediate set already covers it.
-      g_deferredOriginals = g_immediateOriginals;
-    }
-    deferred->Release();
-    if (!ok) {
-      MH_DisableHook(createTarget);
-      return false;
-    }
-  }
-
+void highResNoteImmediateContext(ID3D11DeviceContext* context) {
   g_immediateContext = context;
-  log("HIGHRES: installed fix=", g_fixEnabled ? 1 : 0,
-      " census=", g_censusEnabled ? 1 : 0,
-      " contextVtables=", hookedVtables,
-      " hooksPerVtable=", wantContextHooks ? kContextHookCount : 0);
+  // Called only once the install has fully succeeded, which is what makes it
+  // the right place to latch this: the census summary is gated on it, and a
+  // summary reporting "nothing found" after a failed install would be
+  // indistinguishable from one reporting a genuinely quiet frame.
+  g_installed = true;
+}
+
+bool highResSceneSize(unsigned int* width, unsigned int* height) {
+  unsigned int mainWidth = 0;
+  unsigned int mainHeight = 0;
+  if (!highResMainSize(&mainWidth, &mainHeight))
+    return false;
+  if (!ssaaSceneSize(mainWidth, mainHeight, width, height)) {
+    *width = mainWidth;
+    *height = mainHeight;
+  }
   return true;
 }
 
-}  // namespace
-
-void initializeHighRes(ID3D11Device* device, ID3D11DeviceContext* context) {
-  static bool done = false;
-  if (done || !device)
-    return;
-  g_fixEnabled = featureEnabled(Feature::HighResRendering);
-  g_censusEnabled = featureEnabled(Feature::TargetCensus);
-  if (!g_fixEnabled && !g_censusEnabled)
-    return;
-  // If no context came with the device, ask the device for its own rather than
-  // installing a half-fix. This is the case the first version got wrong: the
-  // raster correction was quietly skipped and only the resize went in.
-  ID3D11DeviceContext* owned = nullptr;
-  if (!context) {
-    device->GetImmediateContext(&owned);
-    context = owned;
-  }
-  g_installed = installHooks(device, context);
-  if (owned)
-    owned->Release();
-  // Latched only on success, matching main.cpp's hookPresent: a failed attempt
-  // leaves a later device free to try again rather than doing nothing for the
-  // rest of the session.
-  done = g_installed;
+bool highResMainSize(unsigned int* width, unsigned int* height) {
+  const UINT w = g_mainWidth.load(std::memory_order_relaxed);
+  const UINT h = g_mainHeight.load(std::memory_order_relaxed);
+  if (!w || !h)
+    return false;
+  *width = w;
+  *height = h;
+  return true;
 }
 
 void noteSwapChainSize(unsigned int width, unsigned int height,
@@ -860,6 +689,9 @@ void highResFrameTick() {
       " rsScissors=", g_rsScissorCalls.load(std::memory_order_relaxed),
       " draws=", g_drawCalls.load(std::memory_order_relaxed),
       " updates=", g_updatesEntered.load(std::memory_order_relaxed),
+      " drawsTo1x=", g_drawsSingleSample.load(std::memory_order_relaxed),
+      " drawsToMsaa=", g_drawsMultiSample.load(std::memory_order_relaxed),
+      " maxBoundSamples=", g_maxBoundSamples.load(std::memory_order_relaxed),
       " targetLookupFails=",
         g_targetLookupFails.load(std::memory_order_relaxed),
       " viewportRewrites=", g_viewportRewrites.load(std::memory_order_relaxed),

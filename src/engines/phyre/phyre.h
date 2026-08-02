@@ -9,7 +9,7 @@
 // (WORK_DOC.md "The engine triage"). That is
 // why every fix in this directory is an Arland port and why none of them means
 // anything in Escha & Logy or Shallie -- those are on KTGL and live in
-// `src/ktgl/`.
+// `src/engines/ktgl/`.
 //
 // Everything here is gated on one of the two fingerprinted Ayesha executables.
 #define WIN32_LEAN_AND_MEAN
@@ -18,7 +18,7 @@
 #include <array>
 #include <cstdint>
 
-#include "../core/hook_util.h"
+#include "../../core/hook_util.h"
 
 namespace atfix {
 

@@ -20,7 +20,12 @@
 #include "engine.h"
 #include "game.h"
 #include "log.h"
+#include "d3d11_hooks.h"
 #include "highres.h"
+#include "msaa.h"
+#include "sampler.h"
+#include "smaa.h"
+#include "supersample.h"
 #include "util.h"
 #include "version.h"
 #include "../../vendor/minhook/include/MinHook.h"
@@ -108,6 +113,22 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* swapChain,
   dusk::engineFrameTick();
   d3d11WriteProbeFrameTick();
   highResFrameTick();
+  msaaFrameTick();
+  samplerReport();
+  // Before any present-time pass reads the frame: the scene may still be
+  // sitting in a multisample twin, and SMAA and the downscale both sample the
+  // surface the game believes it composited into. Every other resolve point is
+  // triggered by the game reading a host, and nothing obliges it to do that on
+  // the frame's final pass.
+  msaaResolveBeforePresent(swapChain);
+  // Last thing before the frame is handed over: SMAA runs over the finished
+  // image, so everything the game drew this frame has to be in it already.
+  smaaApply(swapChain);
+  // After smaaApply, never before: this clears the once-per-frame latch that
+  // tells the Present path the pre-UI pass already ran. Resetting it earlier
+  // would let both run, which is precisely the UI softening the pre-UI path
+  // exists to avoid.
+  smaaFrameReset();
   return originalPresent(swapChain, syncInterval, flags);
 }
 
@@ -145,8 +166,9 @@ HRESULT STDMETHODCALLTYPE hookedCreateSwapChain(
     noteSwapChainSize(desc->BufferDesc.Width, desc->BufferDesc.Height,
       desc->BufferDesc.Format, desc->BufferDesc.RefreshRate.Numerator,
       desc->BufferDesc.RefreshRate.Denominator, desc->Windowed != FALSE);
-  if (SUCCEEDED(result) && swapChain && *swapChain)
+  if (SUCCEEDED(result) && swapChain && *swapChain) {
     hookPresent(*swapChain);
+  }
   return result;
 }
 
@@ -240,7 +262,7 @@ DLLEXPORT HRESULT __stdcall D3D11CreateDevice(
     // starts late silently omits the targets built during startup, which is
     // most of them -- and the fix that shares its hook would miss exactly the
     // same ones, which is worse than missing them in a log.
-    atfix::initializeHighRes(*ppDevice,
+    atfix::d3d11InstallHooks(*ppDevice,
       ppImmediateContext ? *ppImmediateContext : nullptr);
   }
 
@@ -279,11 +301,12 @@ DLLEXPORT HRESULT __stdcall D3D11CreateDeviceAndSwapChain(
       pSwapChainDesc->BufferDesc.RefreshRate.Denominator,
       pSwapChainDesc->Windowed != FALSE);
 
-  if (SUCCEEDED(hr) && ppSwapChain && *ppSwapChain)
+  if (SUCCEEDED(hr) && ppSwapChain && *ppSwapChain) {
     atfix::hookPresent(*ppSwapChain);
+  }
 
   if (SUCCEEDED(hr) && ppDevice && *ppDevice)
-    atfix::initializeHighRes(*ppDevice,
+    atfix::d3d11InstallHooks(*ppDevice,
       ppImmediateContext ? *ppImmediateContext : nullptr);
 
   if (SUCCEEDED(hr) && ppImmediateContext && *ppImmediateContext)

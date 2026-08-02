@@ -61,6 +61,9 @@ enum : int {
   IDC_RES,
   IDC_WINMODE,
   IDC_LANG,
+  IDC_SMAA,
+  IDC_MSAA,
+  IDC_SSAA,
   IDC_OUTLINE,
   IDC_SKIPLAUNCHER,
   IDC_START,
@@ -77,7 +80,7 @@ enum : int {
 const wchar_t* const kRepositoryUrl =
   L"https://github.com/nicoverbruggen/atelier-dusk-fixes";
 
-const int kPageCount = 3;   // Display, Game, About
+const int kPageCount = 4;   // Display, Image Quality, Game, About
 
 // ---- the games -------------------------------------------------------------
 
@@ -162,6 +165,35 @@ const Resolution kResolutions[] = {
 constexpr Resolution kAutoResolution = { 0, 0 };
 const int kResolutionCount = int(sizeof(kResolutions) / sizeof(kResolutions[0]));
 
+// The antialiasing values, as they are written to dusk-fix.ini. "0" for MSAA
+// means the engine's own choice is left alone; Ayesha already multisamples its
+// scene at 4x, so "off" and "game default" are genuinely different answers.
+const ComboItem kMsaaItems[] = {
+  { L"Game default",  "0" },
+  { L"Off",           "1" },
+  { L"2x",            "2" },
+  { L"4x",            "4" },
+  { L"8x",            "8" },
+};
+const int kMsaaCount = 5;
+
+// The Arland launcher's ladder, and stored as percentages for the reason given
+// on ssaaPercent: a decimal in an ini is a locale trap.
+const ComboItem kSsaaItems[] = {
+  { L"Off",    "100" },
+  { L"1.25x",  "125" },
+  { L"1.5x",   "150" },
+  { L"2x",     "200" },
+  { L"3x",     "300" },
+  { L"4x",     "400" },
+};
+const int kSsaaCount = 6;
+
+// The ceiling the DLL clamps to, repeated here so the list never offers a
+// multiplier that would silently be reduced. See supersample.cpp.
+const unsigned kMaxRenderWidth = 7680;
+const unsigned kMaxRenderHeight = 4320;
+
 const ComboItem kWindowModeItems[] = {
   { L"Windowed",   "0" },
   { L"Fullscreen", "1" },
@@ -185,6 +217,7 @@ HWND g_hTabs = nullptr;
 HWND g_hGameLabel = nullptr;   // sits on the tab strip; painted transparent
 HWND g_hRes = nullptr, g_hWinMode = nullptr, g_hLang = nullptr;
 HWND g_hOutline = nullptr;
+HWND g_hSmaa = nullptr, g_hMsaa = nullptr, g_hSsaa = nullptr;
 HWND g_hSkipLauncher = nullptr;
 HWND g_hStart = nullptr, g_hOpenLauncher = nullptr, g_hOpenEnv = nullptr;
 HWND g_hPlayVanilla = nullptr;
@@ -323,6 +356,76 @@ void addResolution(unsigned width, unsigned height) {
 // Rebuild the combo from g_resolutions. Auto stays pinned at index 0; the rest
 // are sorted by pixel count so an appended entry lands where it belongs rather
 // than at the bottom. `selectAuto` wins over the width/height pair.
+// The resolution the game will actually run at, which is what supersampling
+// multiplies. Auto resolves to the desktop, exactly as saving would.
+bool supersamplingBase(unsigned* width, unsigned* height) {
+  const LRESULT index = SendMessageW(g_hRes, CB_GETCURSEL, 0, 0);
+  if (index < 0 || size_t(index) >= g_resolutions.size())
+    return false;
+  const Resolution chosen = g_resolutions[size_t(index)];
+  if (chosen.width && chosen.height) {
+    *width = chosen.width;
+    *height = chosen.height;
+    return true;
+  }
+  return desktopResolution(width, height);
+}
+
+// Rebuild the supersampling list for the resolution now selected. Each entry
+// carries the size it produces, so "what does 1.5x actually render at?" is
+// answered in the list being chosen from rather than somewhere else in the
+// window; and anything past the 8K ceiling is left out rather than offered and
+// then quietly reduced by the DLL.
+void refillSupersampling() {
+  // Null while supersampling has no control; see the Image Quality page.
+  if (!g_hSsaa)
+    return;
+  char wanted[16] = "100";
+  const LRESULT current = SendMessageW(g_hSsaa, CB_GETCURSEL, 0, 0);
+  if (current >= 0 && current < kSsaaCount)
+    lstrcpynA(wanted, kSsaaItems[current].value, sizeof(wanted));
+
+  unsigned baseWidth = 0, baseHeight = 0;
+  const bool haveBase = supersamplingBase(&baseWidth, &baseHeight);
+  SendMessageW(g_hSsaa, CB_RESETCONTENT, 0, 0);
+  int selected = 0;
+  for (int i = 0; i < kSsaaCount; ++i) {
+    const unsigned percent = unsigned(atoi(kSsaaItems[i].value));
+    unsigned renderWidth = 0, renderHeight = 0;
+    if (i && haveBase) {
+      renderWidth = (baseWidth * percent + 50) / 100;
+      renderHeight = (baseHeight * percent + 50) / 100;
+      if (renderWidth > kMaxRenderWidth || renderHeight > kMaxRenderHeight)
+        continue;
+    }
+    wchar_t label[96];
+    if (i && haveBase)
+      wsprintfW(label, L"%s  (%u x %u)", kSsaaItems[i].label, renderWidth,
+        renderHeight);
+    else
+      lstrcpynW(label, kSsaaItems[i].label, 96);
+    const int at = int(SendMessageW(g_hSsaa, CB_ADDSTRING, 0, (LPARAM)label));
+    SendMessageW(g_hSsaa, CB_SETITEMDATA, at, LPARAM(i));
+    if (!lstrcmpA(kSsaaItems[i].value, wanted))
+      selected = at;
+  }
+  SendMessageW(g_hSsaa, CB_SETCURSEL, selected, 0);
+}
+
+// The list is filtered, so its positions are not kSsaaItems positions; the
+// item data carries the real index.
+int ssaaSelectedIndex() {
+  if (!g_hSsaa)
+    return 0;   // "Off", which is also what the DLL does with it
+  const LRESULT at = SendMessageW(g_hSsaa, CB_GETCURSEL, 0, 0);
+  if (at < 0)
+    return 0;
+  const LRESULT data = SendMessageW(g_hSsaa, CB_GETITEMDATA, WPARAM(at), 0);
+  if (data < 0 || data >= kSsaaCount)
+    return 0;
+  return int(data);
+}
+
 void refillResolutions(unsigned selectWidth, unsigned selectHeight,
                        bool selectAuto) {
   // Everything but the Auto sentinel takes part in the sort.
@@ -493,13 +596,16 @@ struct UiState {
   int  windowMode;
   int  language;
   bool outline;
+  int  smaa;
+  int  msaa;
+  int  ssaa;
   bool skipLauncher;
 
   bool operator == (const UiState& o) const {
     return resolution == o.resolution && windowMode == o.windowMode &&
            language == o.language &&
-           outline == o.outline &&
-           skipLauncher == o.skipLauncher;
+           outline == o.outline && smaa == o.smaa && msaa == o.msaa &&
+           ssaa == o.ssaa && skipLauncher == o.skipLauncher;
   }
 };
 
@@ -509,6 +615,9 @@ UiState currentState() {
   state.windowMode = int(SendMessageW(g_hWinMode, CB_GETCURSEL, 0, 0));
   state.language = int(SendMessageW(g_hLang, CB_GETCURSEL, 0, 0));
   state.outline = isChecked(g_hOutline);
+  state.smaa = isChecked(g_hSmaa);
+  state.msaa = int(SendMessageW(g_hMsaa, CB_GETCURSEL, 0, 0));
+  state.ssaa = ssaaSelectedIndex();
   state.skipLauncher = isChecked(g_hSkipLauncher);
   return state;
 }
@@ -580,6 +689,21 @@ void loadFromIni() {
   //
   // What is left is the same on all three games, which is why nothing here is
   // gated on the engine any more.
+  // The antialiasing settings. Defaults repeat src/core/game.cpp: SMAA off
+  // (it currently antialiases the UI too), MSAA left to the engine, no
+  // supersampling.
+  setChecked(g_hSmaa, iniBool(g_iniPath, "Rendering", "SMAA", false));
+  {
+    char value[16] = { };
+    iniString(g_iniPath, "Rendering", "MSAA", value, sizeof(value), "0");
+    comboSelectByValue(g_hMsaa, kMsaaItems, kMsaaCount, value, 0);
+    iniString(g_iniPath, "Rendering", "Supersampling", value, sizeof(value), "100");
+    comboSelectByValue(g_hSsaa, kSsaaItems, kSsaaCount, value, 0);
+    // Rebuild against the resolution just loaded, which is what decides both
+    // the sizes shown and which multipliers fit under the ceiling.
+    refillSupersampling();
+  }
+
   setChecked(g_hSkipLauncher,
     iniBool(g_iniPath, "Launcher", "SkipLauncher", false));
 
@@ -608,6 +732,13 @@ void saveToIni() {
   WritePrivateProfileStringA("Graphics", "Outline",
     isChecked(g_hOutline) ? "1" : "0", g_settingsPath);
 
+  iniWriteBool(g_iniPath, "Rendering", "SMAA", isChecked(g_hSmaa));
+  WritePrivateProfileStringA("Rendering", "MSAA",
+    comboValue(g_hMsaa, kMsaaItems, kMsaaCount), g_iniPath);
+  if (g_hSsaa)
+    WritePrivateProfileStringA("Rendering", "Supersampling",
+      kSsaaItems[ssaaSelectedIndex()].value, g_iniPath);
+
   iniWriteBool(g_iniPath, "Launcher", "SkipLauncher",
     isChecked(g_hSkipLauncher));
 }
@@ -625,6 +756,10 @@ void resetToDefaults() {
   SendMessageW(g_hLang, CB_SETCURSEL, 1, 0);      // English
   setChecked(g_hOutline, true);
 
+  setChecked(g_hSmaa, false);
+  SendMessageW(g_hMsaa, CB_SETCURSEL, 0, 0);   // game default
+  SendMessageW(g_hSsaa, CB_SETCURSEL, 0, 0);   // off
+  refillSupersampling();
   setChecked(g_hSkipLauncher, false);
 }
 
@@ -1200,7 +1335,8 @@ void createControls(HWND w) {
   SetWindowSubclass(g_hTabs, TabProc, 0, 0);
   TCITEMW tab = {};
   tab.mask = TCIF_TEXT;
-  const wchar_t* pageNames[kPageCount] = { L"Display", L"Game", L"About" };
+  const wchar_t* pageNames[kPageCount] = { L"Display", L"Image Quality",
+    L"Game", L"About" };
   for (int i = 0; i < kPageCount; ++i) {
     tab.pszText = (LPWSTR)pageNames[i];
     SendMessageW(g_hTabs, TCM_INSERTITEMW, i, (LPARAM)&tab);
@@ -1274,9 +1410,39 @@ void createControls(HWND w) {
       L"saves and starts the game with the mod stood down, changing nothing.");
   }
 
-  // ---------------- page 1: Game ----------------
+  // ---------------- page 1: Image Quality ----------------
+  // Its own page, as in the Arland launcher, and for the same reason: these are
+  // the settings with a frame-rate cost, and grouping them puts that cost in
+  // one place instead of scattering it through settings that have none.
   {
     Layout page(w, 1);
+    g_hSmaa = mkCheck(w, L"Smooth edges (SMAA)", 0, 0, 10, IDC_SMAA);
+    page.checkRow(g_hSmaa,
+      L"Smooths every edge in the finished image, including ones inside "
+      L"textures. Currently softens menu text too, so it is off by default.");
+
+    g_hMsaa = mkCombo(w, 0, 0, 10, IDC_MSAA);
+    comboFill(g_hMsaa, kMsaaItems, kMsaaCount);
+    page.row(L"Multisampling:", g_hMsaa,
+      L"The game already multisamples its 3D scene at 4x. This raises or "
+      L"lowers that, and smooths model edges only.");
+
+    // Supersampling is deliberately absent. It is implemented but its
+    // attachment point is wrong for this engine, and the failure is a black
+    // screen -- see the capability matrix in src/core/game.cpp. A control for
+    // something that cannot work is worse than no control, so it comes back
+    // when the fix does.
+
+    page.fullNote(
+      L"Both are off or left alone by default. Multisampling is nearly free "
+      L"here because the game is already doing it; SMAA is cheap but softens "
+      L"the interface until it can be injected before the interface is "
+      L"drawn.");
+  }
+
+  // ---------------- page 2: Game ----------------
+  {
+    Layout page(w, 2);
     g_hLang = mkCombo(w, 0, 0, 10, IDC_LANG);
     comboFill(g_hLang, kLangItems, kLangCount);
     page.row(L"Language:", g_hLang,
@@ -1288,10 +1454,10 @@ void createControls(HWND w) {
       L"The game's own outline rendering. On as it shipped.");
   }
 
-  // ---------------- page 2: About ----------------
+  // ---------------- page 3: About ----------------
   // What is installed, where it came from, and what it is not.
   {
-    Layout page(w, 2);
+    Layout page(w, 3);
     wchar_t installed[160];
     wsprintfW(installed, L"Mod version: %s", modVersion());
     page.label(installed);
@@ -1506,6 +1672,12 @@ LRESULT CALLBACK WndProc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
     }
 
     case WM_COMMAND:
+      // The supersampling list is computed from the selected resolution, so it
+      // has to follow every change to it.
+      if (LOWORD(wp) == IDC_RES && HIWORD(wp) == CBN_SELCHANGE) {
+        refillSupersampling();
+        return 0;
+      }
       switch (LOWORD(wp)) {
         case IDC_START:
           if (startGame(w, false))

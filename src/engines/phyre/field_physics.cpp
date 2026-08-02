@@ -14,9 +14,9 @@
 #include <cstring>
 
 #include "field_physics.h"
-#include "../core/game.h"
-#include "../core/log.h"
-#include "../core/mem.h"
+#include "../../core/game.h"
+#include "../../core/log.h"
+#include "../../core/mem.h"
 
 namespace atfix {
 

@@ -50,6 +50,10 @@ enum class Feature : uint8_t {
   AtlasCache,       // Ayesha atlas read caching (frame-scoped)
   FieldEngineFix,   // Ayesha high-refresh field jitter: rescale the move threshold
   FieldStabilizer,  // Ayesha high-refresh field jitter: hold the character at rest
+  Smaa,             // Ayesha: SMAA post-process antialiasing
+  Msaa,             // Ayesha: multisample the scene via twin targets (msaa.h)
+  Supersampling,    // Ayesha: render above the display size, downscale to it
+  AnisotropicFiltering, // any game: upgrade trilinear samplers (sampler.h)
   Count,
 };
 

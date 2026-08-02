@@ -35,9 +35,9 @@
 
 #include "atlas_fix.h"
 #include "phyre.h"
-#include "../core/hook_util.h"
-#include "../core/log.h"
-#include "../core/util.h"
+#include "../../core/hook_util.h"
+#include "../../core/log.h"
+#include "../../core/util.h"
 
 namespace atfix {
 extern Log log;

@@ -18,8 +18,14 @@ The table below describes the current source state. A check mark means the behav
 | Much faster font-atlas reads | ✓ | — | — |
 | Render scene targets above 1080p correctly | ✓ | — | — |
 | Steady field movement at high refresh rates | ✓ | — | — |
+| SMAA antialiasing (`[Rendering] SMAA`) | opt-in | — | — |
+| MSAA sample count (`[Rendering] MSAA`) | opt-in | — | — |
 
-The Ayesha fixes are enabled by default. Escha & Logy and Shallie are hard-gated off for engine-specific fixes until their LTGL/KTGL paths have been investigated.
+SMAA is the one entry above that is off by default, and the reason is where it currently runs rather than what it does. These games ship no antialiasing at all; SMAA (Jimenez et al.) works on the finished image, so it smooths every visible edge rather than only polygon silhouettes as MSAA does. The passes are ported unchanged from the Arland mod, but that project injects them on the scene target *before* the game composites its interface, so menus and text stay crisp. The equivalent boundary in Ayesha's renderer has not been found yet, so for now the passes run at Present over the whole finished frame, which antialiases the UI and its text along with the scene. Whether that trade is worth taking is a judgement, so it is offered rather than assumed. Ayesha only for now: the full-frame path needs no engine knowledge and would probably work on the other two unchanged, but nothing has been measured there.
+
+MSAA joins it as the other antialiasing option, and both are set from the launcher. Ayesha already multisamples its 3D scene at 4x, so the MSAA setting raises or lowers what the engine is doing rather than adding something new, and *Game default* and *Off* are different answers. Supersampling is implemented but currently disabled: its attachment point turned out to be wrong for this engine, and the failure is a black screen rather than a missing effect. See `WORK_DOC.md`.
+
+The other Ayesha fixes are enabled by default. Escha & Logy and Shallie are hard-gated off for engine-specific fixes until their LTGL/KTGL paths have been investigated.
 
 ### Launcher
 
@@ -86,7 +92,7 @@ Build instructions for Windows and Linux are in [BUILDING.md](BUILDING.md). The 
 
 ## Credits
 
-Philip Rebohle created the original [`atelier-sync-fix`](https://github.com/doitsujin/atelier-sync-fix) synchronization implementation. TellowKrinkle's [`atelier-sync-fix` fork](https://github.com/TellowKrinkle/atelier-sync-fix) supplied prior Map/Unmap coherence work and the old-Arland rendering correction that this project ports and refines. Yuri Hime's [Atelier Graphics Tweak](https://steamcommunity.com/app/1152300/discussions/0/3345546664208090238/) is important prior work, but none of its code is used here. MinHook is by Tsuda Kageyu and contributors.
+Philip Rebohle created the original [`atelier-sync-fix`](https://github.com/doitsujin/atelier-sync-fix) synchronization implementation. TellowKrinkle's [`atelier-sync-fix` fork](https://github.com/TellowKrinkle/atelier-sync-fix) supplied prior Map/Unmap coherence work and the old-Arland rendering correction that this project ports and refines. Yuri Hime's [Atelier Graphics Tweak](https://steamcommunity.com/app/1152300/discussions/0/3345546664208090238/) is important prior work, but none of its code is used here; inspecting it did confirm two useful facts about SMAA on these games, that the same MIT reference shader is the right one and that the injection point is on the deferred context. [SMAA](https://github.com/iryoku/smaa) is by Jorge Jimenez, Jose I. Echevarria, Belen Masia, Fernando Navarro and Diego Gutierrez (MIT); its reference shader and the precomputed `AreaTex`/`SearchTex` lookup textures are vendored unchanged under `vendor/smaa`, and this project adds only the runtime integration. MinHook is by Tsuda Kageyu and contributors.
 
 The Dusk-specific reverse engineering, measurements, and integration were carried out by Nico Verbruggen with assistance from large language models. See [TECHNICAL.md](TECHNICAL.md) for provenance and implementation details.
 

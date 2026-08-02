@@ -9,9 +9,9 @@
 
 #include "ktgl.h"
 
-#include "../core/game.h"
-#include "../core/hook_util.h"
-#include "../core/log.h"
+#include "../../core/game.h"
+#include "../../core/hook_util.h"
+#include "../../core/log.h"
 
 namespace atfix {
 extern Log log;   // main.cpp

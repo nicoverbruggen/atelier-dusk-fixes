@@ -51,8 +51,8 @@ The source tree follows the engine boundary:
 src/core/     engine-agnostic: the D3D11 proxy, engine dispatch, the capability
               matrix, the ini layer, the high-resolution fix and its census,
               hook installation, logging
-src/phyre/    Ayesha — the atlas read cache
-src/ktgl/     Escha & Logy and Shallie — fingerprinting only, so far
+src/engines/phyre/  Ayesha — the atlas read cache
+src/engines/ktgl/   Escha & Logy and Shallie — fingerprinting only, so far
 src/launcher/ neither engine, and one of the two is not even the same
               architecture: the launcher window and the 32-bit msimg32 proxy
 ```
@@ -67,7 +67,7 @@ well would buy no safety and cost the user a per-game download.
 `core/engine.cpp` resolves the engine from the executable name once and forwards
 initialization and the frame tick to that module only.
 
-`src/ktgl/` implements no fix yet, so all it does is establish identity: it
+`src/engines/ktgl/` implements no fix yet, so all it does is establish identity: it
 fingerprints the four Escha & Logy and Shallie builds exactly as the Phyre module
 fingerprints Ayesha's two, and logs the `.text` size it saw. That is the gate any
 future fix for those games will install behind, and logging the size means a game
@@ -375,6 +375,531 @@ confirmation at runtime. The multilingual build is the higher-risk one, since
 uncommon kanji page in far more often than Latin. If a report arrives,
 `DUSK_ATLAS_CACHE=0` restores the game's own behaviour without a rebuild, and the
 log records the cache's hit/real-read split for any run.
+
+## SMAA
+
+These games ship no antialiasing of any kind. SMAA (Jimenez et al.) is a
+post-process over the finished image, so unlike MSAA it smooths any visible edge
+regardless of how it was produced, including texture-interior and alpha-test
+edges. It is `OptIn` on Ayesha and `Unsupported` on the other two.
+
+### What was ported, and from where
+
+The passes are the Arland project's `src/smaa.cpp`, which is this project's own
+code (MIT), ported into `src/core/smaa.cpp` with the Arland-specific parts
+removed: no supersampling stand-in to antialias instead of the backbuffer, and
+no MSAA twin write-back, because neither exists here. The reference shader and
+the `AreaTex`/`SearchTex` lookup tables are vendored unchanged under
+`vendor/smaa/` (MIT) and compiled at runtime through `d3dcompiler`, at
+`SMAA_PRESET_ULTRA`. The wrapper around the reference entry points is Arland's
+own, not the SMAA distribution's DX10 sample.
+
+Two other mods were checked first, and the survey is worth recording because it
+changed the plan:
+
+- **TellowKrinkle's rendering branch has no SMAA at all.** It is MSAA,
+  sample-rate shading, anisotropic filtering and LOD bias. Nothing to take.
+- **Atelier Graphics Tweak does ship SMAA for these games**, and inspecting it
+  (behaviour only; it is unlicensed and none of its code is used) settled two
+  questions. Its AA is stock: the same MIT `SMAA.hlsl` this project now vendors,
+  plus the SMAA distribution's own DX10 wrapper, at `SMAA_PRESET_ULTRA` /
+  `SMAA_HLSL_4_1`, compiled at runtime from a bundled `d3dcompiler_47.dll`. And
+  its injection point is on the **deferred** context, from its log strings
+  (`deferred:PSSetShader(tonemapShaderNoAA)`): it hooks `CreatePixelShader`,
+  recognises a post-process composite shader, substitutes a bundled no-AA
+  variant, and injects when that shader is set.
+
+  Its shader substitution does **not** target Ayesha. The two `.dxbc`
+  replacements sample `smplScene`, `smplZ`, `smplBlurFront`,
+  `smplAdaptedLumCur`, `smplDOFMerge`, `smplBloom`, `smplStar`, `smplFlare` and
+  `smplLightShaftLinWork2`, and none of the 139 DXBC shaders in Ayesha's
+  `Res/x64/cg/commonShader.PSSG` contains any of those names. They belong to
+  other games in AGT's list. So the technique transfers and the identification
+  does not.
+
+The one genuinely transferable fact is the deferred context, and it agrees with
+what this project already learned the hard way: Ayesha draws on a deferred
+context, which is what defeated the first two attempts at the high-resolution
+raster correction. `highres.cpp` already hooks both context vtables, including
+all four draw entry points.
+
+### Why it runs at Present, and why that is temporary
+
+`smaaApply` runs in the Present hook, over the swap chain's back buffer. That
+needs no engine knowledge at all, which is the point of doing it first: it is
+the half of the feature that could be landed and looked at without an
+investigation.
+
+It is also the half with a real cost. The frame at Present is fully composited,
+so the passes antialias the interface and its text along with the scene. Arland
+avoids that by injecting on the scene target before UI composition, and finding
+that boundary was a separate piece of work for each Arland title: Rorona and
+Meruru use "the first draw into the main target with depth testing disabled",
+and Totori needed a draw-state trace before it could key on "same targets
+retained, depth test disabled". Ayesha will need its own, and the existing
+deferred-context draw hooks are where it would be found.
+
+That is why SMAA is `OptIn` while every other shipping fix here is on by
+default. The others have no trade-off to weigh; this one currently does.
+
+### Diagnostics
+
+`DUSK_SMAA_DEBUG=1` replaces the frame with the edge-detection output (red
+horizontal, green vertical) over a dimmed scene, `=2` with the amplified blend
+weights. A black debug view means the pass produced nothing, which separates a
+lookup-texture problem from a blending one. Environment-only, like every other
+diagnostic here.
+
+Any failure -- no `d3dcompiler`, a shader that will not compile, a resource that
+will not create -- logs once, sets the broken flag and leaves SMAA off for the
+rest of the session without touching anything else.
+
+## MSAA and supersampling
+
+Added alongside SMAA so the antialiasing options sit together. SMAA and MSAA are
+`OptIn` on Ayesha and `Unsupported` elsewhere, and both carry ini keys and
+launcher controls, unlike every other fix in this project: each trades frame
+rate for image quality, and which trade to take is exactly the judgement a
+setting exists for. Supersampling is `Unsupported` everywhere and has no control
+at all, for the measured reason given below.
+
+Both of these sections were rewritten after their first versions shipped
+conclusions that a runtime measurement then contradicted. That is worth noting
+at the top rather than burying: in both cases the mistake was reasoning from
+what the game **creates** to what the game **uses**.
+
+### MSAA: the engine will not do it, so the mod does
+
+**The first version of this feature was wrong, and the way it was wrong is the
+useful part of this record.**
+
+It raised `SampleDesc.Count` on targets the engine had already created
+multisampled, on the strength of a census line: Ayesha creates scene colour
+(bindFlags 0x28) and scene depth (0x48) at `SampleDesc.Count == 4`. The
+conclusion drawn was "the engine already multisamples its 3D scene at 4x, so
+this is just a bump". The census reports the targets a game **creates**.
+Creation is not use, and nothing in that reasoning ever checked use.
+
+Draw-time instrumentation settled it. Counting every sampled draw by the sample
+count of the target it landed on, over 7200 frames of ordinary play:
+
+```
+draws=1791745  drawsTo1x=117245  drawsToMsaa=0  maxBoundSamples=0
+```
+
+Not one draw ever bound a multisampled target. The engine creates six of them at
+startup -- colour+depth pairs at 1920x1080, 1728x972 and 1536x864, exactly
+100/90/80% -- and renders into none of them. The old implementation was raising
+the sample count on dead allocations, and reported `action=msaa` while doing it.
+
+(The counter samples the first draw after each raster change, not every draw,
+so 117245 of 1791745 is a biased sample rather than a census. A scene pass sets
+a viewport before drawing, so it is caught; `maxBoundSamples` never left 0.)
+
+#### Why the engine cannot be asked
+
+Ayesha's texture-creation wrapper at `0x559600` takes an anti-aliasing **level
+index** as its seventh argument, looks the sample count up in a table, and
+stores it into the descriptor:
+
+```
+0x55965c  movsxd rcx, dword ptr [rbp+0x4f]        ; arg7 = AA level
+0x559672  mov eax, dword ptr [rax + rcx*4]        ; rax = 0xfe8418
+0x559675  mov dword ptr [rbp-0x65], eax           ; -> SampleDesc.Count
+0x559678  mov eax, dword ptr [rbx + rcx*4 + 0x3098]
+0x559682  mov dword ptr [rbp-0x61], eax           ; -> SampleDesc.Quality
+```
+
+The table at RVA `0xfe8418` holds `1, 2, 4, 0`: a sample-count ladder indexed by
+AA level. So the renderer does have an MSAA path, and a complete one: `0x5575e0`
+loops AA levels 0..2, calls `ID3D11Device::CheckMultisampleQualityLevels`
+(vtable slot **30**, offset `0xf0`) across 125 formats, and stores the result
+into the very quality array the wrapper reads:
+
+```
+0x005575f9  lea r14, [rcx + 0x3098]                 ; &renderer[0x3098]
+0x00557620  mov rcx, qword ptr [r15 + 0x3070]       ; the device
+0x00557635  mov edx, dword ptr [r12 + rax*8 + 0xfe7c00]   ; a format
+0x0055763d  call qword ptr [r10 + 0xf0]             ; CheckMultisampleQualityLevels
+0x0055765e  mov dword ptr [r14], ebx                ; -> +0x3098 / +0x309c / +0x30a0
+0x00557667  cmp esi, 3
+```
+
+This corrects an earlier reading in this project's notes that the engine never
+probes multisample capability and leaves the quality array permanently zero.
+That reading came from searching vtable slot 27 (`0xd8`) for the call, which is
+`CreateDeferredContext`; and from `writes-to-offset ayesha-en 0x3098` reporting
+only the constructor's zeroing. Both were artefacts. The engine's MSAA plumbing
+is not half-wired — it is complete and simply never selected for the scene.
+
+**A tooling blind spot worth knowing** (also noted in `RE-PLAYBOOK.md`):
+`writes-to-offset` matches a literal `[reg+0xNNN]` operand, so it cannot see the
+store above. The offset was hoisted into `r14` by a single `lea` and then
+advanced by `add r14, 4` per iteration, leaving the actual store encoded as
+`mov dword ptr [r14], ebx` with no displacement at all. This is a third blind
+spot alongside wide SIMD stores (which is how `+0x305c` was missed) and calls
+reached through incremental-link thunks.
+
+It is not reachable. The wrapper has eight call sites, reached through the jmp
+thunk at `0x25400`. **Six pass a literal zero** (verified individually, e.g.
+`0x55c601 mov dword ptr [rsp+0x30], r8d` with `r8d` zeroed at `0x55c570`; same
+shape at `0x55e948`, `0x5622dd`, `0x559edf`, `0x559fec`, `0x55f514`). Only two
+forward a variable, and that chain resolves to a renderer field `+0x305c`, read
+at `0x56740e`/`0x567492` in `0x567280` -- which is what produces the six dead
+allocations. The scene's own colour and depth pair comes from a hardcoded-zero
+site.
+
+No ini key, registry value or command line reaches any function on those paths.
+Ayesha's only config reader (`0x71a550`) handles `ScreenWidth`/`ScreenHeight`/
+fullscreen and nothing else. **There is no setting to flip.**
+
+Two threads were left open and are recorded rather than closed: what table
+`0x566500` walks to set `+0x305c` (it is written by a wide SIMD store at
+`0x566f00` that the offset scanner cannot see), and one branch that dead-ends at
+an unresolved virtual call at `0x55bc90`. Neither affects the conclusion, which
+rests on the hardcoded-zero sites.
+
+A claim made during this investigation and then **withdrawn**: that Ayesha's
+shipped antialiasing is FXAA and that its tonemap pass samples scene depth for
+distant blur. That came from Atelier Graphics Tweak's bundled shader reflection
+(`smplZ`, `fDistantBlurZThreshold`, `patch_FXAA applied`). Those belong to
+another game in AGT's list -- none of Ayesha's 139 DXBC shaders in
+`Res/x64/cg/commonShader.PSSG` contains those names, as this document already
+recorded elsewhere. Nothing is currently established about what antialiasing
+Ayesha ships with.
+
+#### The twin implementation
+
+`src/core/msaa.cpp`. The mechanism is TellowKrinkle's by way of the Arland
+project's `src/sync_fix.cpp`: the game keeps its single-sample colour and depth
+targets ("hosts"), the mod attaches a multisample "twin" to each as private
+data, substitutes the twins when that pair is bound, and lands the colour twin
+back into its host before anything reads it.
+
+Interception points. The detours live in `msaa.cpp`; the vtables they go into
+are owned by `src/core/d3d11_hooks.cpp`, which is the only module in the tree
+that calls MinHook on a D3D11 vtable. (That module was extracted from
+`highres.cpp` during this work: the resolution fix had ended up hosting five
+detours belonging to a feature it has nothing to do with, and each group is now
+installed only when its own feature is on.) Slot numbers are enumerated from the
+MinGW `d3d11.h` this cross-build uses, never counted by hand:
+
+| Slot | Method | Role |
+|---|---|---|
+| 33 | `OMSetRenderTargets` | substitute twins; land the displaced pair |
+| 8 | `PSSetShaderResources` | resolve before the game samples a host |
+| 47 | `CopyResource` | resolve before a copy reads a host |
+| 46 | `CopySubresourceRegion` | same |
+| 114 | `FinishCommandList` | resolve before a recorded list is closed |
+| 58 | `ExecuteCommandList` | resolve before a replay clobbers this context |
+| 50 | `ClearRenderTargetView` | clear the twin, not the host |
+| 53 | `ClearDepthStencilView` | clear the depth twin, not the host |
+| 34 | `OMSetRenderTargetsAndUnorderedAccessViews` | the other bind route |
+| 22 | `CreateRasterizerState` (device) | force `MultisampleEnable` |
+
+The two clears were **missing from the first version of this implementation**,
+and their absence is worth recording because it is the same failure shape as the
+original defect. The game clears the view it created -- the host -- while the
+twin is what is bound and drawn into. An unintercepted clear therefore zeroes a
+surface nobody renders to and leaves the twin holding the previous frame, so
+every frame composites on top of the last, while every counter in the module
+reports success. It was found by diffing the hook table against the two
+reference implementations rather than by reasoning, which is the lesson:
+`sync_fix.cpp:2928/2942/3513` and `impl.cpp:1564/1575/1745` all hook these, and
+checking that list is cheaper than deriving it.
+
+**Eligibility is split across the engine boundary, deliberately.** Core asks
+only whether a twin *can* exist -- single-sample, one mip, one array slice, and
+a sample count both formats support -- because those are properties of the D3D11
+mechanism and hold anywhere. Which pair is *the scene* is a `MsaaSceneTest`
+callback supplied by an engine module, and core declines every bind (with one
+logged line saying so) until one is registered.
+
+That boundary is not decoration. "Which of the several dozen binds a frame
+issues carries the 3D scene" is a renderer property, and the prior art proves it
+varies: TellowKrinkle counts more than 64 indexed draws into a target,
+the Arland project matches the main render size *and* a BGRA view format.
+Getting it wrong is quiet -- it multisamples a shadow map, leaves the scene
+untouched, and every counter still reports success, which is precisely the
+failure this rewrite exists to stop repeating.
+
+`src/engines/phyre/scene_target.cpp` supplies Ayesha's rule. It began as "colour
+and depth both at exactly the main render size" and **a run proved that
+insufficient**: at 1440p the main render size equals the swap-chain size, so the
+back buffer paired with the swap-size depth matched it as well as the real scene
+pair did, and the composite/UI pass was being multisampled and resolved on every
+bind. Measured descriptors:
+
+```
+pair #1  colour format=87 (B8G8R8A8_UNORM)    bind=0x28 | depth bind=0x40   back buffer
+pair #2  colour format=90 (B8G8R8A8_TYPELESS) bind=0x28 | depth bind=0x48   scene
+pair #3  colour format=90 (B8G8R8A8_TYPELESS) bind=0x28 | depth bind=0x48   scene
+```
+
+Two discriminators were added, each stating something true about what a scene
+target *is* on this engine rather than merely separating these surfaces: the
+colour target is **typeless** (this engine allocates surfaces it will both
+render into and sample back as typeless, so it can put typed RTV and SRV over
+one allocation; the back buffer is a presented surface and is typed), and the
+depth target carries **SHADER_RESOURCE** (the scene's depth is allocated
+readable; the composite pass's is not).
+
+What this deliberately does not do is exclude the back buffer by identity. A
+renderer that draws its scene straight into the back buffer is an ordinary
+design -- the Arland games do exactly that -- so "never twin the back buffer"
+would be wrong as a general rule and wrong in `src/core`.
+
+Pairs #2 and #3 have identical descriptors and are **both** the scene: the
+engine ping-pongs between two same-shaped colour targets for its post-processing
+chain, which is why the over-match warning now fires on a pair of a different
+*shape* rather than on a second pair. Counting alone cried wolf on the normal
+case while saying nothing about what differed. It is reliable here *because of* the defect
+`highres.cpp` corrects -- this engine pins its scene targets to a hard-coded
+1920x1080 while everything else it allocates is another shape. A censused
+session settles at 15 distinct shapes, of which exactly one colour+depth pair is
+at the main size; the shadow map is 1024x1024, the blur chain runs 960x540 down
+to 64x36, the UI composites at swap-chain size. It is also the same rule the
+resolution fix already uses to decide what to enlarge, and that fix is validated
+in game at 1440p and 4K -- so the rule is not new evidence, it is evidence
+already paid for. The format is deliberately left unconstrained: Ayesha renders
+to an offscreen pair rather than to the back buffer, so the size test already
+isolates it and a format condition would narrow the rule on no evidence.
+
+It registers from `initializePhyreFixes()` **before** that function's feature
+gate, because it needs no hooks, no mapped addresses and no fingerprint, and a
+session that enables only MSAA must still get it.
+
+Escha & Logy and Shallie register nothing, which is the honest state: their
+renderer has never been censused, so nothing is known about what they bind.
+
+Requiring a depth target at all matters for a separate reason: a multisample
+colour target bound with a single-sample depth target is invalid.
+
+Two things this does that the prior art does not:
+
+- **Sample counts are walked down per format** against
+  `CheckMultisampleQualityLevels`, taking the lower of what colour and depth
+  support, so an 8x request on a device that refuses it becomes 4x rather than
+  nothing.
+- **Every resolve saves, drops and restores the render-target bindings.** A twin
+  still bound as a render target is not a legal resolve source. Arland and
+  TellowKrinkle both resolve without unbinding; two of the resolve points here
+  fire mid-pass with the scene targets legitimately bound, so an unbind that was
+  not put back would leave the rest of that pass writing nowhere.
+
+`CreateRasterizerState` is not optional. Multisampled targets with
+`MultisampleEnable` clear receive single-sample coverage, and every counter in
+the module would still report success -- the exact failure this rewrite exists
+to stop repeating. If that hook cannot be installed, MSAA declines to run.
+
+#### The open question: depth
+
+`ResolveSubresource` rejects depth-stencil formats, so a depth twin can never be
+landed back into its host. Only colour hosts are ever marked dirty here, so the
+invalid resolve is never attempted.
+
+Both prior-art implementations have the same property, but by accident rather
+than by design: neither ever marks a depth resource dirty, so neither has ever
+tried it -- and neither could have detected it if they had, because
+`ResolveSubresource` returns void and a rejected call surfaces only through the
+D3D11 debug layer.
+TellowKrinkle additionally strips `SHADER_RESOURCE` off the depth twin
+(`impl.cpp:311`), which suggests the game he targeted does create its depth with
+that flag -- as Ayesha does (bindFlags `0x48`).
+
+Whether that costs anything here depends on whether this engine ever samples its
+scene depth host, which is **not established** (see the withdrawn evidence
+above). So it is measured rather than argued: the depth host is tagged at twin
+time and SRV binds of it are counted as `depthHostReads`. Non-zero means a
+shader-based depth-resolve pass has to be written (a fullscreen pass reading
+`Texture2DMS<float>` and writing `SV_Depth`, modelled on Arland's
+`ScopedSmaaState` discipline, which additionally needs scissor-rect save/restore
+that Arland's version omits). Zero means there is nothing to write.
+
+#### Audited, and what was deliberately left alone
+
+The implementation was audited against both reference implementations after it
+was written, because the feature it replaces was wrong in a way no counter
+caught. Five defects were found and fixed:
+
+- **A re-bind of the already-substituted pair marked the host clean while the
+  twin kept accumulating.** The bind detour lands the displaced pair after
+  `msaaSubstituteTargets` has re-marked the arriving one dirty, so when the two
+  are the same pair -- a redundant re-bind of the scene targets, which nothing
+  forbids an engine -- the resolve ran, marked the host clean, and handed the
+  twin straight back for further drawing. Every later read of the host that
+  frame would then skip its resolve and read a stale surface, with every
+  counter reporting success. Arland is immune by ordering: its
+  `resolveBoundMSAA` runs before the `Dirty` store re-marks the host. Here the
+  pending entry is dropped instead when it names the pair being re-substituted,
+  since nothing moved off the twin and there is nothing to land.
+
+- **The twin was undefined on the frame it was created.** Twins are built lazily
+  on the first *bind*, but the engine clears before it binds -- so that frame's
+  clear went to the host while no twin existed to redirect it to, and the twin
+  was drawn into with `CreateTexture2D`'s undefined contents. One visibly bad
+  frame as MSAA engages, self-healing after. Twins are now cleared at creation.
+- The three missing hooks (`ClearRenderTargetView`, `ClearDepthStencilView`,
+  `OMSetRenderTargetsAndUnorderedAccessViews`) described above.
+- SMAA's internal binds went through the public `OMSetRenderTargets` and so
+  re-entered the MSAA substitution logic for binds it was never meant to see.
+  Harmless today only because Ayesha's immediate context holds no scene marker
+  at Present -- a property of one engine, not a guarantee. All internal binds
+  now go through `d3d11SetRenderTargets`.
+- `msaaResolveBeforePresent` was documented as a safety net. For Ayesha it is
+  almost certainly a no-op, because `FinishCommandList` has already resolved and
+  cleared the deferred context's markers. The comment now says so.
+
+Four further findings were judged **not worth building for**, and are recorded
+here so the decision is visible rather than looking like an oversight:
+
+- **UAVs are not saved across a resolve.** `resolveColor` captures and restores
+  render targets via `OMSetRenderTargets`, which per D3D11 semantics unbinds any
+  UAVs bound above the render-target count. A mid-pass resolve would drop them.
+  Nothing indicates this engine's scene pass binds UAVs, and covering it means
+  moving to `OMGetRenderTargetsAndUnorderedAccessViews` and carrying UAV state
+  through every resolve. Revisit if a KTGL renderer turns out to use them.
+- **SMAA holds no device identity.** Its shared resources are built once and
+  never checked against the device that later uses them, so a device reset would
+  bind objects from a destroyed device. Inherited from the Arland implementation,
+  which has the identical gap; a pre-existing risk in both projects rather than
+  something this port introduced.
+- **SMAA restores no state after its passes**, on the reasoning that it runs last
+  before Present. That is true of the current frame but assumes the engine
+  re-specifies everything on the next one, which was never measured. The symptom
+  would be one corrupted frame after each SMAA frame, so a run answers it.
+- **A command list replayed more than once** would replay the resolve recorded
+  into it, copying whatever the twin holds at replay time. No evidence Ayesha
+  reuses command lists.
+
+Three things were traced and found correct, which is worth recording because
+they are the parts most likely to be wrong: reference counting across every
+failure branch of `msaaSubstituteTargets` and `resolveColor`; deferred-context
+marker isolation (per-instance private data partitions naturally, and
+`FinishCommandList` clears both slots before returning); and the absence of
+concurrent writes to the module's globals.
+
+One diagnostic was added rather than a fix: the scene test matches any
+colour+depth pair at the main render size, and a wrongly matched pair would look
+identical to a correct one in every counter. A second distinct pair being
+twinned now logs `MSAA: WARNING a second distinct target pair matched the scene
+test`.
+
+#### What the log says
+
+`FIXES msaa=` reports only that MSAA is **configured**. `MSAA: engaged` is a
+separate line emitted the first time a bind is actually substituted, and a
+periodic `MSAA twinPairs=... substitutions=... colorResolves=...
+depthHostReads=... declinedBinds=... twinFailures=...` line carries the rest.
+Conflating "configured" with "engaged" is how the previous implementation went
+unnoticed, so the two are deliberately different lines.
+
+The silent complement is named too: a one-shot `MSAA: configured but nothing
+engaged after 1800 frames` line fires when a scene test is registered and
+declined every bind for 30 seconds. One reachable cause is `DUSK_HIGHRES=0`,
+which stands down the CreateTexture2D hook that learns the main render size, so
+Ayesha's scene test can never match (see the note in
+`src/engines/phyre/scene_target.cpp`).
+
+**Status: built and deployed, not yet validated in game.**
+
+### Supersampling: ported, but unproven on this engine
+
+`src/core/supersample.cpp` is the Arland implementation ported (this project's
+own code, MIT), box-filter downscale shader included. The mechanism: the game
+asks the device for a render-target view over the swap chain's back buffer and
+is handed one over a larger texture instead; at Present that texture is averaged
+down into the real back buffer. `CreateRenderTargetView` (device vtable slot 9)
+is hooked from `highres.cpp`, which already owns that vtable -- hooking one
+vtable from two files is how a disable/enable race gets written by accident.
+
+**Whether Ayesha renders into its back buffer that way is not established.** The
+Arland mod had to cope with builds that do not, and that guard is ported with
+it: `g_redirects` counts substitutions that really happened, and a zero count at
+the first Present logs
+
+```
+SSAA: the engine never rendered into the back buffer, so there is nothing to
+downscale; supersampling is inactive this session
+```
+
+and declines rather than averaging an empty target over the frame, which would
+black the screen out. Read that line before trusting a supersampled session. If
+it appears, the redirect is the wrong attachment point for this engine and the
+next thing to try is driving the size through `highres.cpp` instead, which
+already resizes the engine's own targets and rewrites the viewports to match.
+
+### Two faults found on the first run, one fatal
+
+**A black screen, from the hook eating its own passes.** The first supersampled
+session came up black with a log that looked perfect:
+`FIXES ssaa=150% render=3840x2160 display=2560x1440 taps/axis=2`, and no "never
+rendered into the back buffer" line, so the redirect had fired.
+
+The cause was `ssaaDownscale` calling `CreateRenderTargetView` on the real back
+buffer -- through the very hook the redirect lives in, which duly handed it the
+render-resolution texture instead. The pass then bound `g_color` as its render
+target while sampling `g_color` as a shader resource. D3D11 resolves that
+conflict by unbinding the shader resource, so every sample read zero and the
+real back buffer was never written at all. `smaaApply` had the identical fault.
+
+`ssaaSetPresentPass` now suspends the redirect around both passes in
+`hookedPresent`, so they get the back buffer they asked for. The general lesson
+is worth keeping: a hook that substitutes a resource has to be suspended around
+the mod's own use of the original, and the failure mode is a black screen with
+nothing in any log to explain it.
+
+**The redirect is the wrong attachment point, and supersampling is off.**
+Instrumenting the redirect settled it in one run:
+
+```
+[     276] FIXES ssaa=150% render=3840x2160 display=2560x1440 taps/axis=2
+[     285] SSAA: back-buffer render target 1 redirected to 3840x2160
+[    1376] SSAA: first present, redirects=1
+```
+
+One view, created a second before the first present, and never another. A count
+that does not grow, together with a black screen, says the engine does not
+composite through that view. The likeliest reading is that the view was made for
+an initial clear and the per-frame path into the back buffer needs no view at
+all -- a `CopyResource` blit would not appear in this count. So the larger
+target stayed empty and the downscale painted it over a frame the game had
+already drawn correctly.
+
+`Feature::Supersampling` is therefore `Unsupported` on all three games and the
+launcher control is removed. Opt-in would have been the wrong gate: the failure
+blanks the screen, and that should not be reachable from a settings window. The
+guard that suspends the redirect during the present-time passes stays, because
+it fixed a real and separate fault.
+
+Nothing needs deleting to revive this. The downscale pass, its shader, the
+ceiling and the percentage handling are all independent of where the larger
+image comes from. What has to change is the source: `highres.cpp` should adopt
+the supersampled size as its main render size, so the engine renders its **own**
+targets larger and the existing raster correction carries the viewports with
+them -- machinery that is already validated at 4K -- and the downscale then
+averages that down. That also removes the need for the back-buffer redirect
+entirely, and with it the hook on `CreateRenderTargetView`.
+
+**A note on the intermediate state, which was wrong in a second way.** Even with
+the black screen fixed, this would not have supersampled anything. `highres.cpp` learns its main render size from the
+swap chain (2560x1440 here), so the engine's own scene targets stay at the
+display resolution; only the final composite lands in the 3840x2160 redirect
+target, enlarged there by the raster correction's viewport rewrite. The
+downscale then averages that back to 1440p. Upscale followed by downscale is a
+slightly softer image and nothing else.
+
+Real supersampling needs the engine to render its scene at the render size,
+which means `highres.cpp` adopting `ssaaScale()` into the main render size
+rather than taking the swap chain's. That machinery already exists and is
+validated -- it is what resizes the pinned 1080p targets and rewrites the
+viewports to match -- so the change is small, but it moves supersampling from a
+self-contained pass into the resolution path, and it should be made only once
+the corrected frame has been confirmed.
+
+Order at Present is SMAA, then downscale. Antialiasing the larger image and then
+averaging it is the right way round; the other order smooths an image that is
+about to be resampled anyway.
 
 ## The Dusk front-ends
 
@@ -1056,6 +1581,46 @@ engine flag that used to grey the Ayesha-only fix controls on Escha & Logy and
 Shallie has been removed along with the controls, so all three games get an
 identical window and the per-game difference lives entirely in the DLL's
 capability matrix.
+
+The tabs are **Display, Image Quality, Game, About**, which is the Arland
+launcher's arrangement (it adds a Debug page the Dusk mod has no equivalent
+for). Image Quality exists for the same reason it does there: it holds the
+settings that cost frame rate, so that cost sits in one place instead of being
+scattered among settings that have none. It carries SMAA, the MSAA sample count
+and the supersampling multiplier, and nothing else in this window has a
+performance cost worth grouping with them.
+
+### Matched against the Arland launcher, control by control
+
+| Arland control | Dusk |
+|---|---|
+| Resolution, with Auto | present |
+| Window mode | partial: Windowed/Fullscreen. Arland also offers **Borderless**, which is a mod feature there (`window_mode.cpp`) and does not exist here |
+| Settings editor / Original launcher / Play without the mod | present |
+| Supersampling, with the computed size per entry and the 8K ceiling | present |
+| Anti-aliasing (MSAA) | present |
+| Edge smoothing (SMAA) | present |
+| Language | present |
+| Character outlines | present |
+| Preset | absent: Arland's spans five settings, Dusk has three, so the ladder would mostly restate the individual controls |
+| Texture sharpness (anisotropic) | **no backing feature.** This is the queued `CreateSamplerState` work in DUSK.md; the control follows the fix, not the other way round |
+| Shadow detail | **no backing feature** (Arland's `ShadowMultiplier` has no Dusk equivalent) |
+| UI font | **no backing feature** (high-resolution font rendering is a queued enhancement) |
+| Battle cut-in shadows / dimming | Arland-specific, and Rorona/Meruru-specific at that |
+| Verbose logging | **no backing feature**: this project has no verbose-logging concept |
+| Debug view | **no backing feature**: Dusk's only debug view is `DUSK_SMAA_DEBUG`, and diagnostics here are environment-only by policy |
+
+The supersampling list is the one that took real work to match rather than
+copy. Each entry carries the size it produces (`1.5x  (3840 x 2160)`), so what a
+multiplier actually costs is visible in the list being chosen from; entries that
+would exceed the 8K ceiling are omitted rather than offered and then quietly
+reduced by the DLL; and because the list is filtered, its positions are not the
+table's positions, so the selected entry is read back through its item data. It
+is rebuilt whenever the resolution changes, since that is what it multiplies.
+
+The multiplier is stored as a **percentage** (`150`), not a decimal. "1.5" in an
+ini is a locale trap: under a locale whose decimal separator is a comma it
+parses as 1, silently turning supersampling off. An integer has no such reading.
 
 An earlier single-page version of this window was opened once and came up. The
 tabbed structure above has not been run: it compiles and is deployed to the

@@ -77,6 +77,11 @@ const Descriptor& descriptor(Feature f) {
     /* AtlasCache      */ { "DUSK_ATLAS_CACHE",       nullptr, nullptr },
     /* FieldEngineFix  */ { "DUSK_FIELD_ENGINE_FIX",  nullptr, nullptr },
     /* FieldStabilizer */ { "DUSK_FIELD_STABILIZER",  nullptr, nullptr },
+    /* Smaa            */ { "DUSK_SMAA",     "Rendering", "SMAA" },
+    /* Msaa            */ { "DUSK_MSAA",               nullptr, nullptr },
+    /* Supersampling   */ { "DUSK_SSAA",               nullptr, nullptr },
+    /* AnisotropicFiltering */
+                          { "DUSK_ANISO", "Rendering", "AnisotropicFiltering" },
   };
   return table[static_cast<int>(f)];
 }
@@ -141,6 +146,40 @@ constexpr Support X = Support::OnByDefault;
 // Ayesha builds -- see the comment on the offset constants in field_physics.cpp
 // -- so nothing about this fix is now inherited on trust.
 //
+// Smaa is Ayesha-only and OptIn, and is the one shipping-quality feature here
+// that is deliberately NOT on by default yet. The passes themselves are the
+// Arland project's own, ported unchanged, so the antialiasing is not the
+// experiment. What is missing is where to inject it: Arland runs SMAA on the
+// scene target before the game composites its interface, and no equivalent
+// boundary has been established for PhyreEngine. Until one is, this runs at
+// Present over the finished frame, which antialiases the UI and its text along
+// with the scene. That is a real visual cost and exactly the kind of trade-off
+// a user should get to refuse, so it stays opt-in and keeps its switch.
+//
+// Escha & Logy and Shallie are Unsupported rather than OptIn only for want of
+// evidence: the full-frame path needs no engine knowledge and would very likely
+// work there unchanged. Nothing has been measured on KTGL, so nothing is
+// claimed (WORK_DOC.md, "SMAA").
+//
+// Supersampling is Unsupported EVERYWHERE, and that is a measurement rather
+// than caution. The implementation is ported and correct in itself, but its
+// attachment point is wrong for this engine: it substitutes a larger texture
+// when the game creates a render-target view over the back buffer, and Ayesha
+// created exactly one such view at startup (285 ms, a second before the first
+// present) and none afterwards. A count that never grows, with a black screen,
+// says the engine does not composite through that view -- most likely it blits
+// into the back buffer with something that needs no view at all. So the larger
+// target stayed empty and the downscale painted it over a frame the game had
+// already drawn correctly.
+//
+// Left Unsupported rather than opt-in because the failure blanks the screen,
+// which is not something to leave reachable from a launcher. The route that
+// should work is described in WORK_DOC.md, "MSAA and supersampling": have
+// highres.cpp adopt the supersampled size as its main render size, so the
+// engine renders its own targets larger and the existing raster correction
+// carries the viewports, then downscale that. Nothing here needs deleting for
+// it; the downscale pass and its shader are the same either way.
+//
 // TargetCensus is the one diagnostic that is NOT Ayesha-only. It reads nothing
 // but the D3D11 resources the game creates, so it needs no mapped address and
 // no engine knowledge, and the question it answers -- does this game size its
@@ -173,10 +212,10 @@ constexpr Support X = Support::OnByDefault;
 // renderer has not been censused at all; enabling this there would apply a rule
 // derived from a different engine.
 constexpr Support kMatrix[3][static_cast<int>(Feature::Count)] = {
-  //                Stats Trace Verfy Censu Probe Targt HiRes Cache Field Stab
-  /* Ayesha  */   {   O,    O,    O,    O,    O,    O,    X,    X,    X,    X },
-  /* Escha   */   {   U,    U,    U,    U,    U,    O,    U,    U,    U,    U },
-  /* Shallie */   {   U,    U,    U,    U,    U,    O,    U,    U,    U,    U },
+  //                Stats Trace Verfy Censu Probe Targt HiRes Cache Field Stab Smaa Msaa Ssaa Aniso
+  /* Ayesha  */   {   O,    O,    O,    O,    O,    O,    X,    X,    X,    X,   O,   O,   O,   X },
+  /* Escha   */   {   U,    U,    U,    U,    U,    O,    U,    U,    U,    U,   U,   U,   U,   O },
+  /* Shallie */   {   U,    U,    U,    U,    U,    O,    U,    U,    U,    U,   U,   U,   U,   O },
 };
 
 int titleRow(Title t) {

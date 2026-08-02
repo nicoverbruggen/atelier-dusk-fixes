@@ -7,7 +7,7 @@
 
 // D3D11-level write probe (Feature::D3D11WriteProbe / DUSK_D3D11_WRITE_PROBE).
 //
-// The Ayesha atlas cache (src/phyre/atlas_fix.cpp) serves repeated font-atlas
+// The Ayesha atlas cache (src/engines/phyre/atlas_fix.cpp) serves repeated font-atlas
 // reads from a CPU snapshot, which is only safe if every write to those
 // textures goes through the middleware lock the mod already hooks.
 // AtlasCensus enumerates writers on that path. This probe enumerates the only

@@ -8,7 +8,7 @@
 // against one is meaningless against the other: Ayesha's font-atlas path has no
 // homolog in Escha & Logy or Shallie, and their open defects -- Escha's shadow
 // SRV, Shallie's CreateSamplerState -- have none in Ayesha. So the fixes are
-// split into `src/phyre/` and `src/ktgl/`, which share nothing but `src/core/`.
+// split into `src/engines/phyre/` and `src/engines/ktgl/`, which share nothing but `src/core/`.
 //
 // They still ship as a single d3d11.dll. Every fix is already gated twice, on
 // the capability matrix in game.cpp and on an executable fingerprint, so a

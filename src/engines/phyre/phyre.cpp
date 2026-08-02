@@ -14,9 +14,10 @@
 
 #include "atlas_fix.h"
 #include "field_physics.h"
-#include "../core/game.h"
-#include "../core/log.h"
-#include "../../vendor/minhook/include/MinHook.h"
+#include "scene_target.h"
+#include "../../core/game.h"
+#include "../../core/log.h"
+#include "../../../vendor/minhook/include/MinHook.h"
 
 namespace atfix {
 extern Log log;   // main.cpp
@@ -77,6 +78,14 @@ namespace dusk {
 
 bool initializePhyreFixes() {
   static const bool initialized = [] {
+    // Before the feature gate below, and deliberately so. This registers a
+    // predicate with core's MSAA module -- no hooks, no mapped addresses, no
+    // fingerprint needed -- and a session that enables only MSAA must still get
+    // it. Everything past the gate is a hooked, address-dependent fix; this is
+    // not one, and gating it with them would make MSAA silently decline every
+    // bind in exactly the configuration that asked for it.
+    registerPhyreSceneTarget();
+
     const bool wantCache = atfix::featureEnabled(atfix::Feature::AtlasCache);
     const bool wantStats = atfix::featureEnabled(atfix::Feature::AtlasStats);
     const bool wantTrace = atfix::featureEnabled(atfix::Feature::AtlasTrace);

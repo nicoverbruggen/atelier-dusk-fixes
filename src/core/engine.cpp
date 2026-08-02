@@ -8,8 +8,8 @@
 
 #include "game.h"
 #include "log.h"
-#include "../ktgl/ktgl.h"
-#include "../phyre/phyre.h"
+#include "../engines/ktgl/ktgl.h"
+#include "../engines/phyre/phyre.h"
 
 namespace atfix {
 extern Log log;   // main.cpp

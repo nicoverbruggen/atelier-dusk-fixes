@@ -46,8 +46,8 @@ else
   # resolve them elsewhere.
   dxguid_dep = cpp.find_library('dxguid')
 
-  # Split by engine: src/core is engine-agnostic, src/phyre is Ayesha
-  # (PhyreEngine), src/ktgl is Escha & Logy plus Shallie. They compile into one
+  # Split by engine: src/core is engine-agnostic, src/engines/phyre is Ayesha
+  # (PhyreEngine), src/engines/ktgl is Escha & Logy plus Shallie. One d3d11.dll
   # d3d11.dll -- see src/core/engine.h for why.
   sources = files(
     'src/core/main.cpp',
@@ -56,11 +56,17 @@ else
     'src/core/engine.cpp',
     'src/core/game.cpp',
     'src/core/hook_util.cpp',
+    'src/core/d3d11_hooks.cpp',
     'src/core/highres.cpp',
-    'src/phyre/phyre.cpp',
-    'src/phyre/atlas_fix.cpp',
-    'src/phyre/field_physics.cpp',
-    'src/ktgl/ktgl.cpp',
+    'src/core/msaa.cpp',
+    'src/core/sampler.cpp',
+    'src/core/smaa.cpp',
+    'src/core/supersample.cpp',
+    'src/engines/phyre/phyre.cpp',
+    'src/engines/phyre/atlas_fix.cpp',
+    'src/engines/phyre/field_physics.cpp',
+    'src/engines/phyre/scene_target.cpp',
+    'src/engines/ktgl/ktgl.cpp',
     'vendor/minhook/src/hde/hde64.c',
     'vendor/minhook/src/hook.c',
     'vendor/minhook/src/buffer.c',

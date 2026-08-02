@@ -8,7 +8,7 @@
 //
 // Engine-specific hook descriptors do NOT live here. The Dusk trilogy spans two
 // engines with disjoint address packs, so each engine module owns its own table:
-// see `phyre/phyre.h` (Ayesha) and `ktgl/ktgl.h` (Escha & Logy, Shallie).
+// see `engine/phyre/phyre.h` (Ayesha) and `engine/ktgl/ktgl.h` (Escha & Logy, Shallie).
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 

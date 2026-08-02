@@ -66,6 +66,21 @@ bool duskConfigBool(const char* section, const char* key, bool def) {
          value[0] == 'y' || value[0] == 'Y';
 }
 
+int duskConfigInt(const char* section, const char* key, int def) {
+  const char* path = configPath();
+  if (!path)
+    return def;
+  char value[16] = { };
+  GetPrivateProfileStringA(section, key, "\x01", value, sizeof(value), path);
+  if (value[0] == '\x01') {
+    char seed[16] = { };
+    wsprintfA(seed, "%d", def);
+    WritePrivateProfileStringA(section, key, seed, path);
+    return def;
+  }
+  return std::atoi(value);
+}
+
 void logConfiguration() {
   const char* path = configPath();
   if (!path) {

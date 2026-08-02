@@ -13,15 +13,43 @@
 //     SRV at init, and the system-save-data wipe on quit.
 //   * Shallie: the CreateSamplerState bug AGT patched.
 //
-// None is implemented yet, so this module currently only fingerprints. The four
-// executable identities are verified; this check is the gate every future fix
-// here will install behind.
+// None of those is implemented yet. What this module does install is the
+// "Loadning system data." correction (loading_text_fix.h), which is the first
+// fix here and needs no engine knowledge at all -- it rewrites one misspelled
+// string literal in the mapped image. The four executable identities are
+// verified; that check is the gate this and every future fix installs behind.
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
+#include <cstdint>
+
+namespace atfix {
+
+// Per-executable descriptor for the four KTGL builds: the executable identity,
+// fingerprinted the same way as Ayesha's two (name plus .text VirtualSize), plus
+// the RVAs a fix in this directory needs.
+//
+// A zero `textSize` would mean "name matches, size unknown" and is reported but
+// never treated as a verified identity, so a fix cannot install against an
+// unrecognized build. A zero RVA means that fix has no row for this build and
+// declines; every RVA here is derived in WORK_DOC.md, "The 'Loadning system
+// data.' typo", and none of them is currently zero.
+struct KtglGame {
+  const char* executable;
+  DWORD textSize;
+  uintptr_t loadingTextRva;   // the "Loadning system data." literal in .rdata
+  uint8_t exeBuild;
+};
+
+}  // namespace atfix
 
 namespace dusk {
 
-// Fingerprints the process against the known Escha & Logy / Shallie builds and
-// records the result. Returns true if the executable was recognized. Installs no
-// hooks -- there are none yet.
+// Fingerprints the process against the known Escha & Logy / Shallie builds,
+// records the result, and installs whichever fixes in this directory are
+// enabled. Idempotent. Returns true if the executable was recognized, whether or
+// not any individual fix installed -- each reports its own outcome to the log.
+// Installs no hooks: nothing here detours anything yet.
 bool initializeKtglFixes();
 
 // Present. Nothing here needs a frame boundary yet; the hook exists so that the

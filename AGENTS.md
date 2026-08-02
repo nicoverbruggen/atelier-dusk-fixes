@@ -14,7 +14,7 @@ Split by engine, because the trilogy spans two and they share nothing a fix can 
 
   Rendering features may still need one engine-specific decision each. Keep it out of core: `src/core/msaa.h` takes a `MsaaSceneTest` callback for "which bind is the scene", and `src/engines/phyre/scene_target.cpp` supplies Ayesha's. Core declines and says so in the log when no engine has registered one — which is the correct state for Escha & Logy and Shallie, whose renderer has never been censused.
 - `src/engines/phyre/` — Ayesha (PhyreEngine, old MSVC CRT). Arland ports live here: the atlas cache, field physics, and the MSAA scene-target rule.
-- `src/engines/ktgl/` — Escha & Logy and Shallie (LTGL/KTGL, UCRT). Fingerprinting only so far.
+- `src/engines/ktgl/` — Escha & Logy and Shallie (LTGL/KTGL, UCRT). Fingerprinting plus one fix: the `Loadning`→`Loading` string correction (`loading_text_fix.cpp`), which patches a `.rdata` literal and hooks nothing. Nothing here detours anything yet.
 
   Plural on purpose. `src/core/engine.{h,cpp}` is the **dispatch layer** — it resolves which engine this process is and forwards to one module. `src/engines/` holds the modules it forwards to. Singular for the dispatcher, plural for the implementations.
 - `src/launcher/` — both launcher pieces, neither of which is an engine module and neither of which shares code with the game DLL: `launcher_gui.cpp` is the 64-bit `dusk-fix-launcher.exe` settings window, and `launcher_proxy.cpp` is the 32-bit `msimg32.dll` the games' own front-ends load. They agree on ini key names and nothing else.

@@ -38,7 +38,8 @@ const char* engineName(Engine e);
 //
 // AtlasCache, HighResRendering, and both field-jitter halves ship on by
 // default for Ayesha. Six of the remaining features are diagnostics, and every
-// row but TargetCensus is Ayesha-only.
+// row but TargetCensus, AnisotropicFiltering and LoadingTextTypo is
+// Ayesha-only.
 enum class Feature : uint8_t {
   AtlasStats,       // Ayesha font-atlas diagnostic counters (measurement only)
   AtlasTrace,       // Ayesha font-atlas lock/unlock sequence trace (one frame)
@@ -54,6 +55,8 @@ enum class Feature : uint8_t {
   Msaa,             // Ayesha: multisample the scene via twin targets (msaa.h)
   Supersampling,    // Ayesha: render above the display size, downscale to it
   AnisotropicFiltering, // any game: upgrade trilinear samplers (sampler.h)
+  WorldMapCursor,   // Ayesha: travel-map cursor moves per second, not per frame
+  LoadingTextTypo,  // Escha & Logy, Shallie: "Loadning" -> "Loading"
   Count,
 };
 

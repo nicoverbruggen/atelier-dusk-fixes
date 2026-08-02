@@ -2,8 +2,10 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 
 #include "config.h"
 #include "game.h"
@@ -89,6 +91,8 @@ const Descriptor& descriptor(Feature f) {
     /* Supersampling   */ { "DUSK_SSAA",               nullptr, nullptr },
     /* AnisotropicFiltering */
                           { "DUSK_ANISO", "Rendering", "AnisotropicFiltering" },
+    /* WorldMapCursor  */ { "DUSK_WORLDMAP",          nullptr, nullptr },
+    /* LoadingTextTypo */ { "DUSK_LOADING_TEXT",      nullptr, nullptr },
   };
   return table[static_cast<int>(f)];
 }
@@ -194,6 +198,18 @@ constexpr Support X = Support::OnByDefault;
 // Its key is the one in this table that featureEnabled must not be asked about
 // -- see the note on the Descriptor row.
 //
+// WorldMapCursor is Ayesha-only and ships ON BY DEFAULT, on the same reasoning
+// as the field-jitter fix it is a sibling of: a cursor that crosses the map
+// three times too fast at 200 Hz is not a preference anyone would choose, it is
+// the game behaving differently from the way it was built to. The Arland
+// project reached the same conclusion for Totori and Meruru.
+//
+// `DUSK_WORLDMAP=0` stands it down for a comparison, and it has no ini key for
+// the reason given on Descriptor: a correction is not a setting.
+//
+// Escha & Logy and Shallie are Unsupported because nothing has been measured
+// there -- not because their maps are known to be fine.
+//
 // TargetCensus is the one diagnostic that is NOT Ayesha-only. It reads nothing
 // but the D3D11 resources the game creates, so it needs no mapped address and
 // no engine knowledge, and the question it answers -- does this game size its
@@ -225,12 +241,50 @@ constexpr Support X = Support::OnByDefault;
 // Escha & Logy and Shallie are Unsupported rather than OptIn because their
 // renderer has not been censused at all; enabling this there would apply a rule
 // derived from a different engine.
-constexpr Support kMatrix[3][static_cast<int>(Feature::Count)] = {
-  //                Stats Trace Verfy Censu Probe Targt HiRes Cache Field Stab Smaa Msaa Ssaa Aniso
-  /* Ayesha  */   {   O,    O,    O,    O,    O,    O,    X,    X,    X,    X,   X,   O,   O,   X },
-  /* Escha   */   {   U,    U,    U,    U,    U,    O,    U,    U,    U,    U,   U,   U,   U,   O },
-  /* Shallie */   {   U,    U,    U,    U,    U,    O,    U,    U,    U,    U,   U,   U,   U,   O },
-};
+//
+// LoadingTextTypo is the mirror image of every row above it: the two KTGL games
+// get it and Ayesha does not, because Ayesha does not have the defect. The
+// literal "Loadning system data." is in all four Escha & Logy and Shallie
+// executables and in neither Ayesha build (loading_text_fix.h), so Ayesha's U
+// here is a fact about the binary rather than a gap in the evidence.
+//
+// It ships ON BY DEFAULT, and it is the least arguable row in this table: a
+// misspelling on the first screen of the game is not a preference, and the
+// correction costs one 22-byte store at startup, runs no code afterwards, and
+// cannot change anything a player would want back. `DUSK_LOADING_TEXT=0` stands
+// it down for a comparison, and it has no ini key for the reason given on
+// Descriptor.
+//
+// It is also the one row here that needs no engine knowledge whatsoever, which
+// is why it can ship for KTGL while everything else in this table cannot: it
+// rewrites a string literal in the mapped image and hooks nothing.
+//
+// NOTE on the WorldMapCursor column. It was absent from these rows until this
+// change, so the array's trailing elements were value-initialized and every game
+// silently read Unsupported for it -- contradicting the paragraph above, which
+// says Ayesha ships it on by default. It is spelled out now. Nothing visible
+// changes: worldmap_fix.cpp still has no address row for either Ayesha build and
+// declines regardless. The row is corrected so that deriving that address pack
+// is all the fix will need.
+//
+// The rows are three separate arrays of DEDUCED extent rather than one
+// `[3][Count]` block, which is the whole reason that column could go missing
+// unnoticed: with the width declared, a short row is not an error, the trailing
+// entries are value-initialized, and Unsupported happens to be the zero value --
+// so an incomplete row reads as a deliberate "this game does not get it". Let
+// the extent come from the initializer instead and each static_assert below
+// fails loudly the next time a Feature is added without extending every row.
+//                    Stats Trace Verfy Censu Probe Targt HiRes Cache Field Stab Smaa Msaa Ssaa Aniso WMap Typo
+constexpr Support kAyesha[]  = { O,    O,    O,    O,    O,    O,    X,    X,    X,    X,   X,   O,   O,   X,    X,   U };
+constexpr Support kEscha[]   = { U,    U,    U,    U,    U,    O,    U,    U,    U,    U,   U,   U,   U,   O,    U,   X };
+constexpr Support kShallie[] = { U,    U,    U,    U,    U,    O,    U,    U,    U,    U,   U,   U,   U,   O,    U,   X };
+
+constexpr std::size_t kColumns = static_cast<std::size_t>(Feature::Count);
+static_assert(std::size(kAyesha) == kColumns,  "Ayesha row is not one entry per Feature");
+static_assert(std::size(kEscha) == kColumns,   "Escha row is not one entry per Feature");
+static_assert(std::size(kShallie) == kColumns, "Shallie row is not one entry per Feature");
+
+constexpr const Support* kMatrix[3] = { kAyesha, kEscha, kShallie };
 
 int titleRow(Title t) {
   switch (t) {

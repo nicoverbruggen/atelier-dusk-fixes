@@ -479,6 +479,28 @@ Any failure -- no `d3dcompiler`, a shader that will not compile, a resource that
 will not create -- logs once, sets the broken flag and leaves SMAA off for the
 rest of the session without touching anything else.
 
+### Shipped on by default, 2026-08-02
+
+SMAA is now `OnByDefault` on Ayesha. That became defensible only when the pre-UI
+injection landed: the Present-time path antialiased the composited frame,
+interface included, and softened menu text badly enough that it was switched off
+after its first validation. Running on the scene target before the interface is
+composited leaves text untouched.
+
+Two consequences worth stating:
+
+- The Present path still exists as a fallback and stands down permanently once
+  the pre-UI path has proven itself once. Before that -- logos and menus, where
+  no scene target exists yet -- it still runs, so the first few seconds of a
+  session do get their text softened.
+- With supersampling on, SMAA runs **inside** the downscale pass, on the
+  display-sized result, rather than at the boundary on the scene target. Cheaper
+  (a quarter of the pixels at 200%), correct scale for a morphological filter,
+  and it reuses a state bracket that already exists. The boundary path stands
+  down only once supersampling has actually *engaged*, not merely when it is
+  configured -- otherwise a configured-but-never-attached supersampling setting
+  would leave SMAA with nowhere to run and fall back to softening the interface.
+
 ## MSAA and supersampling
 
 Added alongside SMAA so the antialiasing options sit together. All three are
@@ -1103,6 +1125,53 @@ Nothing below has been run. **Do not treat any of this as validated.**
 6. Launcher: walk the preset ladder, edit a control, reopen.
 
 **Status: built, not deployed, not validated in game.**
+
+#### Validated in game, 2026-08-02
+
+Every rung of the log contract appeared, in order, on the first run:
+
+```
+SSAA: back buffer identified 2560x1440 format=87
+HIGHRES: scene size 5120x2880 = main 2560x1440 x 200%
+SSAA: composite identified -- bind whose colour target is the swap-chain back
+      buffer (frame 0)
+SSAA: engaged -- 5120x2880 -> 2560x1440 substituted at the composite's sample
+```
+
+Counters over a field session: `sceneSrvSubstitutions` and `downscales` both at
+exactly one per frame, `passFailures=0`, `secondHostRefusals=0`.
+
+What that settles, item by item:
+
+- **The known risk did not materialise.** The composite binds the back buffer
+  *before* setting its shader resources, so the marker is set when the
+  substitution looks. The contingency (re-scanning `PSGetShaderResources` on
+  marker set) remains designed and deliberately unbuilt.
+- **`secondHostRefusals=0`** — the composite reads only one of the two
+  ping-pong scene targets. The memo defect the cross-review caught was still a
+  real defect; it simply would not have fired in this scene.
+- **One downscale per frame.** The per-frame cost problem that the old latch was
+  introduced to solve is gone, without pinning the work to the wrong transition.
+- **A full-screen pass injected mid-composite-setup does not disturb the
+  composite.** `passFailures=0` and the frame is correct. This was the reviewer's
+  least-confident area.
+- **Fractional factors work.** 150% ran at 3840x2160 -> 2560x1440 with no bloom
+  or glow misplacement, which is the whole reason the downscale is mod-owned
+  rather than the engine's four-tap bilinear.
+- **All three features agree on the scene size.** With MSAA and SMAA also on,
+  `MSAA: engaged size=5120x2880` and `SSAA: engaged 5120x2880 -> 2560x1440` in
+  the same log. The drift that once silently disabled MSAA is now a one-line
+  check.
+
+Cost, measured on a 7900 XTX at 1440p in the game's opening interior: 200% with
+4x MSAA sits around 70% GPU; 200% with 8x MSAA reaches 90%. Neither can be a
+default, which is what the preset ladder reflects.
+
+**Still open:** `depthHostReads` remains worth reading. The shader scan of
+`commonShader.PSSG` found a DOF/glow composite (`0x54718`) declaring `BaseDepth`
+alongside `backBufferTexture`, so the engine does have a pass that samples
+depth. Every run so far reports zero, but that is a statement about the scenes
+tested, not about the engine.
 
 ## The Dusk front-ends
 
@@ -2164,6 +2233,102 @@ before any new write is designed. Nothing here has been confirmed against the
 live controller, and none of it should be treated as more than a map until it
 has been.
 
+## The "Loadning system data." typo
+
+> **TL;DR**: Escha & Logy and Shallie misspell "Loading" on the first screen of the game. The word is a plain string literal in each executable's `.rdata`, so the mod corrects the 22 bytes in the loaded image at startup. First fix shipped for the KTGL module. Nothing on disk is touched.
+
+### The defect
+
+Both KTGL games print a status line while they read the system save on the very
+first screen, and the English string reads `Loadning system data.` It is one of
+the first things a player sees.
+
+It is the localization's error, not the engine's, and the evidence for that is
+the neighbourhood the string sits in. `Saving system data.`, `Saving System data.`
+and `Deleting…` immediately around it are all correct, and so are the Japanese,
+Simplified Chinese and Traditional Chinese variants of the same line that sit
+beside it in the same block.
+
+### Where it lives, and why that settles whether it is fixable
+
+A narrow (single-byte) string literal in `.rdata`, reached directly by `lea`
+instructions in the save/load status code. Not a wide string, not an entry in a
+pointer table, and **not** in any game data file — a recursive scan of
+`Data/`, `DLC/`, `Script/` and the `Event*` trees for the misspelling finds
+nothing. That is what makes this fixable at all: had it lived in a data file the
+only route would have been intercepting the file at load time, which is a far
+larger job than the defect is worth.
+
+Exactly one occurrence per executable, in all four builds:
+
+| Executable | File offset | RVA | `lea` references |
+|---|---:|---:|---:|
+| `Atelier_Escha_and_Logy_EN.exe` | `0x7cd4d8` | `0x7ceed8` | 3 |
+| `Atelier_Escha_and_Logy.exe` (multilingual) | `0x85c378` | `0x85e978` | 3 |
+| `Atelier_Shallie_EN.exe` | `0x76d720` | `0x76f320` | 2 |
+| `Atelier_Shallie.exe` (multilingual) | `0x7c67c0` | `0x7c89c0` | 2 |
+
+The multilingual builds carry the English string too, so both builds of both
+games need the correction. Ayesha has neither the string nor the defect — it is a
+different engine and a different localization pass — which is why its row in the
+capability matrix is `Unsupported` as a statement about the binary rather than
+for want of evidence.
+
+The RVAs were derived from the file offsets through the PE section table
+(`.rdata`'s `rawptr`→`va` delta) and confirmed with
+`atelier-re-tools/tools/atre.py bytes`; the reference counts come from
+`atre.py xref-data`. `typo_scan.py` was not the instrument here — it is shaped
+for the Arland layout (`*_Release_en.exe` plus `Res/x64/WinXls_EN`) and finds
+neither in a Dusk install.
+
+### The correction
+
+`src/engines/ktgl/loading_text_fix.cpp` overwrites the literal in place at
+startup:
+
+```
+Loadning system data.\0     22 bytes, shipped
+Loading system data.\0\0    22 bytes, written
+```
+
+The correct spelling is one character shorter, so the replacement fits inside the
+region the compiler already reserved; nothing after it moves, and the second NUL
+clears the byte the shortened string vacated. Only the four `.rdata` addresses
+above are ever written, and only after the bytes there are compared against the
+full shipped literal — an RVA that has drifted, or a build already patched by
+something else, fails that check and the fix declines with a logged reason rather
+than overwriting 22 bytes of unrelated read-only data.
+
+`.rdata` is mapped read-only, so the page is switched to `PAGE_READWRITE` for the
+store and its original protection restored immediately afterwards. This is the
+one place in the project where the `VirtualProtect` call is load-bearing rather
+than defensive: `field_physics.cpp` protects a page whose section flags already
+say writable, this one would fault without it.
+
+Cost is one 22-byte `memcpy` at initialization. There is no hook, no detour, no
+trampoline, and no per-frame work — the game reads the corrected bytes because
+they are the bytes at the address its own code already points at. It is on by
+default (`DUSK_LOADING_TEXT=0` stands it down for a comparison) and has no ini
+key, on the standing rule that a correction is not a setting.
+
+### Gating
+
+`initializeKtglFixes` now requires a **verified** fingerprint before installing
+anything: the executable name must match a row in `kGames` and the loaded
+`.text` VirtualSize must equal that row's. A name match with a mismatched size is
+logged as `MISMATCH` and installs nothing, because every RVA in that table was
+read out of one specific compile. The per-build RVA moved into `atfix::KtglGame`
+in `ktgl.h`, mirroring `atfix::PhyreGame`: the module entry point recognizes the
+executable once and hands each fix the base plus the verified descriptor.
+
+### Not yet confirmed in game
+
+The correction is verified statically — the bytes, the addresses and the
+references are all read out of the four shipped executables — but no run has been
+made to see the corrected line on screen. That is a one-launch check on Escha &
+Logy: start the game and read the status line on the first screen. The log line
+to look for is `FIXES loading_text=active rva=0x...`.
+
 ## Runtime memory manipulation
 
 > **TL;DR**: The mod does not edit or replace the games' executable files. Its proxy DLL is loaded alongside the game, makes narrowly verified changes inside that running process, and forwards everything else to the real Windows library. Those changes disappear when the process exits.
@@ -2182,12 +2347,18 @@ only, rewrites five bytes at the executable's entry point so the launch can be
 redirected. The original bytes are kept and put back if the redirect cannot
 complete. See "The launcher proxy" above.
 
-Executable changes are detours. After verifying the target function, MinHook
-places a jump at its entry point and preserves the displaced instructions in a
-trampoline, so the mod can do work before or after normal engine behaviour rather
-than replacing the routine. MinHook is used rather than this project's own
+Executable changes are almost all detours. After verifying the target function,
+MinHook places a jump at its entry point and preserves the displaced instructions
+in a trampoline, so the mod can do work before or after normal engine behaviour
+rather than replacing the routine. MinHook is used rather than this project's own
 fixed-size absolute-jump installer because the hooked atlas unlock is a 14-byte
 stub, too small to patch without clobbering what follows.
+
+The one exception is data rather than code: Escha & Logy's and Shallie's
+`Loadning`→`Loading` correction rewrites 22 bytes of a `.rdata` string literal at
+startup, after comparing them against the full shipped literal, and restores the
+page's original read-only protection immediately. It installs no hook and runs no
+code afterwards.
 
 Where the mod reads or writes engine memory it proves the address first: shared
 guarded-read helpers reject unavailable memory before any reverse-engineered
@@ -2254,11 +2425,13 @@ into `0x5a9fb0`. The write mapping is held as engine-object state — `0x5a9ae0`
 stores the mapped pointer at `obj+0xa0` and short-circuits when it is already
 non-null — rather than as a scoped bracket like the read.
 
-Escha & Logy and Shallie are recognized for identification and logging only. They
-have no menu hooks and no mapped addresses, and the capability matrix hard-offs
-every feature for them so no configuration can turn one on. Their four
-executables are fingerprinted the same way, so that a future fix has a verified
-identity to gate on:
+Escha & Logy and Shallie have no menu hooks and no detours of any kind. They now
+carry one fix — the `Loadning`→`Loading` correction, which patches a string
+literal rather than hooking anything (see "The 'Loadning system data.' typo") —
+and the capability matrix hard-offs every other feature for them so no
+configuration can turn one on. Their four executables are fingerprinted the same
+way, and that fingerprint must now *verify*, not merely match by name, before
+anything installs:
 
 | Executable | SHA-256 | `.text` |
 |---|---|---:|

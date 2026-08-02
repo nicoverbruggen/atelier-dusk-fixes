@@ -3,7 +3,7 @@
 Performance and rendering fixes for the Steam releases of **Atelier Ayesha DX, Atelier Escha & Logy DX, and Atelier Shallie DX**, the Dusk trilogy.
 
 > [!IMPORTANT]
-> **Pre-release:** This repository is being prepared for its first `v0.1` release. Ayesha's menu, high-resolution rendering, and high-refresh field fixes are implemented and measured, but the launcher still needs a complete validation session before a public release. Escha & Logy and Shallie currently receive no engine-specific fixes.
+> **Pre-release:** This repository is being prepared for its first `v0.1` release. Ayesha's menu, high-resolution rendering, and high-refresh field fixes are implemented and measured, but the launcher still needs a complete validation session before a public release. Escha & Logy and Shallie receive no engine-specific fixes; their only correction is the "Loadning" typo below.
 
 The project ships one 64-bit `d3d11.dll` for all three games, an optional 64-bit `dusk-fix-launcher.exe`, and an optional 32-bit `msimg32.dll` proxy for the games' front-ends. The game DLL and launcher are separate processes and separate targets. Nothing modifies the original game executables on disk.
 
@@ -21,6 +21,7 @@ The table below describes the current source state. A check mark means the behav
 | SMAA antialiasing (`[Rendering] SMAA`) | opt-in | — | — |
 | MSAA sample count (`[Rendering] MSAA`) | opt-in | — | — |
 | Supersampling (`[Rendering] Supersampling`) | opt-in | — | — |
+| "Loadning system data." corrected on the first screen | not affected | on | on |
 
 SMAA is the one entry above that is off by default, and the reason is where it currently runs rather than what it does. These games ship no antialiasing at all; SMAA (Jimenez et al.) works on the finished image, so it smooths every visible edge rather than only polygon silhouettes as MSAA does. The passes are ported unchanged from the Arland mod, but that project injects them on the scene target *before* the game composites its interface, so menus and text stay crisp. The equivalent boundary in Ayesha's renderer has not been found yet, so for now the passes run at Present over the whole finished frame, which antialiases the UI and its text along with the scene. Whether that trade is worth taking is a judgement, so it is offered rather than assumed. Ayesha only for now: the full-frame path needs no engine knowledge and would probably work on the other two unchanged, but nothing has been measured there.
 
@@ -28,7 +29,9 @@ MSAA joins it as the other antialiasing option, and both are set from the launch
 
 Supersampling renders the 3D scene larger than the display and averages it back down, which is the bluntest antialiasing there is and the only one that improves texture interiors and shader aliasing along with polygon edges. It is opt-in and always will be: 200% is four times the shaded pixels, measured at 70% GPU on a 7900 XTX in the game's *opening interior*. Four earlier attempts at it failed, the last two visibly; the current implementation identifies the game's composite pass positively rather than guessing at it. See `WORK_DOC.md`, "Supersampling: rebuilt on a positively identified composite" — including the validation runs it still owes.
 
-The other Ayesha fixes are enabled by default. Escha & Logy and Shallie are hard-gated off for engine-specific fixes until their LTGL/KTGL paths have been investigated.
+The last row is the only entry that is not an Ayesha fix, and it is a text correction rather than a rendering one. Escha & Logy and Shallie both misspell "Loading" as "Loadning" on the status line of the game's very first screen. The word is a plain string literal in each of the four executables, so the mod rewrites it in memory at startup; it hooks nothing and costs nothing after that one write. It carries no check mark yet because the addresses and bytes are verified statically but the corrected line has not been read off a running game. `DUSK_LOADING_TEXT=0` leaves it alone. Ayesha is marked "not affected" rather than "—": it does not contain the string.
+
+The other Ayesha fixes are enabled by default. Apart from that text correction, Escha & Logy and Shallie are hard-gated off for engine-specific fixes until their LTGL/KTGL paths have been investigated.
 
 ### Launcher
 
@@ -58,7 +61,7 @@ The Dusk ports are not one engine target:
 2. Copy `d3d11.dll` beside the game executable. Add `dusk-fix-launcher.exe` and `msimg32.dll` when using the custom launcher.
 3. Launch the game normally through Steam.
 
-The Ayesha fixes are enabled automatically. Escha & Logy and Shallie remain unmodified by engine-specific fixes.
+The Ayesha fixes are enabled automatically, as is the "Loadning" text correction for Escha & Logy and Shallie. Those two games remain unmodified by engine-specific fixes.
 
 ### Wine and Proton
 

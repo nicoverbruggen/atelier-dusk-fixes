@@ -30,6 +30,7 @@ These are environment variables, not ini keys. They are for comparison and bug r
 | `DUSK_HIGHRES=0` | Disables Ayesha's high-resolution render-target correction. |
 | `DUSK_FIELD_ENGINE_FIX=0` | Disables the Ayesha field-jitter fix. The resting stabilizer depends on this rescale. |
 | `DUSK_FIELD_STABILIZER=0` | Disables only the resting part of the field-jitter fix. This leaves the threshold rescale active. |
+| `DUSK_LOADING_TEXT=0` | Leaves the "Loadning system data." misspelling on Escha & Logy's and Shallie's first screen uncorrected. |
 
 Environment values are read before the ini layer. A wrapper that exports one of these variables, even with a default value, overrides the file and can make a validation run test the wrong configuration.
 

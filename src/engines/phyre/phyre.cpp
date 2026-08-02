@@ -15,6 +15,7 @@
 #include "atlas_fix.h"
 #include "field_physics.h"
 #include "scene_target.h"
+#include "worldmap_fix.h"
 #include "../../core/game.h"
 #include "../../core/log.h"
 #include "../../../vendor/minhook/include/MinHook.h"
@@ -91,12 +92,14 @@ bool initializePhyreFixes() {
     const bool wantTrace = atfix::featureEnabled(atfix::Feature::AtlasTrace);
     const bool wantVerify = atfix::featureEnabled(atfix::Feature::AtlasVerify);
     const bool wantCensus = atfix::featureEnabled(atfix::Feature::AtlasCensus);
+    const bool wantWorldMap =
+      atfix::featureEnabled(atfix::Feature::WorldMapCursor);
     const bool wantField =
       atfix::featureEnabled(atfix::Feature::FieldEngineFix) ||
       atfix::featureEnabled(atfix::Feature::FieldStabilizer) ||
       atfix::fieldTraceEnabled();
     if (!wantCache && !wantStats && !wantTrace && !wantVerify && !wantCensus &&
-        !wantField)
+        !wantField && !wantWorldMap)
       return false;
     if (MH_Initialize() != MH_OK) {
       log("phyre: MH_Initialize failed");
@@ -116,6 +119,11 @@ bool initializePhyreFixes() {
     // its own prologue checks, so it installs (or declines) on its own terms.
     if (wantField)
       atfix::installFieldPhysics(g_base, g_game->exeBuild);
+
+    // Same family as the field fix above: another movement value applied per
+    // frame instead of per second, in a different subsystem.
+    if (wantWorldMap)
+      installWorldMapFix(g_base, g_game->exeBuild);
 
     return true;
   }();

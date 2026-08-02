@@ -259,13 +259,12 @@ constexpr Support X = Support::OnByDefault;
 // is why it can ship for KTGL while everything else in this table cannot: it
 // rewrites a string literal in the mapped image and hooks nothing.
 //
-// NOTE on the WorldMapCursor column. It was absent from these rows until this
-// change, so the array's trailing elements were value-initialized and every game
-// silently read Unsupported for it -- contradicting the paragraph above, which
-// says Ayesha ships it on by default. It is spelled out now. Nothing visible
-// changes: worldmap_fix.cpp still has no address row for either Ayesha build and
-// declines regardless. The row is corrected so that deriving that address pack
-// is all the fix will need.
+// NOTE on the WorldMapCursor column. It was absent from these rows at first, so
+// the array's trailing elements were value-initialized and every game silently
+// read Unsupported for it -- contradicting the paragraph above, which says
+// Ayesha ships it on by default. It is spelled out now, and the address pack it
+// was waiting on has since been derived for both Ayesha builds, so the column
+// and the code finally agree.
 //
 // The rows are three separate arrays of DEDUCED extent rather than one
 // `[3][Count]` block, which is the whole reason that column could go missing

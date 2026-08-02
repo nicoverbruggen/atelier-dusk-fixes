@@ -9,13 +9,20 @@
 // Frame-rate-independent travel-map cursor movement for Ayesha.
 //
 // THE DEFECT is the one the Arland project already fixed in Totori and Meruru,
-// reported here in game. Their movers read the stick axes, fold in the four
-// digital directions, rotate that direction by the map heading, and add the
-// resulting NORMALIZED vector straight to the cursor position -- with no delta
-// time anywhere in the addition. That is a fixed distance per rendered FRAME,
-// so the cursor crosses the map roughly three times faster at 200 Hz than the
-// game was built for. The immediate caller does receive the real frame dt; the
-// mover simply never consumes it.
+// reported here in game and then confirmed in the binary. Ayesha's mover reads
+// the stick axes, folds in the four digital directions, rotates that direction
+// by the map heading, and adds the result straight to the cursor position --
+// with no delta time anywhere in the addition. That is a fixed distance per
+// rendered FRAME, so the cursor crosses the map roughly three times faster at
+// 200 Hz than the game was built for. The immediate caller does receive the
+// real frame dt; the mover simply never consumes it.
+//
+// One difference from Arland worth knowing before reading the source: Ayesha's
+// mover does NOT normalize the direction, so the step is |stick| * speed rather
+// than a unit vector. It scales with stick deflection, which changes nothing
+// about the fix -- whatever step the mover produced is rescaled -- but it does
+// mean the shape the Arland search looked for (a packed rsqrtps normalize) is
+// not in this binary, which is why the first two scans for it found nothing.
 //
 // THE FIX, also the Arland project's: capture the caller's dt, then rescale the
 // step the mover produced by min(dt * 60, 1). At 60 fps and below that factor

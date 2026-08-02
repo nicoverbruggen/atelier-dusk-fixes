@@ -2233,6 +2233,708 @@ before any new write is designed. Nothing here has been confirmed against the
 live controller, and none of it should be treated as more than a map until it
 has been.
 
+## The travel-map cursor
+
+> **TL;DR**: Ayesha's travel-map cursor moved a fixed distance per rendered *frame*, so it crossed the map roughly three times too fast at 200 Hz. Same defect and same fix as Arland's Totori and Meruru. The driver and mover are located and prologue-gated in both Ayesha builds. **Validated in game.**
+
+### The defect
+
+`worldmap_fix.cpp` at EN `0x3376a0` reads the two stick axes, folds in the four
+digital directions, rotates the result by the map heading, clamps to the map
+bounds, and adds it to the cursor position. There is no `dt` term anywhere in
+the addition. The immediate caller (EN `0x330c40`) *does* hold the real frame
+delta — the sub-state dispatcher at `0x329c20` passes it in `xmm1` to every
+registered callback — and simply never forwards it.
+
+This is the same family as the field-jitter fix above and as Arland's
+Totori/Meruru travel maps: a movement value applied per frame instead of per
+second.
+
+### The chain, and why two earlier searches missed it
+
+```
+WMGameMode::Update(this, dt)        0x306700   (vtable 0xd45048 slot 3)
+ └─ WMStateMgr::Update(dt)          0x32a9a0
+     └─ WMStateAutoMove::Update(dt) 0x32a5c0   (vtable 0xd46e60 slot 6)
+         └─ sub-state dispatch      0x329c20   — forwards dt correctly
+             └─ driver(owner, dt)   0x330c40   — holds dt, drops it
+                 └─ move(self)      0x3376a0   — no dt parameter at all
+```
+
+Two failed searches preceded this, and both failures are reusable lessons:
+
+1. **`callsites` on the axis accessor `0x1a0d00` returns nothing.** It is a leaf
+   with no `.pdata` entry, and every caller reaches it through the
+   incremental-link thunk `0xaa6f`. `callsites` on *the thunk* returns 53 real
+   sites, the mover among them. This is the `.pdata` blind spot in
+   `RE-PLAYBOOK.md` §5, hit for the second time in this project.
+2. **The follow-up scan for "reads both axes and does an SSE normalize" returned
+   zero because Ayesha's mover never normalizes.** Its step is `|stick| * speed`;
+   it computes a length only to test it against zero, with a scalar `mulss`/
+   `addss` chain and a call to `sqrtf`. The packed `rsqrtps` shape that Arland's
+   movers have is not in this binary. Searching for the Arland *shape* rather
+   than the Arland *behaviour* is what cost the second pass.
+
+Identity is proven rather than inferred: the driver's thunk is `lea`'d inside the
+constructor (EN `0x31fef0`), which installs vtable `0xd46e60` and zeroes the
+`+0x120` input lock that both driver and mover gate on. That vtable's RTTI
+complete-object locator is `0x114c7f0`, class **`WMStateAutoMove`** — a name
+worth having, since "auto move" is exactly what this sub-state does. A first
+pass called it `WMStateNormal`; that is a **different** sibling class with a
+different layout (vtable `0xd46e08`, COL `0x114c760`), and the confusion was
+caught by a second investigation and re-verified against `rtti` output. `homolog`
+returns MATCH both ways for both functions (driver 18 votes to 2, mover 25 to 6),
+and the ML build corroborates independently.
+
+### Addresses
+
+| | `Atelier_Ayesha_EN.exe` | `Atelier_Ayesha.exe` |
+|---|---|---|
+| driver | `0x330c40` | `0x33e770` |
+| move | `0x3376a0` | `0x345470` |
+| publish | inlined at `0x3378ea` | inlined at `0x3456ba` |
+| `WMStateAutoMove` vtable | `0xd46e60` | `0xd4be80` |
+| constructor / registrar | `0x31fef0` | `0x32d6d0` |
+
+Both prologue windows are byte-identical across the two builds, so
+`worldmap_fix.cpp` carries one pair rather than one per row.
+
+### Struct offsets
+
+`WMStateAutoMove` (`self`):
+
+| off | meaning |
+|---|---|
+| `+0x28` | render node |
+| `+0x30..0x3c` | cursor position, 16-byte-aligned `float[4]`; lane 3 is added to with zero |
+| `+0x44` | current route/node id |
+| `+0x120` | input lock; both driver and mover early-out when non-zero |
+
+Render node (`*(self+0x28)`):
+
+| off | meaning |
+|---|---|
+| `+0x38` | map heading fed to `MakeRotationY` |
+| `+0xb0` / `+0xc0` / `+0xd0` | Vec3 previous / target / current |
+| `+0xe0` | interpolation timer; `0` means snapped |
+
+### The publish is inlined, so the fix reproduces it
+
+The Arland movers call a separate publish helper, which the Arland fix simply
+calls again with the corrected position. **Ayesha has no such function.** The
+publish is inlined into the mover at `0x3378ea..0x33794c`, and three independent
+searches for an out-of-line copy — the exact `movss` store sequence, both `mov`
+register forms, and Arland's `movaps`/`movdqa` forms — found seventeen inlined
+sites and no leaf. The only leaf-shaped candidate, `0x31c6ef`, is a *getter*.
+
+So `republish()` writes the four fields directly: previous, target and current
+all get the corrected Vec3, and the timer is stored as zero. That is what the
+mover itself does, so it changes the values without changing the state, and
+`WMStateAutoMove::Enter` (`0x333c20`) reads the initial position back out of
+`node+0xd0`, which keeps both authorities consistent. One `readableRange` check
+spans the whole `+0xb0..+0xe4` block so a stale node pointer cannot leave it
+half-written.
+
+### The correction
+
+Hook the driver to capture `dt` into a `thread_local`; hook the mover, snapshot
+the position before, and afterwards rescale the delta it produced by
+`clamp(dt * 60, 0, 1)`. At 60 fps and below the factor is 1 and shipped
+behaviour is preserved bit-for-bit. Nothing is predicted or simulated — the
+mover runs untouched and its output is scaled — which is why this cannot
+desynchronise from anything else that reads the position. Interpolating back
+toward the previous position cannot escape the bounds the mover just clamped
+into, because an axis-aligned box is convex.
+
+The mover returns early without touching the position when nothing is held, so
+the correction keys on a non-zero measured step rather than on the return value.
+
+### Gating
+
+Ayesha-only and OnByDefault, on the same reasoning as the field-jitter fix.
+`DUSK_WORLDMAP=0` turns it off for a comparison; `DUSK_WORLDMAP_PROBE=1` logs
+`raw_per_s` against `applied_per_s`, which is the whole measurement — the first
+should scale with refresh rate and the second should not. Escha & Logy and
+Shallie are `Unsupported` because their travel map has not been looked at, not
+because it is known to be fine.
+
+### Confirmed in game
+
+**Validated on Ayesha** — the cursor moves at the speed the game was built for at
+200 Hz. The fix ships `OnByDefault`; `DUSK_WORLDMAP=0` turns it off for a
+comparison and `DUSK_WORLDMAP_PROBE=1` logs `raw_per_s` against `applied_per_s`.
+
+One operator note, because it cost a run and it is the second time this exact
+mistake has been made in this project: the first test showed no change because
+the build was never **deployed**. Building is not deploying. `FIXES
+world_map=active driver_rva=0x... move_rva=0x...` in the log is the only proof
+the module installed; `world_map=unavailable` means an undeployed or older DLL,
+and `world_map=declined (prologue mismatch)` would mean the addresses are wrong,
+which is a different problem entirely. Check that line before judging the cursor.
+
+### Flagged, unresolved: a second dt-free mover with no callers
+
+`0x310540` (world-map camera zoom) has the identical dt-free `+=` shape, writing
+`+0x78/+0x7c/+0x80` and zeroing `+0x84` — the scalar form of the same
+interpolator block. But it has no callers: its only reference is the thunk
+`0x1c2a1`, which has no call or jump sites and is never `lea`'d, and a raw search
+for both VAs finds nothing. It looks like dead code. Recorded so nobody mistakes
+it for a live second defect without runtime evidence.
+
+## The system-save wipe
+
+> **TL;DR**: Escha & Logy and Shallie lose their system save — settings, gallery, costumes, bonus flags — and the cause is not the writer. A failed *load* reports success, a zero-filled buffer is installed over the live data, the deserializer accepts it silently, and the next settings change writes the defaults back over a healthy file. Four independent missing checks. All four KTGL builds are affected.
+
+### Where it lives
+
+`%USERPROFILE%\Documents\KoeiTecmo\Atelier Escha and Logy DX\SAVEDATA\SYSDATA.pcsave` — confirmed on disk in the test prefix (2960 bytes, high entropy) and in the binary.
+
+**The filename is a wide literal**, which is why a narrow-string grep finds nothing: Escha EN `.rdata` `0x7ceaf8` = `L"SYSDATA.pcsave"`, `0x7cead0` = `L"\SAVEDATA\"`, `0x7ceb30` = `L"%ls%ls%ls"`, base-dir global `0x10c6740`. Path builders at `0x138730` (the directory), `0x138780` (the system save), `0x1387d0` (`GAMEDATA%02u.pcsave`).
+
+**No Win32 file API is used for saves.** The writer is CRT stdio — `_wfopen_s`, `fwrite`, `fread`, `ftell`, `fclose`. Directory creation is `SHCreateDirectoryExW`, existence `PathFileExistsW`, free space `GetDiskFreeSpaceExW`. There is **no `rename`, no `MoveFileW`, no `ReplaceFile`, no `FlushFileBuffers`** anywhere on this path: no temp-file-and-rename, no atomic replace, no backup.
+
+The class layer is `PlatformSteam::Save` / `::Load` / `::Exist` / `::Delete`, each a two-slot vtable `{dtor, run}` over a shared 0x438-byte object:
+
+```
++0x10  state          +0x14  errcode        +0x18  wchar path[0x200]
++0x418 isSystemData   +0x420 buffer         +0x428 size / bytes read
++0x430 "completed" flag
+```
+
+### The defect is in the load, not the write
+
+Four things had to line up. Any one of them alone would have prevented the loss.
+
+**1. Open failure reports success.** `PlatformSteam::Load::step`, Escha EN `0x138df0`:
+
+```
+0x138e16  call [rip+0x5e0bd4]      ; _wfopen_s(&fp, path, L"rb")
+0x138e1c  test eax, eax
+0x138e1e  jne  0x138ecb            ; OPEN FAILED    ->
+0x138e29  test rdi, rdi
+0x138e2c  je   0x138ecb            ; fp == NULL     ->
+   ... read ...
+0x138ead  test dil, dil
+0x138eb0  jne  0x138ecb            ; READ SUCCEEDED ->
+0x138eb2  mov  dword [rbx+0x10], 7 ; read failed: state 7, err 5
+0x138eb9  mov  dword [rbx+0x14], 5
+0x138ecb  mov  qword [rbx+0x10], 6 ; <-- SHARED EXIT: state 6, err 0
+0x138ed3  mov  byte  [rbx+0x430], 1;     completed = TRUE
+```
+
+The open-failure branches land on the **same exit as success**, which sets the completion flag. The qword store there also clears the `-1` the constructor wrote to `+0x14`. A transient open failure on an existing, healthy file is indistinguishable from a clean load, and `+0x428` is still the constructor's zero.
+
+The genuine file-not-found case is handled correctly and separately (state 1 checks `PathFileExistsW`, sets state 6 / err 4 / flag 0), so this is not the first-run path.
+
+**2. A zero-byte or short file also reports success.** The read is `fread(buf, 0x5000, 1, fp)`, which returns 0 for any file smaller than 0x5000 — that is, always. The code treats that as normal, recovers the real length with `ftell`, and unconditionally sets success. A zero-byte file yields `bytesRead = 0` and `completed = 1`.
+
+**3. The caller installs the zeroed buffer.** System-load thread, Escha EN `0x15d4e0`: allocates a 0x5000 scratch buffer, `memset`s it to zero, runs the Load, then
+
+```
+0x15d5c6  mov  esi, [rbx+0x428]     ; bytes read (0 in the failure case)
+0x15d5cc  cmp  byte [rbx+0x430], 0
+0x15d5d3  je   0x15d672             ; not taken - flag is 1
+0x15d5ee  xor  r9d, r9d             ; codec out-size pointer = NULL
+0x15d5f7  call 0x219a0              ; decode; RETURN VALUE DISCARDED
+0x15d608  call 0x26610              ; vector::resize(sysdata, 0x5000)
+0x15d620..0x15d670                  ; copy 0x5000 bytes
+```
+
+With `size == 0` the codec does nothing, so the entire zero-filled scratch buffer is copied over the live system-data vector. The codec *does* carry an integrity check (`cmp byte [r13+r15], 0xff` at `0x21c14`) — but the caller passes NULL for the out-size and discards the return value, so nothing can act on it.
+
+**4. The deserializer accepts an empty blob silently.** `0x40fa0` → `0x411d0` walks a list of chunk readers, each calling `findChunk` (`0x35b320`). A reader whose chunk is absent simply advances to the next, and the function returns success. An empty vector returns success too. Only a C++ exception produces the failure codes that would raise the `MessageBoxA` "system ロードに失敗しました。err: %d" (`0x752880`).
+
+So a zero blob deserializes cleanly as "no chunks present", the live object keeps its default-constructed values, **and no error is ever shown** — which is exactly the reported symptom.
+
+### And then it is written back
+
+`saveSystemData`, Escha EN `0x40730`, serializes the live object, pads to 0x5000, and requests an async save. Its only early-out is a serializer error. **There is no "was the system data ever loaded?" guard anywhere on the path.** Three places could have caught the failure — the completion flag, the codec return, the chunk deserializer — and none do.
+
+Save triggers, by vtable slot: `OptionBase`/`OptionMenu`/`OptionOther`/`OptionTitle` slot 8 → `0x117c80` → `0x40730`; `ClearSaveGameMode` slot 3 → `0x37c50`; `ScreenControl` slot 1 → `0x15db40`. The Options one matches the community observation precisely — the data is lost only if you actually change a setting after a failed load.
+
+### Where the zero-byte file comes from — inferred
+
+`_wfopen_s(path, L"wb")` truncates the file to zero at the moment of opening, before a byte of new content exists, with no temp file and no backup. Two ways that becomes permanent:
+
+1. **Process exits mid-write.** The save is dispatched to a detached worker (`0x15ccb0` creates it, body `0x15d380`), and `saveSystemData` returns immediately. The thread is joined only at the *start of the next request* (`0x15d8f0`) — **never at shutdown**. The screen-state machine normally polls to completion (`0x13fe10`), but `OptionBase::apply` starts the save and returns, leaving the poll to the option screen's update loop. A quit taken in that window leaves a truncated file.
+2. **Transient open failure at load.** Steam Cloud syncs `SAVEDATA` on launch and exit; a backup tool or scanner holding the file gives `_wfopen_s` an error, which point 1 above converts straight into a silent zero. This explains the "random" quality better than anything else in the code.
+
+Both funnel into the same install-and-overwrite chain. **Unresolved:** no explicit "save system data then exit" call was found in the shutdown path — the quit sequence itself is not mapped. That does not weaken the mechanism, since route 2 needs no quit-time save at all, but the specific "on quit" trigger is not pinned.
+
+### Shallie is affected identically
+
+All four builds share the defect byte-for-byte at the shared exit, despite Shallie's save layer being refactored (its `PlatformSteam::Base` factors the fopen/fread wrappers out instead of inlining them, so it has one `SYSDATA.pcsave` xref where Escha has five). Object layout, state machine, shared exit and unconditional install are the same.
+
+| | Escha EN | Escha ML | Shallie EN | Shallie ML |
+|---|---|---|---|---|
+| `Load::step` — the bug | `0x138df0` | `0x13fa60` | `0xc2670` | `0xc3ec0` |
+| `Save::step` — the writer | `0x138a70` | `0x13f6e0` | `0xc28d0` | — |
+| system-load thread | `0x15d4e0` | `0x164fe0` | `0x287020` | — |
+| system-save thread | `0x15d380` | `0x164e80` | `0x286ed0` | — |
+| `saveSystemData` — no guard | `0x40730` | `0x45ba0` | `0xd7610` | — |
+| shared exit | `0x138ecb` | `0x13fb3b` | `0xc270f` | `0xc3f5f` |
+
+### What to measure
+
+Static work is done; three cheap checks close it, and the first is decisive.
+
+1. **Reproduce the silent zero load.** Back up `SYSDATA.pcsave`, truncate it to 0 bytes, launch. Expected: the game reaches the title with **no error dialog**, and Options, gallery and costumes read as factory default. Change one option and quit — the file is now a valid ~3 KB save of defaults. If a failure dialog appears instead, point 4 is wrong and the deserializer does reject empties.
+2. **Reproduce the open-failure branch.** Hold the file open with an exclusive deny-read lock while launching. Same expected outcome; this distinguishes "zero-byte file" from "unreadable file" as the real-world trigger.
+3. **Confirm the truncation window.** Change an option to force a save, then quit within about a second. If the file is ever left at 0 bytes, the shutdown race is live.
+
+### The fix, when it comes
+
+Narrowest first:
+
+- **`Load::step`**: split the shared exit so the `_wfopen_s`-failure and `fp == NULL` entries go to the existing state-7 branch, leaving `+0x430 = 0`. Four RVAs, one per build, all clean `.pdata` function starts.
+- System-load thread: refuse to install the decoded buffer when `[obj+0x428] == 0`.
+- `saveSystemData`: refuse to save when the last system load produced nothing.
+
+None need a new file format and none touch on-disk data. An external backup — what AELBackup does — remains worth having regardless, because the write path has no atomic replace at all.
+
+### Two corrections to earlier notes
+
+- These binaries **do** import `GetPrivateProfileSectionW` and `GetPrivateProfileSectionNamesW`. The earlier claim was about `GetPrivateProfileInt`/`String`, which are genuinely absent, but "imports no `GetPrivateProfile*`" would be wrong. The custom key/value reader is still where `Setting.ini` is read, and the system save is a wholly separate mechanism.
+- `nosteam/games/05-escha/Saves/` is **game data** (`Bonus.xml`, `SysMess.xml`, `WorkData.xml`), not save data. Nothing user-writable lives in the game directory.
+
+## The KTGL shadow subsystem
+
+> **TL;DR**: Escha's shadow depth buffer is created without `BIND_SHADER_RESOURCE`, so the receiver reads the shadow pass's *colour* attachment instead — which the alpha-tested caster shaders never write. Result: rectangular block shadows under foliage. **But the shipped Escha binaries are patch 1.01, which reportedly fixed it.** Shallie was never patched and has a different, independent half of the same broken subsystem.
+
+### What AGT does, read as behavioural evidence only
+
+AGT is closed and unlicensed; what follows is a description of its observable behaviour, used to locate the engine defect. Nothing from it is copied.
+
+**Game gating.** A 36-entry `(exeName, flagIndex, flagValue)` table at RVA `0xa9d10`, matched with `CompareStringEx`, writes `byte[0x187120 + flagIndex]`. Escha maps to index 1, Shallie to index 2. The shadow-view hack is gated on `byte[0x187121]` — **Escha only**. On an unrecognised executable it writes `0x101` to that word, which enables both the Escha *and* Shallie hacks by default.
+
+**Step 1 — `CreateTexture2D` hook (`0xd850`)**, matching one exact descriptor:
+
+| field | value |
+|---|---|
+| Width / Height | `0x400` / `0x400` |
+| MipLevels / ArraySize | 1 / 1 |
+| Format | `44` = `R24G8_TYPELESS` |
+| Usage | `DEFAULT` |
+| **BindFlags** | **`0x40` — `DEPTH_STENCIL` only** |
+
+It ORs in `BIND_SHADER_RESOURCE`, calls through, and builds an SRV with format `46` (`R24_UNORM_X8_TYPELESS`), dimension `TEXTURE2D`, one mip.
+
+**Step 2 — `OMSetRenderTargets` hook (`0xeaf0`)** identifies the shadow pass by both attachments at once: DSV resource 1024² format 44 bindFlags `0x48` (the one it just patched), RTV resource 1024² format `90` = `B8G8R8A8_TYPELESS` bindFlags `0x28`. It caches the **colour** resource.
+
+**Step 3 — `PSSetShaderResources` hook (`0xf0a0`)** substitutes its depth SRV whenever an SRV over that cached colour resource is bound.
+
+So: the game renders its shadow pass into a depth buffer it cannot read plus a colour attachment, and binds the colour attachment as the shadow map.
+
+### What is actually wrong, from the shaders
+
+KTGL ships raw DXBC inside `Data/x64/Shader/*.g1s` with no container obfuscation (853 containers on Escha, 1050 on Shallie). Read with `tools/g1s.py` and `tools/sm5dis.py`.
+
+**The receivers** (`MapSTD*`, `STD*`, `MapWater`) bind `sShadow` at t1 with `__smpsShadow` at s1, declared `texture2d` returning `float`, and do a **16-tap manual PCF**:
+
+```
+dcl_sampler mode=0 samp1                     ; ORDINARY sampler, not comparison
+sample_l  r4.x, r3.zwzz, res1, samp1, l(0)   ; x4 per quad, x4 quads
+lt   r3, r4, r0.yyyy                         ; the comparison, in the shader
+movc r4, r3, l(0,0,0,0), l(1,1,1,1)
+```
+
+They want a single-channel depth in `.x`, sampled with an ordinary sampler at LOD 0, and do the depth test themselves. **Across both games there are zero comparison samplers and zero `sample_c`/`sample_c_lz` instructions** (294 and 484 `dcl_sampler` respectively). Nothing in either game ever wants hardware PCF.
+
+**The casters.** All 17 `SM*_Psm` pixel-shader variants have **no output signature at all** — no `SV_Target`. They exist purely to run an alpha-test `discard`, and write only depth. `SM_Psm.g1s` is md5-identical between the two games.
+
+**The one shader that writes a colour shadow map** is `RenderTerrainShadowMap.g1s`, and the games differ:
+
+- **Escha** writes depth into colour with a slope-scaled offset: `o0 = (v1.x + cb0[0].x*(|ddx| + |ddy|)) + cb0[0].y`
+- **Shallie** is `dcl_globalFlags; ret` — writes nothing.
+
+Shallie also ships `DepthShader.g1s`, an RGB-packed depth writer, which Escha lacks.
+
+**The consequence.** Alpha-tested casters populate only the depth buffer; the non-alpha-tested terrain shader populates the colour buffer; the receiver reads the colour buffer. **Foliage casts its full untextured quad.** The engine's RTTI carries `ktgl::VCShadowMapShader::CBlendMapTerrainShadowMapShaderBase`, so a separate no-alpha-test terrain shadow shader is a real, distinct thing in this renderer.
+
+That matches the AGT author's public description exactly: "boxy leaves on trees", branch-only rendering on AMD, "the PS3 version has proper leaf rendering in its shadows", plus missing grass patches — and the technical claim that the shadow texture was "allocated as a texture that cannot be used as a resource".
+
+**Predicted symptom for a confirming run:** tree shadows on open ground in daylight. Broken = solid rectangles under foliage, or foliage shadows missing entirely. Correct = leaf-shaped dappling.
+
+### Two halves, not one defect
+
+The Shallie sampler item is the **same subsystem and a different breakage**. AGT's `CreateSamplerState` hook (`0xd680`) matches `Filter == 0x94`, CLAMP×3, MaxAnisotropy 1, `ComparisonFunc = LESS_EQUAL`, LOD collapsed to `[0,0]`, and rewrites the filter dword to `0x14`.
+
+That sampler is now identified: it is **`__smpsShadow`**, the s1 sampler of the manual-PCF receiver above. Every field matches what the shader needs *except* the comparison bit — CLAMP×3 is a shadow map, MaxAnisotropy 1 and LOD `[0,0]` match `sample_l … l(0)` on a single-mip 1024² map, and `LESS_EQUAL` is the test the shader open-codes with `lt`. Binding a comparison sampler to a non-comparison `sample_l` is undefined in D3D11 and returns 0 on essentially every driver, so **all 16 taps read 0**, `lt(0, ref)` is uniformly true, and the ground reads **uniformly dark with no shadow shapes** — a visibly different symptom from Escha's blocky one.
+
+The engine can express this deliberately: Escha's sampler-key decoder `0x3d6c40` reads an 8-byte key where `byte[2] bit 3` is the comparison flag and bits 4-6 the comparison func, and the filter mapper `0x3e0040` applies it with `bts eax, 7`. AGT's descriptor decodes to key bytes `15 14 38 00 00 00 00 00`. **Unresolved:** that key appears as a literal nowhere in either executable or in ~27,000 game data files, so it is assembled at runtime.
+
+Fixing one half would not fix the other, and they should stay separate items.
+
+### Escha is probably already fixed upstream
+
+| binary | FileVersion | PE link timestamp |
+|---|---|---|
+| `Atelier_Escha_and_Logy_EN.exe` | **1.0.0.1** | 2020-10-21 |
+| `Atelier_Escha_and_Logy.exe` | **1.0.0.1** | 2020-10-21 |
+| `Atelier_Shallie_EN.exe` | **1.0.0.0** | 2019-12-26 |
+
+The AGT author's own Steam thread carries an October 2020 report that patch 1.01 fixed shadows, later confirmed with screenshots — and the local copies are that build. Suggestive but not proof: if 1.01 had changed the bind flags, AGT's matcher would stop firing and it would pop "unable to replace SRV as it wasn't created on init!" on every launch. Nobody reported that, and nobody reported the contrary.
+
+**Inferred, not verified.** Which side the patch changed could not be established statically: the bind-flag argument to the KTGL texture wrapper (Escha `0x3d3c10`, device at `this+0x3048`) is a variable at every reachable call site, and no `0x40`/`0x48` literal exists in either binary. The descriptor is data-driven through `KTGL_SHLIB_SHADOWMAP_TYPE` / `_FORMAT`.
+
+### What one session settles
+
+`DUSK_TARGET_CENSUS=1` already logs the right fields — `censusReport` prints dimensions, format, bind flags and caller RVA, and admits anything with `RENDER_TARGET|DEPTH_STENCIL`.
+
+- **Escha**: a `1024x1024 format=44` line with `bindFlags=0x40` means the defect survived 1.01; `0x48` means it was fixed upstream and the item closes. Either way a `1024x1024 format=90 bindFlags=0x28` line should also appear.
+- **Shallie**: the same two lines answer whether it has the resource half.
+- The planned `samplerCensus()` answers the sampler half for both — watch for `Filter=0x94`. Expected return addresses: Escha `0x3d6d84`/`0x3dec35`, Shallie `0x3b0054`/`0x3b7d65`.
+
+**Run with AGT removed.** Its `CreateSamplerState` patch has **no game gate** — it matches on the descriptor alone — so with AGT installed it is already silently fixing the sampler half in whichever game has it, and no comparison can distinguish the two.
+
+### Do not carry findings between the two KTGL games here
+
+The "byte-identical" pattern that has held everywhere else **breaks on this subsystem**: different terrain shadow shader behaviour, a depth shader present in only one game, and only Escha received a patch.
+
+**Also worth keeping:** AGT's `PSSetShaderResources` branch requires `NumViews == 1` and demonstrably fires, so KTGL sets pixel-shader resources one slot per call — consistent with the per-slot dirty-mask flush already mapped.
+
+## Shallie's control-hint panel
+
+> **TL;DR**: The bottom-corner controls hint is not driven by an SCL animator — it is a hand-rolled easing loop in one function, `ButtonHelp::Update` (EN `0x48da0`, ML `0x48b80`). Suppressing the slide is a one-function hook that passes a larger `dt`; nothing is patched and nothing is forced into a state the object could not reach itself. Escha does not have this panel at all.
+
+### The animator lead was wrong, and cleanly so
+
+`ktgl::scl::CPaneGroupArrayAnimator` is **not involved**. `rtti` finds four `scl` TypeDescriptors, all `CFunctionCurve::US_KEY_DATA` container templates; `rtti … Pane` and `rtti … Animator` return nothing, so there is no vtable to walk. The names `CPaneGroup`, `CAnimatorBase`, `CPaneAnimator`, `CPaneGroupArrayAnimator` do exist as a contiguous ASCII pool at `.rdata` `0xb7afeb`–`0xb7b0d0`, but a whole-file search for both the 8-byte VA and the 4-byte RVA of `CPaneGroupArrayAnimator` (`0xb7b09d`) returns **zero hits**, and `xref-data` finds no RIP-relative reference. It is unreferenced metadata sitting amid `std::_Compressed_pair<…>` type names.
+
+The SCL classes *are* linked in and used, but through leaf accessors with no RTTI and **no `.pdata` entry** — `0x27b650` `CPane::SetVisible`, `0x27b680` `CPane::IsVisible`, `0x27b330` `GetNthChild`, plus the input-prompt lookups at `0x5511e0`/`0x551240`/`0x54f580`/`0x54f5e0`. A `.pdata`-keyed sweep cannot see any of them. Third time that blind spot has mattered.
+
+### What the panel is
+
+Shallie's UI is data-driven XML shipping loose on disk under `Saves/ui/**` (331 files, with `uil.dtd`/`uia.dtd`). Exactly one referenced string is a controls hint: `Saves/ui/button_help/uil_shade.xml`, referenced at `0x48d6b`. That layout is only the translucent backdrop; the prompts are **20 text panes created in code**.
+
+One translation unit, `0x48470`–`0x4ab7d`:
+
+| RVA (EN) | RVA (ML) | role |
+|---|---|---|
+| `0x48b40` | — | ctor: stores `this` in global `0xded5a0`; creates **20** panes at `(1280, 678)`, font 18.0, all `SetVisible(false)` |
+| `0x48d50` | `0x48b30` | sets the shade layout path, `SetVisible(root, true)` |
+| **`0x48da0`** | **`0x48b80`** | **`Update(this, float dt)` — the entire animation.** Called from UI-manager `Update` `0x1c62d0` |
+| `0x497f0` → `0x49940` | — | build the 20 prompt strings and a joined comparison string |
+| `0x49550` | `0x49330` | `Draw()`; guards on `[this+0xd38]`, submits both `CLayout`s |
+| `0x4ac20` → `0x48c80` | — | deleting dtor; clears the singleton |
+
+`homolog` EN→ML: `0x48da0 → 0x48b80` **MATCH**, identical prologue and size `0x7aa`; `0x49550 → 0x49330` **MATCH**, size `0x3d`. Only one instance exists — the vtable VA appears nowhere else.
+
+Content is a static key legend: `0x49940` fills 20 slots with `<IMxx>` icon markup plus the bound key name, from the prompt-kind global `0xddb5e0`, the key-name tables `0x10d0bd0`/`0x10d0c50`, and the `[Pad] AB_SET` swap flag `0xddb0f0`. **The output depends only on prompt kind and key bindings — no game state at all.**
+
+### The animation
+
+```
+0x48df9  xmm11 = 1280.0f                ; park position / right screen edge
+0x48e06  xmm10 = 0.1f
+0x48e0f  minss xmm10, xmm1              ; xmm10 = min(0.1, dt)  <-- the ONLY use of dt
+0x48f80  xmm6  = 1240.0f                ; layout cursor
+0x48fa5  xmm7  = -8.0f                  ; inter-entry gap
+```
+
+Targets lay out **right to left** from 1240. Per slot: non-empty panes ease `x` toward target by `|target - x| * 10.0f * xmm10` with overshoot guards; empty panes ease toward 1280 at `xmm10 * 4000.0f`, then hide on arrival. If the joined string changed this frame, the move is skipped for one frame. Then the shade node is positioned 50 px left of the leftmost visible pane and stretched to the right edge.
+
+So the "entrance animation" is panes parked off-screen sliding left into place while the backdrop grows leftwards. There is no keyframed animation and no animator object to disable.
+
+### Re-animation, not recreation — but the trigger is unresolved
+
+The 20 panes are created once and only ever have their text, visibility and `x` rewritten, so within one object lifetime this is re-animation. Since `0x49940`'s output is a pure function of prompt kind and key bindings, **the slot set cannot change on a dialogue advance**, which means the observed retrigger is probably a lifetime event.
+
+Most likely the containing UI manager is reconstructed per game mode or event step — `0x48b40` is called from `0x1cf0a0`, a vtable slot whose siblings include a heavy init at `0x1cf480`. Every reconstruction re-parks all 20 panes and replays the full slide, which fits "and frequently otherwise".
+
+**Unresolved:** the `[this+0xd39]` suppression flag. `Update` reads it at `0x491dc` and both `Update` and the ctor clear it, but a byte scan for the displacement finds **no writer**. Either it is dead or it is written through a hoisted `lea` — the `writes-to-offset` blind spot — so it is not being called dead.
+
+A three-value per-frame probe settles it: the singleton pointer `0xded5a0`, `[obj+0xd39]`, and pane 0's `x`. A changing pointer means recreation; a toggling flag means the suppression path; neither means re-flow.
+
+### A discrepancy to check in game
+
+The report says lower-**left**. Everything in the binary says bottom-**right**: panes park at `x = 1280` (the right edge of the 1280×720 authoring canvas), lay out leftwards from 1240, sit at `y = 678`, and the shade stretches to 1280. The 9-slice art `gen_common03_helpbg` has `edge_margin="271,16,96,61"` — a wide decorated *left* cap and a plain right end that runs off screen, which fits a right-anchored bar whose left end is the part that moves.
+
+The alternatives were ruled out rather than assumed. `Saves/ui/common/uil_line_help.xml` has genuine SCL `anim_ctrl` fade animations and would have been a perfect fit for "replays its entrance animation" — but **its name does not appear in the executable at all**, nor does `uil_prompt`. The shipped `Saves/ui` tree includes the whole authoring set, samples included, so unreferenced layouts are expected. A scan of `.rdata` for bottom-left park coordinates found one unrelated hit.
+
+**Discriminator:** if the panel slides in horizontally, this is the right element. If it fades in on the spot, the analysis needs redoing.
+
+### Suppression options, ranked
+
+**1 — Force the ease to converge in one frame. Recommended.** Hook `Update` and call the original with `dt = 0.1f`. `dt` is consumed at exactly one instruction, and the step is `|delta| * 10.0f * xmm10`; at `xmm10 = 0.1` that is `|delta| * 1.0`, so each pane lands exactly on target in one frame using the game's own overshoot guards. No patched bytes, no unreachable state, switchable per frame. The `0.1` also reaches `CLayout::Update`, which clamps internally to `1/60` — and neither layout carries any `anim_ctrl`, so that is inert. Residual: the *exit* runs at 4000 px/s, so departing prompts still take ~3 frames; raise the forced `dt` if that reads as motion, since the clamp makes it free.
+
+**2 — Hide the panel outright.** No-op `Draw` (EN `0x49550`, ML `0x49330`). `Update` keeps running, so all internal state stays coherent and only display-list submission is skipped. `0x49550` has a second caller at `0x7ab05` on the same global object, which the no-op also covers. This is the bigger behavioural change and should be the option rather than the default.
+
+**3 — Inline patch of the ease block.** Cheapest at runtime but needs an anchor inside a `0x7aa`-byte function; more fragile for no real gain.
+
+**4 — Skip `Update` entirely. Do not.** Two concrete failures: the shade node stays visible, because the XML declares `visible="true"` and only `Update` ever hides it; and `[this+0xd38]`, set by `Draw` and cleared only by `Update`, sticks at 1 and turns `Draw` into a permanent no-op after the first frame.
+
+Do **not** patch the shared float `0x6e2300` (`10.0f`) — it is a generic `.rdata` constant, almost certainly shared.
+
+### Escha does not have this
+
+The byte-identical pattern breaks completely. Escha has **no `Saves/ui` directory at all** — its layout tree is absent, the executable contains one stray `Saves/ui/...` string and no `button_help`, and its UI comes from the older `Data/WinXls` pipeline (`WinFrameNode`, `WinCenterNode`, `UIDataBase::load`). Its `<IMxx>` strings are **pre-composed localized help lines** in the message data rather than Shallie's per-slot tables. `homolog` Shallie→Escha returns MISMATCH for `0x48da0`, `0x48b40` and `0x497f0`; the one "CONFIRMS" vote is spurious (that Escha function references "Gatherable Items" and has a different prologue and size).
+
+One address pack with two rows covers Shallie EN and ML only. Escha needs its own investigation and may not have the behaviour at all — worth one look in game before spending RE time.
+
+### Reference
+
+Globals: `0xded5a0` singleton, `0xddb5e0` prompt kind, `0xddb0f0` AB_SET, `0x10d0bd0`/`0x10d0c50` key-name tables.
+Fields: `+0x08` entries `CLayout`, `+0x20` its root, `+0x690` shade `CLayout`, `+0x6a8` shade root, `+0xd18` last joined help text, `+0xd38` drawn-this-frame guard, `+0xd39` suppress flag (reader only).
+Constants: `0x6e37c8` = 1280.0, `0x6e37c4` = 1240.0, `0x6e37d0` = -8.0, `0x6e37d4` = -50.0, `0x6e37cc` = 4000.0, `0x6e2300` = 10.0, `0x6e2ad0` = 0.1, `0x6e37e0` = (1280, 678, 0, 0), `0x6e37c0` = 18.0.
+SCL helpers: `0x27b830` `FindNode`, `0x27b330` `GetNthChild`, `0x27b650`/`0x27b680` `SetVisible`/`IsVisible`, `0x284560` `SetText`, `0x276360` `SetWidth`, `0x273690` `CLayout::Update`, `0x273750` `CLayout::Draw`, `0x273b30` `CLayout::SetPath`, `0x1fa490` measure text width.
+
+## Battle cut-in shadows
+
+> **TL;DR**: The Arland shadow-reception gate exists in all three Dusk games — verbatim in Ayesha (with the original HLSL still embedded in the shaders), and as a differently-written linear ramp with the same `0.7` breakpoint in Escha & Logy and Shallie. One animated constant produces both symptoms in both engines. Not a defect; an enhancement, so it ships off behind an ini key and a launcher control when it ships at all.
+
+### Ayesha: a direct homolog, with the source still in the binary
+
+Ayesha's `Res/x64/cg/commonShader.PSSG` DXBC containers carry **`SPDB` chunks containing the full preprocessed HLSL**, original paths included (`F:\DLeft\Left\A14DX\application\src\cg_x64\fieldmap\...`). The gate is therefore readable as source rather than reconstructed:
+
+```hlsl
+VrtOutShadow_s convVrtShadow(AppOut_s IN) {
+    if( dot(MN, L) <= 0 ){
+        OUT.ShadowAlpha = 2.0f;
+    }else{
+        OUT.ShadowAlpha = 2.5f - min(diffuse[0], diffuse[3])*2;
+        OUT.ShadowAlpha += max((Distance-20.0f), 0.0f) / 40.0f;
+    }
+...
+float4 convFrgShadow(float4 i_f4Color, VrtOutShadow_s IN) {
+    if(IN.ShadowAlpha >= 1.0f) { oColor = i_f4Color; }   // no shadow sample at all
+    else { float shadow = calculateShadow2(IN.oShadowUV, tapScale, PSSGShadowMapDepthMap); ... }
+```
+
+Reception is gated shut when `min(diffuse.x, diffuse.w) <= 0.75` — the identical threshold to Rorona and Meruru. **One term Arland's write-up does not mention**: a distance falloff that also closes the gate beyond roughly 40 eye-space units even at full intensity (`ShadowAlpha = 0.5` at `diffuse = 1.0`, then `+= max(D-20,0)/40`).
+
+Confirmed at bytecode level, not only in the embedded source. Vertex shader `fieldmap_shadow_normal_vert` (container 46):
+
+```
+1144 min  temp[0].y, cb[0][45].w, cb[0][45].x
+1153 mad  temp[0].y, temp[0].y, (2), (2.5)      ; NEG modifier -> 2.5 - 2*min
+1186 movc output[1].w, temp[0].x, (2), temp[0].y
+```
+
+and in every receiver pixel shader (containers 44, 45, 47, 48, 49, 50):
+
+```
+  71 ge   temp[1].x, input[1].w, (1)
+  78 if_z temp[1].x
+  88   <gather4_c on PSSGShadowMapDepthMap / shadowMapSamp>
+ 220 endif
+```
+
+`fieldmap_shadow_*` is the **only** shadow-receiving family in Ayesha: of 139 DXBC containers, exactly six bind `PSSGShadowMapDepthMap`, and all six are its pixel shaders. Characters (`chara_mt*`, `toon_p0*`) cast but never receive — exactly as in Arland.
+
+#### Constant-buffer layout
+
+| family | VS `$Globals` | PS `$Globals` | `tapScale` | **`diffuse`** | `shadowLPos` |
+|---|---|---|---|---|---|
+| `fieldmap_shadow_normal` (44, 45, 46) | 752 | 768 | +704 | **+720** (`cb0[45]`) | +736 |
+| `fieldmap_shadow_fog[_layoff][_op]` (47–52) | 784 / 800 | 800 / 816 | +736 | **+752** (`cb0[47]`) | +768 |
+
+The 16-byte `$Params` `diffuse` (cb1) that Arland's dim-hold targets is present on containers 44, 45, 47 and 49; 48 and 50 fold it into `$Globals` instead. `tapScale` sits at the same relative position, so the PCF rescale has an equivalent here too.
+
+#### The battle arenas are these receivers
+
+All 33 `Res/x64/btlField/BF_POINT*.PSSG.gz` assets contain meshes tagged `xSHADOWON` (`ground_xSHADOWON_B`, `LAYER_030SHADOW_001`) — the same naming the field maps use (`gr_xSHADOWON009` in `fieldmap/map/EVENT_01.PSSG.gz`). The nine DXBC shaders embedded in `BF_POINT01.PSSG.gz` bind no shadow map at all, so the receiving variant comes from the engine's `commonShader.PSSG`. **INFERRED** from asset naming plus "only family that can receive" — and it is the same conclusion Totori reached at runtime.
+
+#### The caster cover-up is present and byte-identical
+
+| | Rorona EN | Ayesha EN | Ayesha ML |
+|---|---|---|---|
+| tactical `hideAll` | `0x10c2c0` | `0x16c8c0` | `0x171450` |
+| tactical `showAll` | `0x10c270` | `0x16c860` | `0x1713f0` |
+| deferred-hide arm leaf | `0xc5f80` | `0xfa6b0` | `0xfee30` |
+
+`homolog` returns MATCH with raw-identical prologues for `hideAll` and `showAll`; Ayesha's `showAll` matches Arland's *Rorona* prologue variant, not the Meruru/Totori one. The thirty-byte leaf is byte-for-byte Rorona's, **including the Model offsets**:
+
+```
+0x000fa6b0  38 91 80 00 00 00 74 15 f3 0f 11 91 90 00 00 00
+0x000fa6c0  c6 81 8f 00 00 00 01 88 91 8e 00 00 00 c3
+```
+
+so visibility byte `+0x80`, fade-pending `+0x8f`, duration float `+0x90`, plus the `+0x8e` write. **Ayesha uses the Rorona/Meruru Model layout, not Totori's.** The `hideAll` caller `0x143390` (through thunk `0x188a4`) passes the same quarter-second fade, loading `0x9b75e8` = `0.25f` into `xmm1`. So all three windows exist with the same timing; budget for the same three-window front-run rather than expecting to skip it.
+
+Ayesha's RTTI also carries the full `GmStateBtl*` family (26 vtables), `BtlChara`/`BtlCharaMgr`/`BtlCharaParty`/`BtlCharaMonster`, `BtlField`/`BtlFieldMap` and `PSSG::PNode`, so the cinematic-state list and BtlChara-vtable tracking port directly.
+
+**Unresolved: what animates `diffuse` down.** Not found statically — but **Arland never found it either.** `battle_shadows.cpp` identifies the dim *by value shape* at draw time (`(s,s,s,~1)` with `s` in `(0.5, 0.98)`) rather than by address, and that approach transfers unchanged; only the per-size field table needs the Ayesha rows.
+
+### Escha & Logy and Shallie: same idea, different formulation
+
+KTGL shaders live in `Data/x64/Shader/*.g1s` — KTGL's own container with DXBC inside and **no `SPDB`**, so bytecode only. The two games' shader sets are equivalent for this purpose.
+
+Only `MapSTD*` (plus `STD-B*` and `MapWater`) pixel shaders bind `sShadow`; `Chara*` never receive. The `MapSTD*` PS `$Globals` is 80 bytes and identical in both games:
+
+```
++0   nStageNum    cb0[0].x
++4   vATest       cb0[0].y
++16  scSM         cb0[1]
++32  scSM2        cb0[2]
++48  atColor      cb0[3]      <-- the gate constant
++64  HdrRangeInv  cb0[4].x
+```
+
+Shadow sampling here is **unconditional** — no `if` around the 64-tap PCF, unlike Ayesha. Instead the accumulated *lit* fraction is scaled by a ramp on `atColor.x` immediately after the taps:
+
+```
+2842 add  temp[2].y, cb[0][3].x, (-0.7)
+2850 mul  temp[2].xy, temp[2].xyxx, (0.0625, 3.33333, 0, 0)
+2860 max  temp[2].y, temp[2].y, (0)
+2867 mul  temp[2].x, temp[2].y, temp[2].x        ; s = max(atColor.x-0.7,0)/0.3 * (taps/16)
+2881 mad  temp[2].yzw, temp[2].xxxx, temp[2].yyzw, input[1].xxyz   ; diffuse  = s*direct + ambient
+2897 mad  temp[0].xyz, temp[2].xxxx, temp[0].xyzx, input[8].xyzx   ; specular = s*direct + ambient
+```
+
+and `atColor` darkens the final colour directly as well:
+
+```
+2956 add  temp[0].xyzw, cb[0][3].xyzw, (-1,-1,-1,-1)
+2967 mov  temp[1].xyzw, cb[0][3].xyzw
+2973 mad  temp[0].xyzw, temp[3].xyzw, temp[1].xyzw, temp[0].xyzw   ; out = c*atColor + (atColor-1)
+```
+
+**One animated constant, both symptoms**, exactly as in Arland. At `atColor.x = 1.0` the ramp is 1 and the combine is identity; as it falls to `0.7` the direct-light term — which is what carries the shadow contrast — is scaled to **exactly zero** while the floor darkens. `0.7` is literally the value Arland's cut-in animates to.
+
+Verified in every shadow-receiving `MapSTD*` in both games, with the identical `-0.7` / `3.33333` pair and `atColor` at +48 throughout: Escha `MapSTD.g1s` idx 36, `MapSTD-B0`/`B0T0`/`B1`/`B2`/`-T0` idx 12, `MapSTDHS` idx 24, `MapSTDNF` idx 2, `MapSTDNS` idx 24; Shallie the same at idx 42 / 14 / 28 / 2 / 28, plus `MapSTDS.g1s` idx 14. `STD-B0/B1/B2/-T0` (props, not ground) bind `sShadow` but have **no** `atColor` and no ramp — the same "only the ground is gated" structure as Arland and Ayesha.
+
+Escha's battle arenas live in the *same* `Data/x64/Field/` tree as ordinary areas (`BF_POINT01`…`BF_POINT32` alongside `AREA_*`). Decompressing `Field/BF_POINT01/BF_POINT01.elixir.gz` yields the material parameter names `sLit sShadow scSM scSM2 smpsLit smpsShadow` — the exact `MapSTD` receiver binding set, identical to `AREA_01_01`. **VERIFIED for Escha**; Shallie's `.elixir.gz` uses a `CRAE` container that was not decoded, so **INFERRED for Shallie** from the identical shader set.
+
+`atColor` is a genuinely animated float4, not a constant: it is a named shader parameter (Escha `.rdata` `0x95aaf0`, Shallie `0x96c468`) bound by a setter at Escha `0x505940`. Several call sites push neutral `(1,1,1,1)` / `(1,1,1,0)` literals, and one — `0x286f40`, called from `0x28bec0` — builds the value as a **keyframe lerp of a float4** from `[rbx+0x38..0x44]` toward `[rbx+0x48..0x54]`. A uniform `(0.7,0.7,0.7,1)` is exactly what that path can produce.
+
+**Unresolved:** that a battle cut-in is what drives `atColor` to <= 0.7. That is the one runtime question, and it is cheap — a draw-time trace of the 80-byte `MapSTD` PS cb0 during a cut-in, reading dwords `[48,64)`.
+
+### Implementation notes
+
+- Ayesha needs a per-`ByteWidth` field table (`752`/`784`/`800` VS, `768`/`800`/`816` PS) with `diffuse` at offset 720 or 752 — structurally Arland's Totori table, not the single classic entry.
+- Escha and Shallie need one entry: `ByteWidth == 80`, offset 48, hold target `1.0` for `.x`. Holding all four components at 1.0 also removes the direct darkening.
+- Arland's value predicate transfers to Ayesha unchanged. For KTGL it must be widened or replaced: `atColor` is legitimately `(1,1,1,alpha)` on some object paths, so the predicate wants to be `.w`-insensitive and test `.xyz` only.
+- **The KTGL caster cover-up is a fresh hunt.** The Arland/Ayesha `hideAll`/`showAll`/arm-leaf are PhyreEngine functions and those bytes are not in a KTGL binary. The game-side callers are shared — both KTGL executables carry the full `GmStateBtl*` (Escha 27 vtables, Shallie 25) and `BtlChara*`/`GameModeBattle`/`BtlCamera` sets — so the entry point is the KTGL analogue of Ayesha's `0x143390`. But the KTGL gate is a **linear ramp rather than a hard threshold**, so there is no crisp closed-gate window concealing stale casters; the exposure may be partial rather than binary. Establish that before designing anything.
+- Both playbook §5 traps fired again during this pass, exactly as documented: `funcof ayesha-en 0xfa6b0` errors because the leaf has no `.pdata` entry (found instead with `find-bytes ayesha-en "74 15 f3 0f 11 91"`, one hit), and `callsites` on `hideAll`/`showAll` returned nothing usable until re-run against the thunks `0x188a4` and `0x22052`.
+
+## The resource-lock middleware
+
+> **TL;DR**: All six DX ports share one Gust D3D11 resource-lock middleware — the thing the whole `atelier-sync-fix` lineage exists to fix. It is present in all three Dusk games, identically. But Ayesha's text path locks in the two modes no implementation of the fix can reach, and the atlas cache has already emptied it. The open question is Escha & Logy, Shallie, and Ayesha's five non-atlas locks, and it needs one instrumented run.
+
+### What the sync fix actually addresses
+
+Read out of `atelier-arland-fixes/src/sync_fix.cpp` and Rorona's own code rather than from prose. The stall comes from a middleware whose lock has exactly this shape:
+
+```
+CreateBuffer/CreateTexture2D/CreateTexture3D(Usage = STAGING, BindFlags = 0,
+                                             CPUAccessFlags = table1[mode])   // fresh, per lock
+CopyResource / CopySubresourceRegion(newStaging <- realGpuResource)           // GPU work
+Map(newStaging, 0, table2[mode], 0, &mapped)                                  // CPU waits for the GPU
+```
+
+Two 4-entry mode tables select the behaviour, byte-identical in every binary:
+
+| mode | `CPUAccessFlags` | `D3D11_MAP` | copies first? |
+|---|---|---|---|
+| 0 | `0x20000` READ | 1 `READ` | yes |
+| 1 | `0x10000` WRITE | 2 `WRITE` | yes |
+| 2 | `0x30000` READ\|WRITE | 3 `READ_WRITE` | yes |
+| 3 | `0x10000` WRITE | 2 `WRITE` | **no** — a `DYNAMIC` resource short-circuits to a direct `Map(WRITE_DISCARD)` |
+
+Table RVAs: Rorona EN `0xa4d758`/`0xa4d768`, Ayesha EN `0xfe85c0`/`0xfe85d0`, Escha EN `0x950960`/`0x950970`, Shallie EN `0x946200`/`0x946210`.
+
+The fix replaces the GPU copy with a CPU `memcpy` out of a *persistent* shadow staging resource attached to the source via `SetPrivateDataInterface`. Everything else in it — the `Map`/`Unmap` redirect, dirty coalescing, flush points — exists to keep that shadow coherent, because the game writes the same resources through `Map`.
+
+### The mode argument is the whole story
+
+`tryCpuCopy` gates on `isCpuWritableResource(dst)`: `STAGING|DYNAMIC` **and `CPU_ACCESS_WRITE`**. Mode 0 creates its staging with `CPU_ACCESS_READ` only, so the gate fails and the copy falls through to the real GPU path — in **upstream's, TellowKrinkle's and Arland's implementations alike**. Mode 3 issues no copy to intercept.
+
+Ayesha's atlas census records exactly two callers: `renderText` at **mode 0**, and the write-begin helper at **mode 3**. Arland's measured atlas readbacks are `cpu=0x30000`, i.e. **mode 2**, which *is* eligible. **That is why the fix pays in Arland and cannot pay on Ayesha's text path** — and it is the specific reason the "Ayesha is old-Arland, port the fix" reasoning in `archive/DUSK/LANDSCAPE-2026-07-26.md` does not hold.
+
+The mode is the lock's 4th parameter (`r9d`), which is how `atlas_fix.cpp`'s `atlasLock(texture, output, level, mode)` already reads it.
+
+The only way to make mode 0 eligible would be to add `CPU_ACCESS_WRITE` to the staging descriptor inside the mod's own `CreateTexture2D`/`CreateBuffer` hook. Legal and behaviour-preserving from the game's side, but a new mechanism rather than a port, and it changes driver-side memory placement. Not worth it for a path the atlas cache has already emptied — 95.5% of those locks never reach D3D11, leaving ~3 real read locks per frame.
+
+### Six locks per binary, and the same revision across the trilogy
+
+Rorona's texture lock `0x3ee6e0` homologs into every Dusk binary with byte-identical prologues and forward-plus-reverse confirming votes. Searching each binary for references to the two mode tables enumerates the complete set: **six lock functions in every English build**.
+
+| # | kind | Rorona EN | Ayesha EN | Escha EN | Shallie EN |
+|---|---|---|---|---|---|
+| 1 | buffer | `0x3eb800` | `0x57d650` | `0x3eeff0` | `0x3c6410` |
+| 2 | buffer | `0x3ebe90` | `0x57df10` | `0x3d0010` | `0x3a2500` |
+| 3 | **Texture2D — the atlas lock** | `0x3ee6e0` | `0x580f90` | `0x3f1a30` | `0x3c8b50` |
+| 4 | Texture2D, second variant (no fast path) | `0x3eee40` | `0x581950` | `0x3f2200` | `0x3c92f0` |
+| 5 | Texture3D (no fast path) | `0x3ef450` | `0x582150` | `0x3f2870` | `0x3c9950` |
+| 6 | buffer | `0x3effe0` | `0x5830d0` | `0x3f34c0` | `0x3ca570` |
+
+Ayesha, Escha and Shallie have byte-for-byte identical extents for all six (texture lock `0x386`, buffer lock 1 `0x30b`); Rorona's are slightly smaller (`0x312`, `0x293`). The three Dusk games ship one and the same, marginally newer, revision of the middleware.
+
+Ayesha ML texture lock is `0x5a3490` — the address this document already names as "the atlas lock's own implementation". So the function the menu fix hooks **is** the middleware texture lock, and the atlas cache and a sync fix would be two layers on the same call.
+
+Per-lock D3D11 call sites, for keying a probe (create / copy / map, with the fast-path `Map` in parentheses):
+
+| lock | Ayesha EN | Escha EN | Shallie EN |
+|---|---|---|---|
+| buffer 1 | `0x57d831`/`0x57d895`/`0x57d8ce` (`0x57d766`) | `0x3ef1d1`/`0x3ef235`/`0x3ef26e` (`0x3ef106`) | `0x3c65f1`/`0x3c6655`/`0x3c668e` (`0x3c6526`) |
+| buffer 2 | `0x57e0d5`/`0x57e139`/`0x57e172` (`0x57e003`) | `0x3d01d5`/`0x3d0239`/`0x3d0272` (`0x3d0103`) | `0x3a26c5`/`0x3a2729`/`0x3a2762` (`0x3a25f3`) |
+| tex2D (atlas) | `0x5811b9`/`0x58123f`/`0x581275` (`0x581073`) | `0x3f1c59`/`0x3f1cdf`/`0x3f1d15` (`0x3f1b13`) | `0x3c8d79`/`0x3c8dff`/`0x3c8e35` (`0x3c8c33`) |
+| tex2D #2 | `0x581a8e`/`0x581b14`/`0x581b49` | `0x3f233e`/`0x3f23c4`/`0x3f23f9` | `0x3c942e`/`0x3c94b4`/`0x3c94e9` |
+| tex3D | `0x58229c`/`0x58231d`/`0x582351` | `0x3f29bc`/`0x3f2a3d`/`0x3f2a71` | `0x3c9a9c`/`0x3c9b1d`/`0x3c9b51` |
+| buffer 3 | `0x5832d0`/`0x583338`/`0x583371` (`0x583213`) | `0x3f36c0`/`0x3f3728`/`0x3f3761` (`0x3f3603`) | `0x3ca770`/`0x3ca7d8`/`0x3ca811` (`0x3ca6b3`) |
+
+### The engine split does not apply to this item
+
+The triage above stands for the renderers — Ayesha's text renderer is an exact Arland homologue and Escha/Shallie have no n-gram matches for it. But **the D3D11 resource layer underneath is the same code in all six games.** Escha's texture-lock stub `0x3f1dd0` has 6 direct callers and its buffer-lock-1 stub `0x3eefc0` has 4, one of which (`0x66f990`) sits far outside the middleware address range — KTGL-level engine code reaching the middleware buffer lock. Escha and Shallie additionally carry ~9 `CopyResource` sites that Ayesha and Rorona do not, identical between the two of them.
+
+So the correct framing is: the mechanism is common, only the call frequency and mode mix are per-game.
+
+### What the existing probe already showed, and what it could not
+
+The `D3D11PROBE` run recorded here — 4,908 writes to 512×512 textures from two call sites, `0x5a3576` and `0x5a3746` — resolves against the ML lock at `0x5a3490` as:
+
+- `0x5a3576` = the **fast-path direct `Map(WRITE_DISCARD)`** on the dynamic atlas (EN `0x581073`);
+- `0x5a3746` = the return of the **`CopySubresourceRegion(staging <- atlas)`** of the staging round trip (EN `0x58123f`).
+
+Two things follow. The staging round trip is confirmed firing at runtime, on the **immediate** context, despite Ayesha recording its frame on a deferred one — which settles the deferred-context worry, since `Map(READ)` on a deferred context is illegal and the middleware uses the one context in its own global. And the probe's filter reports **write** map types only, so `Map(READ)` and `Map(READ_WRITE)` — the stalling ones — were never in scope. **The existing evidence is silent on exactly the population that matters.**
+
+### The measurement
+
+`src/core/d3d11_probe.cpp` is the right host; three additive changes.
+
+1. **Invert the map filter.** It early-outs on anything that is not a write map and on anything that is not 512×512. Want the opposite: every `Map` with `READ` or `READ_WRITE`, any resource shape.
+2. **Time the real call.** Wrap `originalMap` in a `steady_clock` pair — the count is not the answer, the stall microseconds are. Arland's `ReadMapKey`/`ReadMapStats` and its per-interval emitter port essentially unchanged, keyed on `(callerRva, dim, format, WxH, usage, bindFlags, cpuFlags)`. **`cpuFlags` in that key is what reveals the lock mode, and therefore eligibility, with no further RE.**
+3. **Count staging creations** on device slots 3/5/6 with `Usage == STAGING`. Arland measured 1,695 creations in one Rorona transition at 1.60 ms each, so creation churn may be the larger cost.
+
+Fixed resolution, vsync and frame cap off, three fixed scenes per game: title/main menu, a fixed field spot standing still, battle first turn. Run Ayesha's menu scene twice, `DUSK_ATLAS_CACHE=0` and `=1`, or the cache masks the credit.
+
+**Decision rule.** Build nothing unless a scene shows a material per-frame total in `api_us` attributable to `READ`/`READ_WRITE` maps whose `cpuFlags` include `0x10000`. If the microseconds are there but `cpuFlags` is `0x20000` everywhere, the answer is "the pattern exists and no port can reach it" — record that and close the item.
+
+**Trap.** `d3d11InstallHooks` runs before `initializeD3D11WriteProbe` (`main.cpp`) and both want context slots 46/47. With MSAA enabled MinHook returns `MH_ERROR_ALREADY_CREATED` and the probe logs "installing nothing". Measure with MSAA off, or move the counters into the existing detours.
+
+### If a fix is warranted, only Arland's is viable
+
+| | covers mode 1/2 | `Map`/`Unmap` coherence | cost per `Unmap` | deferred-context safe |
+|---|---|---|---|---|
+| upstream (doitsujin v0.5) | yes | **no** — shadows refresh only on RTV/UAV bind | – | no `ExecuteCommandList` boundary |
+| TellowKrinkle `98b5c9b` | yes | one **global** last-mapping slot; uploads the **whole** resource every `Unmap` | high | not explicitly |
+| **Arland per-resource** | yes | keyed `(resource, subresource)`, COM refs held for the mapping's life, `READ_WRITE` redirect preserving unwritten pixels, dirty-marking coalesced before draw/dispatch/GPU-copy/`ExecuteCommandList`, immediate-context only | one coalesced upload | yes, by construction |
+
+Upstream's is not merely worse, it is *incorrect here*: all three Dusk games write these resources through `Map`, which is precisely the corruption TellowKrinkle's commit was written for. Ayesha's deferred-context frame recording makes the `ExecuteCommandList` flush boundary load-bearing, and Arland already has it.
+
+Two hazards not to port verbatim:
+
+- Arland's sync fix asserts that immediate and deferred contexts share one vtable and copies the immediate proc table into the deferred one. **This is measured false on Ayesha** — see "Why it did not fire: the wrong context vtable" above, two distinct vtables (`…4410` / `…3ca0`). A port inheriting that assumption will silently mis-dispatch.
+- `isMutableFontAtlas` (dynamic 512×512 → refuse to shortcut) guards against snapshotting an atlas the deferred queue filled before the shadow existed. Its shape assumption is validated for Ayesha and **unvalidated for Escha and Shallie**.
+
+**Feature collision, specific to this repo.** MSAA already owns slots 46/47 and resolves its multisample twin into the host *before* the copy, so a CPU-copy shortcut reading the host directly would read an unresolved surface. Ordering between the two must be explicit; Arland gets it for free by living in one translation unit and this project would not. The same applies to the high-res target substitution and the SSAA back-buffer redirect.
+
+### Risk, and what would falsify a claim that it works
+
+Corruption looks like: garbled or blank glyphs and missing kanji from a stale shadow (the exact Arland bug the invalidation rule was written for); on buffers, geometry from a previous frame, flickering meshes, wrong bone transforms. A shadow snapshotted before the deferred queue filled the source produces content that is *consistently* wrong and never self-corrects — that signature is what distinguishes it from a race.
+
+Lifetime: the shadow hangs off the source via `SetPrivateDataInterface` and dies with it. The failure modes are a missed `Release` on the internal `Map` paths (leak, then OOM on a long session) and mapping a shadow whose source died (crash on scene change). Memory grows by one staging copy per distinct source resource — bounded in Arland because the destinations are throwaway, unmeasured for Escha and Shallie.
+
+A claim that it works must survive all four:
+
+1. the census counters for CPU copies and shadow flushes are **non-zero** in the scene where the win was measured — if they are zero, the delta is not the fix;
+2. the frame-time win reproduces on a fixed scene across at least three runs;
+3. a pixel hash of a fixed frame is identical with the fix on and off;
+4. text is byte-identical across a language switch and a kanji-heavy string, and a long session shows no RSS growth.
+
+Passing (2) while failing (1) is the classic false positive here, and this project's history has several.
+
 ## The "Loadning system data." typo
 
 > **TL;DR**: Escha & Logy and Shallie misspell "Loading" on the first screen of the game. The word is a plain string literal in each executable's `.rdata`, so the mod corrects the 22 bytes in the loaded image at startup. First fix shipped for the KTGL module. Nothing on disk is touched.

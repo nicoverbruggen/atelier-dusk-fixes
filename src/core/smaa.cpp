@@ -4,7 +4,7 @@
 // post-process over the finished frame. These games ship no antialiasing of any
 // kind, and SMAA works on the finished image, so it smooths every visible edge
 // regardless of how it was produced -- texture-interior and alpha-test edges
-// included, which is exactly what MSAA cannot reach.
+// included, which is exactly what multisampling cannot reach.
 //
 // Ported from the Arland project's src/smaa.cpp, which is this project's own
 // code (MIT). The reference shader and the AreaTex/SearchTex lookup tables are
@@ -20,10 +20,6 @@
 //     separately for each Arland title. Nothing equivalent is known for
 //     PhyreEngine yet, so this file offers only the full-frame path at
 //     Present.
-//   - The MSAA twin write-back. Arland's pre-UI injection has to push its result
-//     into a bound multisample twin; this project has no MSAA, so there is no
-//     twin and no write-back.
-//
 // Atelier Graphics Tweak also ships SMAA for these games, and confirmed two
 // useful facts by inspection: the same MIT reference shader at
 // SMAA_PRESET_ULTRA, and an injection point on the DEFERRED context. None of
@@ -627,9 +623,10 @@ bool smaaApplySceneColor(ID3D11DeviceContext* ctx, ID3D11Texture2D* scene) {
 
   D3D11_TEXTURE2D_DESC sd = {};
   scene->GetDesc(&sd);
-  // A multisample scene target is the MSAA twin's business, not this one: the
-  // twin is resolved into its host before anything reads it, and the host is
-  // what arrives here.
+  // Nothing in this mod multisamples, and these engines render into none of the
+  // multisampled targets they allocate, so a multisample surface reaching this
+  // pass means the scene test matched something it should not have. Refuse it
+  // rather than run a pass whose shaders take a single-sample source.
   if (sd.SampleDesc.Count != 1)
     return false;
 

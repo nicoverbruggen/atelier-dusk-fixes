@@ -24,11 +24,11 @@
 #include "log.h"
 #include "d3d11_hooks.h"
 #include "highres.h"
-#include "msaa.h"
 #include "sampler.h"
 #include "smaa.h"
 #include "supersample.h"
 #include "util.h"
+#include "window_background.h"
 #include "version.h"
 #include "../../vendor/minhook/include/MinHook.h"
 
@@ -121,7 +121,6 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* swapChain,
   dusk::engineFrameTick();
   d3d11WriteProbeFrameTick();
   highResFrameTick();
-  msaaFrameTick();
   // Counters and one-shot diagnostics ONLY. Supersampling deliberately does no
   // rendering work at Present: two of its four failed predecessors blacked the
   // screen out with a present-time pass painting over a finished frame, and the
@@ -129,12 +128,6 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* swapChain,
   // optimisation. See supersample.h.
   ssaaFrameTick(swapChain);
   samplerReport();
-  // Before any present-time pass reads the frame: the scene may still be
-  // sitting in a multisample twin, and SMAA and the downscale both sample the
-  // surface the game believes it composited into. Every other resolve point is
-  // triggered by the game reading a host, and nothing obliges it to do that on
-  // the frame's final pass.
-  msaaResolveBeforePresent(swapChain);
   // Last thing before the frame is handed over: SMAA runs over the finished
   // image, so everything the game drew this frame has to be in it already.
   smaaApply(swapChain);
@@ -339,9 +332,20 @@ DLLEXPORT HRESULT __stdcall D3D11CreateDeviceAndSwapChain(
 
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
   switch (fdwReason) {
-    case DLL_PROCESS_ATTACH:
+    case DLL_PROCESS_ATTACH: {
       DisableThreadLibraryCalls(hinstDLL);
+      // The window-background fix hooks a user32 API and has to be in place
+      // before the game registers its window class, which happens well before
+      // it reaches D3D11. That is why MinHook comes up here rather than at
+      // device creation; every later MH_Initialize call in this DLL accepts
+      // ALREADY_INITIALIZED. Skipped in the documented pass-through mode.
+      const char* disable = std::getenv("DUSK_DISABLE");
+      if (!disable || disable[0] == '0') {
+        MH_Initialize();
+        atfix::installWindowBackgroundFix();
+      }
       break;
+    }
     case DLL_PROCESS_DETACH:
       // Only on real process teardown (lpvReserved non-null means the process is
       // exiting and the loader will not run other DLLs' cleanup reliably).

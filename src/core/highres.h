@@ -72,8 +72,8 @@ void highResFrameTick();
 // The size the scene renders at, learned from the first main target the game
 // creates. False until it has created one.
 //
-// Exposed because the MSAA module's scene-target test needs it, and that test
-// lives in the engine module rather than in core (see msaa.h on MsaaSceneTest).
+// Exposed because the scene-target test needs it, and that test lives in the
+// engine module rather than in core (see scene_pass.h on SceneTargetTest).
 // This reports a fact; deciding what it means is the caller's business.
 bool highResMainSize(unsigned int* width, unsigned int* height);
 
@@ -82,11 +82,11 @@ bool highResMainSize(unsigned int* width, unsigned int* height);
 // been seen.
 //
 // This exists because that size was briefly written down in two places -- the
-// resize in hookedCreateTexture2D and the MSAA scene test -- and they
-// disagreed the moment supersampling was enabled. The scene targets became
-// larger than the main size, the scene test still matched on the main size, and
-// MSAA declined every bind for a whole session. Two features that each worked
-// alone, and enabling one turned the other off. One definition, used by both.
+// resize in hookedCreateTexture2D and the scene test -- and they disagreed the
+// moment supersampling was enabled. The scene targets became larger than the
+// main size, the scene test still matched on the main size, and the test
+// declined every bind for a whole session. Two features that each worked alone,
+// and enabling one turned the other off. One definition, used by both.
 bool highResSceneSize(unsigned int* width, unsigned int* height);
 
 // Records the size the swap chain was actually created at. Logged once, and

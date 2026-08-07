@@ -36,9 +36,9 @@ const char* engineName(Engine e);
 // descriptor rows in game.cpp.
 //
 // AtlasCache, HighResRendering, and both field-jitter halves ship on by
-// default for Ayesha. Six of the remaining features are diagnostics, and every
-// row but TargetCensus, AnisotropicFiltering and LoadingTextTypo is
-// Ayesha-only.
+// default for Ayesha. The first six rows are diagnostics. Everything from
+// LoadingTextTypo down belongs to the two KTGL games, and only TargetCensus,
+// AnisotropicFiltering and PadRescanBackoff apply to all three.
 enum class Feature : uint8_t {
   AtlasStats,       // Ayesha font-atlas diagnostic counters (measurement only)
   AtlasTrace,       // Ayesha font-atlas lock/unlock sequence trace (one frame)
@@ -51,10 +51,11 @@ enum class Feature : uint8_t {
   FieldEngineFix,   // Ayesha high-refresh field jitter: rescale the move threshold
   FieldStabilizer,  // Ayesha high-refresh field jitter: hold the character at rest
   Smaa,             // Ayesha: SMAA post-process antialiasing
-  Msaa,             // Ayesha: multisample the scene via twin targets (msaa.h)
   Supersampling,    // Ayesha: render above the display size, downscale to it
   AnisotropicFiltering, // any game: upgrade trilinear samplers (sampler.h)
   WorldMapCursor,   // Ayesha: travel-map cursor moves per second, not per frame
+  SkipStartupLogos, // Ayesha: skip the publisher/developer logos shown at boot
+  SkipIntroMovie,   // Ayesha: skip the movies played on the way to the title
   LoadingTextTypo,  // Escha & Logy, Shallie: "Loadning" -> "Loading"
   SystemSaveGuard,  // Escha & Logy, Shallie: refuse to overwrite a failed load
   ControlPromptHold,// Shallie: the control-hint panel stops replaying its slide

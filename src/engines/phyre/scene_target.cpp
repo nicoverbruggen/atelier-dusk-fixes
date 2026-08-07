@@ -7,7 +7,7 @@
 
 #include "scene_target.h"
 #include "../../core/highres.h"
-#include "../../core/msaa.h"
+#include "../../core/scene_pass.h"
 
 namespace atfix {
 namespace {
@@ -54,8 +54,8 @@ bool phyreSceneTargets(const D3D11_TEXTURE2D_DESC& color,
   // Size alone is not enough, and a run proved it. At 1440p the main render
   // size EQUALS the swap-chain size, so the back buffer paired with the
   // swap-size depth matched this test just as well as the real scene pair did,
-  // and the composite/UI pass was being multisampled and resolved on every
-  // bind. Measured descriptors from that run:
+  // and the composite/UI pass was being taken for the scene on every bind.
+  // Measured descriptors from that run:
   //
   //   back buffer  colour format=87 (B8G8R8A8_UNORM)    depth bindFlags=0x40
   //   scene pair   colour format=90 (B8G8R8A8_TYPELESS) depth bindFlags=0x48
@@ -75,8 +75,8 @@ bool phyreSceneTargets(const D3D11_TEXTURE2D_DESC& color,
   // Note what this does NOT do: it does not require the back buffer to be
   // excluded by identity. A renderer that draws its scene straight into the
   // back buffer is a perfectly ordinary design -- the Arland games do exactly
-  // that -- so "never twin the back buffer" would be wrong as a general rule
-  // and wrong in core. It is excluded here because on THIS engine the back
+  // that -- so "the scene is never the back buffer" would be wrong as a general
+  // rule and wrong in core. It is excluded here because on THIS engine the back
   // buffer is not where the scene lives.
   if (color.Format != DXGI_FORMAT_B8G8R8A8_TYPELESS)
     return false;
@@ -85,7 +85,7 @@ bool phyreSceneTargets(const D3D11_TEXTURE2D_DESC& color,
 
   // Two pairs matching is expected, not an anomaly: the engine ping-pongs
   // between two identically-shaped scene colour targets for its post-processing
-  // chain. Both are the scene and both should be multisampled.
+  // chain. Both are the scene.
   return true;
 }
 
@@ -95,7 +95,7 @@ bool phyreSceneTargets(const D3D11_TEXTURE2D_DESC& color,
 namespace dusk {
 
 void registerPhyreSceneTarget() {
-  atfix::msaaSetSceneTest(&atfix::phyreSceneTargets);
+  atfix::scenePassSetTest(&atfix::phyreSceneTargets);
 }
 
 }  // namespace dusk

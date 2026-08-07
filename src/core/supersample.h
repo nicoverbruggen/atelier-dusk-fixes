@@ -26,8 +26,8 @@
 //   2. ENLARGE THE SCENE TARGETS AND LET THE ENGINE RESAMPLE. Worked, but the
 //      engine's composite samples through a bilinear sampler -- four taps,
 //      which only resamples correctly at a whole-number ratio. It also silently
-//      disabled MSAA, because "how big are the scene targets" was written down
-//      in both the resize and the MSAA scene test and the two disagreed the
+//      broke the scene test, because "how big are the scene targets" was
+//      written down in both the resize and the test and the two disagreed the
 //      moment this was switched on.
 //   3. OWN THE DOWNSCALE. A ratio-sized box filter substituted at the
 //      composite's sample, later with a sharpen folded in. "Better but not
@@ -93,7 +93,7 @@ bool ssaaConfigured();
 
 // Whether supersampling has actually substituted at least once this session --
 // "configured" and "engaged" are different questions and callers that stand
-// something else down must ask the second one. See msaa.cpp's boundary.
+// something else down must ask the second one. See scene_pass.cpp's boundary.
 bool ssaaEngaged();
 
 // How hard to sharpen after the downscale, 0 to 1. A box filter is an average
@@ -112,7 +112,7 @@ float ssaaSharpen();
 // NOT A PUBLIC ANSWER TO "how big are the scene targets" -- highResSceneSize is
 // that, and it is the only thing entitled to answer it. This is the arithmetic
 // that function calls. The one time those two facts had separate definitions
-// they drifted apart and disabled MSAA for a whole session.
+// they drifted apart and stopped the scene test matching for a whole session.
 bool ssaaSceneSize(unsigned int mainWidth, unsigned int mainHeight,
                    unsigned int* sceneWidth, unsigned int* sceneHeight);
 
@@ -129,7 +129,7 @@ bool ssaaSceneSize(unsigned int mainWidth, unsigned int mainHeight,
 void ssaaNoteBackBuffer(IDXGISwapChain* swapChain);
 
 // Tag a colour target that the engine's scene test has just identified as a
-// scene colour host. Called from msaaNoteSceneBoundary, which owns that verdict
+// scene colour host. Called from scenePassNoteBoundary, which owns that verdict
 // -- this module stores it and nothing more, so there is still exactly one
 // place that decides which surface is the scene.
 //
@@ -140,10 +140,9 @@ void ssaaTagSceneHost(ID3D11Texture2D* sceneColor);
 // arriving. The marker is set exactly while a colour target carrying the back
 // buffer's tag is bound.
 //
-// MUST RUN AFTER msaaResolveReplaced and after msaaNoteSceneBoundary. See the
-// ordering note in msaa.cpp's hookedOMSetRenderTargets: under MSAA the scene
-// lives in a multisample twin until that resolve lands it, and every consumer
-// of a scene colour host below reads the host.
+// MUST RUN AFTER scenePassNoteBoundary, which is what tags the arriving surface
+// as a scene colour host. See the ordering note in scene_pass.cpp's
+// hookedOMSetRenderTargets.
 void ssaaNoteTargetsBound(ID3D11DeviceContext* context, unsigned int numViews,
                           ID3D11RenderTargetView* const* views);
 
@@ -163,7 +162,6 @@ constexpr unsigned int kSsaaMaxSubstitutedViews = 16;
 // view it writes there is BORROWED -- this module holds the only reference and
 // keeps it alive for the session -- so the caller neither addrefs nor releases.
 //
-// MUST RUN AFTER msaaResolveShaderResources, for the same reason as above.
 bool ssaaSubstituteShaderResources(ID3D11DeviceContext* context,
                                    unsigned int startSlot,
                                    unsigned int numViews,

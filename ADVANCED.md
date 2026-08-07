@@ -8,6 +8,17 @@ The normal user-facing settings are in `dusk-fix.ini`, and the custom launcher i
 
 The game's own `Setting.ini` remains separate. Resolution, fullscreen mode, language, and character outlines belong there because the game reads those values itself. The custom launcher writes both files without removing unrelated keys.
 
+### `[Startup]`
+
+| Key | Values | Default | Effect |
+|---|---|---|---|
+| `SkipLogos` | `true` / `false` | `false` | Skips the publisher and developer logos shown while the game boots. Atelier Ayesha only. |
+| `SkipIntroMovie` | `true` / `false` | `false` | Skips the movies played on the way to the title screen. Atelier Ayesha only. |
+
+`SkipLogos` does not make the game start sooner. The logos play while the game loads, so skipping them shows a black screen for as long as loading takes. It also stops the attract replay that would otherwise run after the title screen sits idle, because both wait on the same thing.
+
+`SkipIntroMovie` gates on which movie is being opened, so the ending and event movies are unaffected. While it is on, the opening also cannot be replayed from the in-game Movies menu, because every movie the game plays goes through the routine this intercepts.
+
 ### `[Launcher]`
 
 | Key | Values | Default | Effect |
@@ -31,6 +42,11 @@ These are environment variables, not ini keys. They are for comparison and bug r
 | `DUSK_FIELD_ENGINE_FIX=0` | Disables the Ayesha field-jitter fix. The resting stabilizer depends on this rescale. |
 | `DUSK_FIELD_STABILIZER=0` | Disables only the resting part of the field-jitter fix. This leaves the threshold rescale active. |
 | `DUSK_LOADING_TEXT=0` | Leaves the "Loadning system data." misspelling on Escha & Logy's and Shallie's first screen uncorrected. |
+| `DUSK_SKIP_LOGOS=1` | Skips Ayesha's startup logos for one session, without setting the ini key. |
+| `DUSK_SKIP_INTRO_MOVIE=1` | Skips Ayesha's opening movie for one session, without setting the ini key. |
+| `DUSK_SMAA=0` / `=1` | Ayesha's SMAA pass. |
+| `DUSK_SSAA=<percent>` | Ayesha's supersampling factor, 100 for off. |
+| `DUSK_ANISO=<level>` | Anisotropic filtering level: 2, 4, 8 or 16, anything else for off. |
 
 Environment values are read before the ini layer. A wrapper that exports one of these variables, even with a default value, overrides the file and can make a validation run test the wrong configuration.
 

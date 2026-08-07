@@ -14,6 +14,8 @@
 
 #include "atlas_fix.h"
 #include "field_physics.h"
+#include "logo_skip.h"
+#include "movie_skip.h"
 #include "scene_target.h"
 #include "worldmap_fix.h"
 #include "../../core/game.h"
@@ -86,11 +88,12 @@ namespace dusk {
 bool initializePhyreFixes() {
   static const bool initialized = [] {
     // Before the feature gate below, and deliberately so. This registers a
-    // predicate with core's MSAA module -- no hooks, no mapped addresses, no
-    // fingerprint needed -- and a session that enables only MSAA must still get
-    // it. Everything past the gate is a hooked, address-dependent fix; this is
-    // not one, and gating it with them would make MSAA silently decline every
-    // bind in exactly the configuration that asked for it.
+    // predicate with core's scene-pass module -- no hooks, no mapped addresses,
+    // no fingerprint needed -- and a session that enables only supersampling
+    // must still get it. Everything past the gate is a hooked,
+    // address-dependent fix; this is not one, and gating it with them would
+    // make the scene test decline every bind in exactly the configuration that
+    // asked for it.
     registerPhyreSceneTarget();
 
     const bool wantCache = atfix::featureEnabled(atfix::Feature::AtlasCache);
@@ -104,11 +107,24 @@ bool initializePhyreFixes() {
       atfix::featureEnabled(atfix::Feature::FieldEngineFix) ||
       atfix::featureEnabled(atfix::Feature::FieldStabilizer) ||
       atfix::fieldTraceEnabled();
+    const bool wantLogoSkip =
+      atfix::featureEnabled(atfix::Feature::SkipStartupLogos);
+    const bool wantMovieSkip =
+      atfix::featureEnabled(atfix::Feature::SkipIntroMovie);
+    // Every feature this module can install has to be named here. A row added
+    // to the matrix and forgotten in this condition never reaches the
+    // fingerprint check below, so it declines silently while reporting nothing
+    // -- the same shape of failure as a short matrix row.
     if (!wantCache && !wantStats && !wantTrace && !wantVerify && !wantCensus &&
-        !wantField && !wantWorldMap)
+        !wantField && !wantWorldMap && !wantLogoSkip && !wantMovieSkip)
       return false;
-    if (MH_Initialize() != MH_OK) {
-      log("phyre: MH_Initialize failed");
+    // ALREADY_INITIALIZED is a success here. DllMain initializes MinHook for
+    // the window-background fix, which has to be in place before the game
+    // registers its window class, so by the time this runs MinHook is normally
+    // already up. Treating that as a failure would decline every Ayesha fix.
+    const MH_STATUS init = MH_Initialize();
+    if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
+      log("phyre: MH_Initialize failed (", MH_StatusToString(init), ")");
       return false;
     }
 
@@ -130,6 +146,13 @@ bool initializePhyreFixes() {
     // frame instead of per second, in a different subsystem.
     if (wantWorldMap)
       installWorldMapFix(g_base, g_game->exeBuild);
+
+    // The two startup skips. Each carries its own addresses and its own
+    // prologue windows, so each installs or declines on its own terms.
+    if (wantLogoSkip)
+      atfix::installLogoSkip(g_base, g_game->exeBuild);
+    if (wantMovieSkip)
+      atfix::installMovieSkip(g_base, g_game->exeBuild);
 
     // Not a Phyre fix at all: the pad layer is Gust framework code shared by all
     // six DX ports, so core owns the mechanism and this module only supplies the

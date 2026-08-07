@@ -36,19 +36,19 @@ Escha & Logy and Shallie do not have this defect. Both size the swap chain and e
 
 ## Antialiasing
 
-Three independent features, all Ayesha-only and all confirmed in game at 2560x1440.
+Two features, both Ayesha-only and both confirmed in game at 2560x1440.
 
-**Multisample antialiasing** is applied by the mod rather than the engine, which never requests a multisampled target. The game keeps its single-sample render targets and the mod attaches matching multisample resources to them, substituting at bind time and resolving before any read. Sample counts step down automatically if a requested count cannot be allocated. Confirmed at 4x with no failed allocations and no reads of an unresolved surface.
-
-**Supersampling** renders the scene above the display size and resamples it down with a box filter sized to the ratio, with sharpening folded into the same pass. The composite is identified positively, by the bind whose color target is the swap-chain back buffer, rather than inferred from when the engine stops drawing into the scene. Because the resample is the mod's own, fractional multipliers are usable; the ladder is 125%, 150%, 200%, 300%, and 400%.
+**Supersampling** renders the scene above the display size and resamples it down with a box filter sized to the ratio, with sharpening folded into the same pass. The composite is identified positively, by the bind whose color target is the swap-chain back buffer, rather than inferred from when the engine stops drawing into the scene. Because the resample is the mod's own, fractional multipliers are usable; the ladder is 125%, 150%, 200%, 300%, and 400%. It is opt-in: 200% is four times the shaded pixels.
 
 **SMAA** runs pre-UI, inside the downscale pass, so it smooths the rendered scene without softening menu text.
 
-**Anisotropic filtering** is upgraded to 16x for all three games. It ships on and has no launcher control: it costs nothing measurable, and a setting with no trade in it is not a setting.
+Both depend on knowing which render-target bind carries the 3D scene. That question is a property of the renderer rather than of Direct3D, so it is answered in `src/engines/phyre/scene_target.cpp` for Ayesha and nowhere else. Escha & Logy and Shallie have no equivalent rule, so both features are hard-off there.
 
-Measured cost on a Radeon 7900 XTX at 1440p in an opening interior: 200% supersampling with 4x MSAA is about 70% GPU utilization, and 200% with 8x is about 90%. Supersampling is opt-in and appears only in the upper preset rungs.
+Multisampling is deliberately not offered, and was removed rather than left switched off. It cannot reach what actually aliases in these games, which is detail inside textures and along alpha-tested edges; only supersampling resolves that. The engine's own multisampled targets are never rendered into, so there is no engine setting to turn up either.
 
-`DUSK_MSAA`, `DUSK_SSAA`, `DUSK_SMAA`, and `DUSK_ANISO` control each feature for one session.
+**Anisotropic filtering** is upgraded to 16x on Ayesha, where it ships on and has no launcher control: it costs nothing measurable, and a setting with no trade in it is not a setting. On Escha & Logy and Shallie it is available but off by default, because those games' sampler use has not been censused and a blanket upgrade there could smear a lookup texture under magnification.
+
+`DUSK_SSAA`, `DUSK_SMAA`, and `DUSK_ANISO` control each feature for one session.
 
 ## High-refresh field movement
 
@@ -98,11 +98,37 @@ Shallie's on-screen control hints slide into place from the edge of the screen, 
 
 This is a preference rather than a correction, so it ships off. `[Interface] SteadyControlPrompt` enables it; `[Interface] HideControlPrompt` selects the stronger behavior of not drawing the panel at all. Escha & Logy has no equivalent panel.
 
+## Startup logos and the opening movie
+
+Two independent skips, both Ayesha-only and both opt-in, using the same mechanism the Arland mod uses because Ayesha runs the same PhyreEngine boot code. Neither is validated in game yet.
+
+**The logos** belong to an object the application creates before it starts initializing the engine. Its update runs on the render thread and steps a phase sequence over fullscreen picture layers; the application does its whole engine and resource initialization while that animates, and only then waits for the sequence to report its terminal phase. Writing that phase releases the wait. The draw is suppressed as well, because forcing the phase stops the picture layers being ticked and a never-ticked layer's contents are not worth reasoning about.
+
+Two consequences follow and neither is a defect. Skipping does not start the game sooner: the logos play while the game loads, so this shows a black screen for as long as loading genuinely takes. And the idle-title attract replay stops happening, because it waits on the same field.
+
+**The opening movie** is skipped by reproducing a path the engine already has. The routine that opens a movie begins by asking whether the movie subsystem is ready, and when the answer is no it writes 1 to the player's state byte and returns without opening anything; the per-frame update reads that byte first and reports "not playing", so the caller advances as though the movie had finished. The skip does exactly that and calls nothing.
+
+It gates on the movie's index, so the endings and the seven event movies go through the same routine untouched. Ayesha's table has eleven entries where the Arland games have four, and both the opening and the pre-title sequence are skipped because either may be what plays at boot. Every index the routine is asked for is logged once, so a single run says which it is.
+
+One consequence worth knowing: every movie the game plays goes through this one routine, so while the option is on the opening cannot be replayed from the in-game Movies menu either.
+
+Both builds have independently derived addresses, verified prologues, and the same field offsets read out of each build rather than carried over. `DUSK_SKIP_LOGOS` and `DUSK_SKIP_INTRO_MOVIE` control them for one session; `[Startup] SkipLogos` and `[Startup] SkipIntroMovie` are the ini keys, named to match the Arland mod's.
+
+## Startup window background
+
+Between the game's window appearing and its first frame being drawn there is about a second in which Windows fills the window with mid-grey, because that is the brush the game's window class carries. The mod asks for black instead, which is what the game fades up from.
+
+The correction intercepts one call and changes one field of one window class, and only when three conditions hold together: the class comes from the executable itself, it is named `KTGL.A11`, and its background is exactly the grey stock brush. Windows hands out one shared handle per stock brush for the whole process, so that last comparison is an exact match rather than a guess. Anything else passes through untouched, so a build that stopped asking for grey would simply stop being affected. No game code is patched, no address is hardcoded, and the structure the game passed is never written to: the swap is made on a copy.
+
+Ayesha registers the same class name as the Arland games and with the same brush. Escha & Logy and Shallie do not contain that class name, so the correction never matches there and needs no per-game gate to say so. Always on, with no setting, and not validated in game yet.
+
 ## Launcher
 
 The custom launcher is a 64-bit Win32 settings program. It edits the game's `Setting.ini` for resolution, fullscreen mode, language, and outlines, and `dusk-fix.ini` for launcher and rendering state. Auto is represented in `dusk-fix.ini` and resolved to a literal desktop resolution in `Setting.ini` when saved.
 
-It carries an image-quality preset ladder — Balanced, Medium, High, Maximum, and Custom — above the individual controls, which stay editable; editing one re-derives which preset is shown. The preset is deliberately not persisted, so a hand-edited ini and the same values selected in the window describe the same configuration.
+It carries three tabs — General, Graphics, and About — laid out to match the Arland mod's launcher row for row, so someone who has used one does not have to learn the other. A setting the running game does not have is not shown: the window reads the same per-game capability list the DLL does, and Escha & Logy and Shallie show neither supersampling nor edge smoothing, with a line on the Graphics tab saying why. Saving never writes a key for a feature the running game would ignore.
+
+Every write to either file is checked. A failure is verified against the file before it is reported, because the flush call reports failure under Wine even when the values reached disk, and warning about a save that did in fact happen is worse than the failure. Real failures name the Win32 reason and are written to `dusk-fix.log`; misreported ones are logged as such and no warning is shown.
 
 The 32-bit `msimg32.dll` proxy is loaded by each game's stock launcher and settings editor. It forwards `AlphaBlend` and `TransparentBlt`. Only the three per-game stock launcher processes are redirected, and only when the custom launcher is installed or `SkipLauncher` selects a game executable. The proxy patches the host entry point in memory, preserves the original bytes for fallback, and keeps the Steam-launched process alive while its child runs.
 

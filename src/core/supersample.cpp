@@ -8,8 +8,8 @@
 //
 //   Every internal bind goes through a TRAMPOLINE, never through the public
 //   ID3D11DeviceContext method. The fourth attempt called
-//   context->OMSetRenderTargets inside its pass, re-entered the MSAA detour
-//   that hook lives in, and hung the game on the loading screen before the
+//   context->OMSetRenderTargets inside its pass, re-entered the scene-pass
+//   detour that hook lives in, and hung the game on the loading screen before the
 //   intro video could play. Draw, RSSetViewports, RSSetScissorRects,
 //   PSSetShaderResources and OMSetRenderTargets are all hooked in this project;
 //   every one of them is reached here through d3d11OriginalsFor().
@@ -46,7 +46,7 @@ namespace {
 // The largest scene target this will ask for. Not a driver limit -- feature
 // level 11 guarantees 16384 -- but a sanity bound: at 4K a 400% request would
 // ask for 15360x8640, half a gigabyte for the colour target alone, before the
-// depth target, the MSAA twins, and the engine's own post-processing chain.
+// depth target and the engine's own post-processing chain.
 constexpr unsigned int kMaxSceneWidth = 7680;
 constexpr unsigned int kMaxSceneHeight = 4320;
 
@@ -141,8 +141,8 @@ bool ssaaSceneSize(unsigned int mainWidth, unsigned int mainHeight,
 
 namespace {
 
-// Private-data keys. A distinct base from msaa.cpp's, for the reason that file
-// gives: the two mods are never loaded into the same process, but colliding
+// Private-data keys. A distinct base from scene_pass.cpp's, and from the Arland
+// project's: the two mods are never loaded into the same process, but colliding
 // GUIDs across sibling codebases costs a day to find if it ever happens.
 //
 // On a RESOURCE: this is the swap chain's back buffer.
@@ -153,7 +153,7 @@ const GUID IID_DuskSceneHost =
   { 0x9d3e7b11, 0x2c48, 0x4f0a, { 0xb6, 0x21, 0x5a, 0x0d, 0x14, 0x8e, 0x93, 0x02 } };
 // ...93, 0x03 was a cached shader-resource view over the scene colour host,
 // hung off the host with SetPrivateDataInterface. It is deliberately gone; see
-// sourceViewFor for why that particular trick cannot be borrowed from msaa.cpp.
+// sourceViewFor for why that particular trick cannot be used here.
 // On a CONTEXT: the back buffer is currently bound as a colour render target,
 // which on this engine means the composite is being set up.
 const GUID IID_DuskSsaaComposite =
@@ -325,8 +325,8 @@ constexpr UINT kSavedConstantBuffers = 4;
 // Every hooked context method this pass needs, resolved to its trampoline once.
 //
 // This is the fix for the defect that hung attempt 4. The public methods are
-// detoured -- OMSetRenderTargets into the MSAA substitution, Draw into the
-// high-resolution raster correction, PSSetShaderResources into this very
+// detoured -- OMSetRenderTargets into the scene/UI boundary check, Draw into
+// the high-resolution raster correction, PSSetShaderResources into this very
 // function -- and a pass that calls them is asking the mod to interpret its own
 // internal state changes as the game's.
 struct PassBinder {
@@ -528,9 +528,9 @@ bool initPass(ID3D11Device* device) {
   rd.FillMode = D3D11_FILL_SOLID;
   rd.CullMode = D3D11_CULL_NONE;
   rd.DepthClipEnable = TRUE;
-  // Created through the device directly and NOT through the hooked
-  // CreateRasterizerState, so MSAA's MultisampleEnable rewrite never reaches
-  // it: this pass draws one triangle into a single-sample texture.
+  // Created through the device directly. Nothing hooks CreateRasterizerState
+  // any more, but this pass draws one triangle into a texture it owns and has
+  // no business inheriting whatever a future device-level rewrite decides.
   if (FAILED(device->CreateRasterizerState(&rd, &g_raster))) return false;
 
   g_passBroken = false;
@@ -591,10 +591,10 @@ DXGI_FORMAT concreteFormat(DXGI_FORMAT format) {
 // A shader-resource view over the scene colour host, created for this pass and
 // released with it.
 //
-// NOT cached on the host with SetPrivateDataInterface, which is what msaa.cpp
-// does with its twins and what an earlier version of this function did. That
-// trick is safe there and a reference cycle here, and the difference is one
-// word: a twin is a SEPARATE texture and holds no reference back to the host,
+// NOT cached on the host with SetPrivateDataInterface, which is what an earlier
+// version of this function did and what the removed multisample twins could
+// safely do. That trick is a reference cycle here, and the difference is one
+// word: a twin was a SEPARATE texture and held no reference back to the host,
 // while a shader-resource view holds a strong reference to the resource it
 // views. host -> (private data) -> view -> host is a cycle neither side can
 // ever leave, so every scene colour target the engine ever allocated would be
@@ -746,8 +746,8 @@ bool runDownscale(ID3D11DeviceContext* context, ID3D11Texture2D* host,
     //
     // Still pre-UI by construction: the composite has not drawn yet, and this
     // engine draws its interface onto the back buffer after the composite. That
-    // is why msaaNoteSceneBoundary stands its own SMAA call down whenever
-    // supersampling is configured -- two pre-UI passes would be one too many,
+    // is why scenePassNoteBoundary stands its own SMAA call down whenever
+    // supersampling has engaged -- two pre-UI passes would be one too many,
     // and the one at the boundary is the one keyed on a transition that fires
     // 5 to 22 times a frame.
     smaaApplySceneColor(context, g_small);

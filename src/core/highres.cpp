@@ -16,8 +16,7 @@
 // and the detours both work through -- but NOT the vtables those detours are
 // installed into. d3d11_hooks.cpp owns those, and owns which of them go in.
 // See that header for why one module holds them: this file used to, and ended
-// up hosting five detours belonging to MSAA, a feature it has nothing to do
-// with.
+// up hosting detours belonging to features it has nothing to do with.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <d3d11.h>
@@ -219,7 +218,7 @@ bool isPinnedFullTarget(const D3D11_TEXTURE2D_DESC& desc,
 // it was needed for the same reason: the engine hard-codes 960x540 for its blur
 // chain, so leaving it behind gives a blur pass sampled at 1080p proportions
 // over a 1440p scene. Narrowly specified on purpose -- colour only, typeless
-// BGRA, no mips, no array, no MSAA -- because "half of the pinned size" is a
+// BGRA, single-sample, no mips, no array -- because "half of the pinned size" is a
 // shape plenty of unrelated textures could share.
 bool isPinnedBlurTarget(const D3D11_TEXTURE2D_DESC& desc,
                         const D3D11_SUBRESOURCE_DATA* data) {
@@ -254,10 +253,10 @@ HRESULT STDMETHODCALLTYPE hookedCreateTexture2D(
     } else {
       // The ONE definition of how big the scene targets are. Not recomputed
       // here from the main size and a factor: the last time this arithmetic
-      // existed in two places -- once here and once in the MSAA scene test --
+      // existed in two places -- once here and once in the scene test --
       // enabling supersampling made them disagree, the test stopped matching,
-      // and MSAA silently declined every bind for a whole session while every
-      // log line it wrote looked healthy. See highResSceneSize.
+      // and the features that depend on it silently did nothing for a whole
+      // session while every log line looked healthy. See highResSceneSize.
       unsigned int sceneWidth = 0;
       unsigned int sceneHeight = 0;
       const bool haveScene = highResSceneSize(&sceneWidth, &sceneHeight);
@@ -289,15 +288,17 @@ HRESULT STDMETHODCALLTYPE hookedCreateTexture2D(
     }
   }
 
-  // MSAA used to ride this hook, raising the sample count on targets the engine
-  // had already created multisampled. That is gone, and the reason is worth
-  // keeping: those targets were never rendered into. The census reports what
-  // the game CREATES, and six 4-sample targets it allocates at startup and
-  // abandons are indistinguishable, at creation time, from six it uses. Draw
-  // instrumentation settled it -- `drawsToMsaa=0` over 7200 frames -- and the
-  // feature that reported itself active while changing nothing on screen was
-  // this one. MSAA now lives in msaa.cpp, attached to binds rather than
-  // creations, because a bind is the only event that proves use.
+  // DO NOT ADD MULTISAMPLING BACK HERE. An early version rode this hook and
+  // raised the sample count on targets the engine had already created
+  // multisampled, on the reading that the game "already renders 4x MSAA".
+  // Those targets are never rendered into. The census reports what the game
+  // CREATES, and the six 4-sample targets it allocates at startup and abandons
+  // are indistinguishable, at creation time, from six it uses. Draw
+  // instrumentation settled it: `drawsToMsaa=0` and `maxBoundSamples=0` over
+  // 7200 frames and 117245 sampled draws. The twin implementation that replaced
+  // it has since been removed too -- multisampling cannot reach what actually
+  // aliases in these games, which is detail inside textures and alpha-tested
+  // trim, and only supersampling resolves that.
 
   // Reported before forwarding and from the descriptor the game asked for, so
   // the census keeps saying what the game wanted; `action` says what it got.
@@ -616,8 +617,8 @@ void highResNoteImmediateContext(ID3D11DeviceContext* context) {
 bool highResSceneSize(unsigned int* width, unsigned int* height) {
   // THE SOLE OWNER of "how big are the scene targets". Every consumer goes
   // through here: the resize in hookedCreateTexture2D, the gate that decides
-  // whether to resize at all, the half-size blur target, and Ayesha's MSAA
-  // scene test in src/engines/phyre/scene_target.cpp. supersample.cpp owns the
+  // whether to resize at all, the half-size blur target, and Ayesha's scene
+  // test in src/engines/phyre/scene_target.cpp. supersample.cpp owns the
   // factor and the clamp; it does not own this answer.
   unsigned int mainWidth = 0;
   unsigned int mainHeight = 0;

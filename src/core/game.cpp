@@ -80,7 +80,6 @@ const Descriptor& descriptor(Feature f) {
     /* FieldEngineFix  */ { "DUSK_FIELD_ENGINE_FIX",  nullptr, nullptr },
     /* FieldStabilizer */ { "DUSK_FIELD_STABILIZER",  nullptr, nullptr },
     /* Smaa            */ { "DUSK_SMAA",     "Rendering", "SMAA" },
-    /* Msaa            */ { "DUSK_MSAA",               nullptr, nullptr },
     // Env-only DESPITE having an ini key, which is the one exception in this
     // table and needs stating. `[Rendering] Supersampling` is an INT
     // percentage, and featureEnabled's boolean path would seed the literal
@@ -92,6 +91,15 @@ const Descriptor& descriptor(Feature f) {
     /* AnisotropicFiltering */
                           { "DUSK_ANISO", "Rendering", "AnisotropicFiltering" },
     /* WorldMapCursor  */ { "DUSK_WORLDMAP",          nullptr, nullptr },
+    // The two startup skips get ini keys where the fixes above do not, and
+    // the difference is the house rule rather than an inconsistency: these
+    // suppress behaviour the game shipped deliberately, so they are
+    // preferences. The key names match the Arland mod's exactly, because the
+    // two launchers are meant to present the same surface.
+    /* SkipStartupLogos */
+                          { "DUSK_SKIP_LOGOS",   "Startup", "SkipLogos" },
+    /* SkipIntroMovie  */ { "DUSK_SKIP_INTRO_MOVIE",
+                                                 "Startup", "SkipIntroMovie" },
     /* LoadingTextTypo */ { "DUSK_LOADING_TEXT",      nullptr, nullptr },
     /* SystemSaveGuard */ { "DUSK_SYSTEM_SAVE",        nullptr, nullptr },
     /* ControlPromptHold */
@@ -182,8 +190,7 @@ constexpr Support X = Support::OnByDefault;
 // them worked. A back-buffer redirect found nothing to attach to, because this
 // engine never composites through the back buffer's render-target view.
 // Enlarging the scene targets and letting the engine resample worked but gave
-// four bilinear taps, and silently disabled MSAA because two places computed
-// the scene size and disagreed. Owning the resample improved it marginally.
+// four bilinear taps. Owning the resample improved it marginally.
 // Adding a once-per-frame latch to that pass produced a black scene, because
 // the transition it latched on fires 5-22 times per frame and the first one is
 // a post-processing bind rather than the composite.
@@ -197,8 +204,7 @@ constexpr Support X = Support::OnByDefault;
 //
 // OptIn rather than on by default, and it can never be anything else: 200% is
 // four times the shaded pixels, measured at 70% GPU on a 7900 XTX in the game's
-// opening interior, which is close to the lightest scene there is. Combined
-// with 4x MSAA that is sixteen geometry samples per displayed pixel.
+// opening interior, which is close to the lightest scene there is.
 //
 // Its key is the one in this table that featureEnabled must not be asked about
 // -- see the note on the Descriptor row.
@@ -243,9 +249,21 @@ constexpr Support X = Support::OnByDefault;
 // engine family and refined in the Arland project, so this is not an experiment
 // in the way the field-jitter switches are.
 //
-// Escha & Logy and Shallie are Unsupported rather than OptIn because their
-// renderer has not been censused at all; enabling this there would apply a rule
-// derived from a different engine.
+// Escha & Logy and Shallie are Unsupported, and the reason is stronger than
+// "their renderer has not been censused". They do not have the defect: both
+// size the swap chain, the back buffer, the depth target and every full-frame
+// intermediate from the two Setting.ini values, and a byte-exhaustive census of
+// all four KTGL executables found no 1920/1080 pair outside the UI canvas
+// initializer. There is nothing pinned to correct.
+//
+// Enabling it there would be worse than useless at one specific resolution.
+// isPinnedFullTarget matches exactly 1920x1080 and isPinnedBlurTarget exactly
+// 960x540. On an engine that derives its sizes, a player running 3840x2160 has
+// half-frame intermediates at exactly 1920x1080 and quarter-frame ones at
+// exactly 960x540 -- so both rules would match surfaces that are already the
+// right size and double them. The rules are keyed on absolute sizes, which is
+// only meaningful in an engine that pins them; in an engine that derives them
+// the same numbers are a coincidence of the chosen resolution.
 //
 // LoadingTextTypo is the mirror image of every row above it: the two KTGL games
 // get it and Ayesha does not, because Ayesha does not have the defect. The
@@ -278,10 +296,10 @@ constexpr Support X = Support::OnByDefault;
 // so an incomplete row reads as a deliberate "this game does not get it". Let
 // the extent come from the initializer instead and each static_assert below
 // fails loudly the next time a Feature is added without extending every row.
-//                    Stats Trace Verfy Censu Probe Targt HiRes Cache Field Stab Smaa Msaa Ssaa Aniso WMap Typo
-constexpr Support kAyesha[]  = { O,    O,    O,    O,    O,    O,    X,    X,    X,    X,   X,   O,   O,   X,    X,   U,   U,   U,   O,   U };
-constexpr Support kEscha[]   = { U,    U,    U,    U,    U,    O,    U,    U,    U,    U,   U,   U,   U,   O,    U,   X,   X,   U,   O,   X };
-constexpr Support kShallie[] = { U,    U,    U,    U,    U,    O,    U,    U,    U,    U,   U,   U,   U,   O,    U,   X,   X,   O,   O,   X };
+//                               Stats Trace Verfy Censu Probe Targt HiRes Cache Field Stabl Smaa  Ssaa  Aniso WMap  Logo  Movi  Typo  SysSv Promt PadRe Synth
+constexpr Support kAyesha[]  = { O,    O,    O,    O,    O,    O,    X,    X,    X,    X,    X,    O,    X,    X,    O,    O,    U,    U,    U,    O,    U };
+constexpr Support kEscha[]   = { U,    U,    U,    U,    U,    O,    U,    U,    U,    U,    U,    U,    O,    U,    U,    U,    X,    X,    U,    O,    X };
+constexpr Support kShallie[] = { U,    U,    U,    U,    U,    O,    U,    U,    U,    U,    U,    U,    O,    U,    U,    U,    X,    X,    O,    O,    X };
 
 constexpr std::size_t kColumns = static_cast<std::size_t>(Feature::Count);
 static_assert(std::size(kAyesha) == kColumns,  "Ayesha row is not one entry per Feature");

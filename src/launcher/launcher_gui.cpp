@@ -4,16 +4,18 @@
 // and the game's own, and starts the game; it is what msimg32.dll opens in
 // place of Koei Tecmo's launcher when the game is started from Steam.
 //
-// Structured to match the Arland project's src/config_gui/main.cpp deliberately
-// and closely: the same tab strip with the game name on it, the same
-// cursor-driven Layout with measured note heights, the same bottom button row
-// with Play on the left and the skip-launcher checkbox beside it, the same
-// About page. Someone who has used one should not have to learn the other.
+// It is the Arland project's src/config_gui/main.cpp, page for page and row for
+// row: the same three tabs, the same order within them, the same wording on the
+// notes, the same bottom button row, the same save-failure reporting. Someone
+// who has used one should not have to learn the other. Where Arland has a
+// control for a feature this mod does not have -- shadow detail, the UI font,
+// attack cut-ins, the developer views, verbose logging -- the row is simply
+// absent rather than present and inert.
 //
-// It carries the same four pages as the Arland launcher: Display, Image
-// Quality, Game and About. Arland's Debug page has no counterpart here --
-// there are no developer views to reach, and the diagnostics that do exist are
-// environment switches on purpose.
+// Two differences are deliberate and are argued where they occur: how "Auto"
+// resolution is resolved (see loadFromIni), and what Reset returns the
+// resolution to (see resetToDefaults). Both follow from this mod having no
+// resolution override of its own.
 //
 // Two files are edited, and the split matters:
 //
@@ -59,11 +61,12 @@ enum : int {
   IDC_RES,
   IDC_WINMODE,
   IDC_LANG,
-  IDC_PRESET,
-  IDC_SMAA,
-  IDC_MSAA,
   IDC_SSAA,
+  IDC_RENDLBL,        // read-only note under the supersampling row
+  IDC_SMAA,
   IDC_OUTLINE,
+  IDC_SKIPLOGOS,      // skip the boot logos
+  IDC_SKIPMOVIE,      // skip the movies before the title screen
   IDC_SKIPLAUNCHER,
   IDC_START,
   IDC_OPENLAUNCHER,   // Koei Tecmo's own launcher
@@ -79,7 +82,7 @@ enum : int {
 const wchar_t* const kRepositoryUrl =
   L"https://github.com/nicoverbruggen/atelier-dusk-fixes";
 
-const int kPageCount = 4;   // Display, Image Quality, Game, About
+const int kPageCount = 3;   // General, Graphics, About
 
 // ---- the games -------------------------------------------------------------
 
@@ -88,11 +91,6 @@ const int kPageCount = 4;   // Display, Image Quality, Game, About
 // Japanese, Simplified Chinese and Traditional Chinese. Both are normally
 // installed side by side, so which is present is not the question -- which to
 // start is (see gameExeForLanguage).
-//
-// There is deliberately no engine flag here any more. Every mod fix is on by
-// default and has no control in this window, so nothing it shows depends on
-// which engine the game runs: the window is identical for all three, and the
-// per-game difference lives entirely in the DLL's capability matrix.
 struct Game {
   const char*    english;
   const char*    multilingual;
@@ -114,6 +112,32 @@ const Game kGames[] = {
 };
 const int kGameCount = 3;
 
+// Which of the mod's own settings the running game actually has.
+//
+// This mirrors the capability matrix in src/core/game.cpp, which is the single
+// source of truth; a cell that disagrees with it shows the user a control the
+// DLL will refuse to act on. A row that is false here is NOT CREATED, so the
+// window never offers a setting that would do nothing, and saving never grows a
+// key in dusk-fix.ini for a game that ignores it.
+//
+// An earlier version of this file had no per-game knowledge at all and said so
+// in a comment: every mod fix was on by default with no control here, so the
+// window was identical for all three games. That stopped being true once the
+// antialiasing settings arrived. Both of them are Ayesha-only, because the KTGL
+// renderer has never been censused and nothing is known about what it binds.
+struct Capabilities {
+  bool supersampling;   // [Rendering] Supersampling
+  bool smaa;            // [Rendering] SMAA
+  bool startupSkips;    // [Startup] SkipLogos / SkipIntroMovie
+};
+
+const Capabilities kCapabilities[kGameCount] = {
+  //             Ssaa   Smaa   Startup
+  /* Ayesha  */ { true,  true,  true  },
+  /* Escha   */ { false, false, false },
+  /* Shallie */ { false, false, false },
+};
+
 char g_iniPath[MAX_PATH] = {};       // dusk-fix.ini, in the game folder
 char g_settingsPath[MAX_PATH] = {};  // the game's own Setting.ini
 char g_gameExePath[MAX_PATH] = {};   // an installed game exe, for the icon
@@ -121,6 +145,11 @@ char g_gameDir[MAX_PATH] = {};       // its folder, used as the working director
 const wchar_t* g_gameName = nullptr;
 int g_game = -1;                     // index into kGames, -1 when none found
 
+Capabilities capabilities() {
+  if (g_game < 0 || g_game >= kGameCount)
+    return Capabilities{ false, false, false };
+  return kCapabilities[g_game];
+}
 
 // ---- combo box contents ----------------------------------------------------
 
@@ -131,62 +160,22 @@ struct ComboItem {
 
 struct Resolution { unsigned width; unsigned height; };
 
-// Resolutions. This list is ours and is not filtered through Windows' reported
-// display modes, which is the whole point: the games take any value, and the
-// stock settings editor's list is what hides the useful ones on a high-DPI
-// handheld or in docked use. The current desktop mode is appended at load time
-// if it is not already here, as is whatever the ini already holds, so opening
-// this window can never silently change a resolution it did not offer.
-//
-// Note this deliberately does NOT drop modes larger than the display, which the
-// Arland launcher does. Ayesha windowed will happily create a swap chain bigger
-// than the screen, and that is how the 1440p render-target census was measured
-// on a 1080p panel; filtering by the display maximum would have removed the one
-// entry that made it possible. The cost is that a fullscreen selection above
-// the panel's size is offered and will not do anything useful.
+// Base (display) resolutions. The current desktop mode is appended at load time
+// if it is not already here, as is whatever the game's own file already holds,
+// so opening this window can never silently change a resolution it did not
+// offer.
 const Resolution kResolutions[] = {
   { 1280,  720 }, { 1366,  768 }, { 1600,  900 }, { 1920, 1080 },
   { 2560, 1440 }, { 3440, 1440 }, { 3840, 2160 },
 };
+const int kResolutionCount = int(sizeof(kResolutions) / sizeof(kResolutions[0]));
 
 // Index 0 of the live list is always Auto, carried as a 0x0 sentinel exactly as
 // the Arland launcher carries it.
-//
-// The two projects have to resolve it in different places, though. Arland
-// leaves its ini keys blank and its DLL decides what they mean when the device
-// is created, so Auto there follows the display even if it changes between
-// launches. Dusk writes a literal number into the game's own Setting.ini,
-// because the game reads that field itself and this mod deliberately adds no
-// resolution override to duplicate it -- and "Auto" is not something the game's
-// integer parse can be handed. So Auto is resolved here, at save time, and the
-// choice is remembered in dusk-fix.ini so reopening the window still shows
-// Auto rather than the number it happened to resolve to last time.
 constexpr Resolution kAutoResolution = { 0, 0 };
-const int kResolutionCount = int(sizeof(kResolutions) / sizeof(kResolutions[0]));
 
-// The antialiasing values, as they are written to dusk-fix.ini.
-//
-// There is no "game default" entry: the mod either multisamples the scene or
-// leaves it exactly as the engine made it, and msaaSamples() in
-// src/core/msaa.cpp treats every value outside {2,4,8} -- 0 and 1 alike -- as
-// off. An earlier version of this window offered both, on the belief that the
-// engine already multisampled its 3D scene at 4x and that "off" therefore
-// meant something different from "leave it alone". Draw-time instrumentation
-// disproved it and the feature was rewritten because of it: the engine creates
-// multisampled targets and renders into none of them, so the twins this mod
-// attaches are the only multisampling in the frame. "0" and "1" are one state
-// with one name, and matching a preset has to accept either (see
-// presetFromControls).
-const ComboItem kMsaaItems[] = {
-  { L"Off",           "0" },
-  { L"2x",            "2" },
-  { L"4x",            "4" },
-  { L"8x",            "8" },
-};
-const int kMsaaCount = 4;
-
-// The Arland launcher's ladder, and stored as percentages for the reason given
-// on ssaaPercent: a decimal in an ini is a locale trap.
+// The supersampling ladder, stored as percentages: a decimal in an ini is a
+// locale trap, since a comma-decimal locale parses "1.5" as 1. Index 0 is Off.
 const ComboItem kSsaaItems[] = {
   { L"Off",    "100" },
   { L"1.25x",  "125" },
@@ -202,82 +191,17 @@ const int kSsaaCount = 6;
 const unsigned kMaxRenderWidth = 7680;
 const unsigned kMaxRenderHeight = 4320;
 
-// ---- image-quality presets -------------------------------------------------
-//
-// The ladder is the Arland project's, brought across so the two mods speak the
-// same words to the same player, and the tab below is laid out in the same
-// order for the same reason. Two of Arland's five rungs could not survive the
-// crossing, and neither difference was a choice.
-//
-// Arland's Low and Balanced differ ONLY in anisotropic filtering. That control
-// is gone from both launchers now -- it is on at 16x always, its cost is nil,
-// and a setting with no trade in it is not a setting. With that column removed
-// the two rungs hold identical values, so Low goes and Balanced takes the
-// floor.
-//
-// Balanced is what this mod ships with, so a fresh install opens on a named
-// rung rather than on Custom, and the launcher and the DLL agree about what
-// "default" means. That is only true because SMAA is now on by default here,
-// which became defensible when it moved to the pre-UI injection point and
-// stopped touching the interface.
-//
-// Shadow-map resolution is absent because this mod has no such feature. Arland
-// multiplies its shadow maps and rates its rungs partly on that; here the
-// engine's own 1024 map is all there is.
-//
-// Multisampling appears only at Medium, matching Arland: above it the budget
-// goes to supersampling instead, which antialiases geometry along with
-// everything else rather than only silhouettes. Both are reachable together
-// through Custom, and testing here rated 4x with 200% the best image of all --
-// but it is also the most expensive thing either mod can ask for, and a named
-// rung should not be the one that pins a 7900 XTX.
-struct Preset {
-  const wchar_t* label;
-  bool smaa;
-  int  msaa;   // samples, as written to the ini; 0 is off
-  int  ssaa;   // percent, as written to the ini; 100 is off
-};
+// There is deliberately no quality preset dropdown above these controls, and
+// there used to be one. A preset here would set two adjacent controls, one of
+// which writes the resulting resolution into its own labels, so it would say
+// nothing the controls underneath do not. The Arland launcher dropped its own
+// ladder for the same reason on the day multisampling was removed, and
+// multisampling was one of the dimensions that had made this one worth having.
+// Each control carries its cost beside it instead.
 
-const Preset kPresets[] = {
-  //                          SMAA   MSAA  SSAA
-  { L"Balanced (default)",    true,     0,  100 },
-  { L"Medium",                true,     4,  100 },
-  { L"High",                  true,     0,  150 },
-  { L"Maximum",               true,     0,  200 },
-  // Describes the controls; never matched and never applied, so its values are
-  // sentinels rather than a fifth setting.
-  { L"Custom",                false,   -1,   -1 },
-};
-const int kPresetCount = 5;
-const int kPresetCustom = 4;
-// The rung a fresh install opens on, and what Reset returns to.
-const int kPresetDefault = 0;
-
-// Which rung a set of control values sits on, or Custom when none of them
-// describes it.
-//
-// This is the single definition of the preset<->controls mapping in this
-// window, and it is pure on purpose: it takes the three values and reads no
-// control, so the load path, every manual edit and the sanity pass after
-// applying a preset all get their answer from the same place. The alternative
-// -- a second mapping used only at load time -- is how the box ends up saying
-// one thing about a file and another about the identical settings typed in by
-// hand.
-//
-// Both 0 and 1 mean "no multisampling" (see kMsaaItems), and anything at or
-// below 100% means "no supersampling", so those are folded together before
-// matching rather than being treated as values a preset could miss.
-int presetFromControls(bool smaa, int msaa, int ssaa) {
-  const int samples = msaa <= 1 ? 0 : msaa;
-  const int percent = ssaa <= 100 ? 100 : ssaa;
-  for (int i = 0; i < kPresetCustom; ++i) {
-    if (kPresets[i].smaa == smaa && kPresets[i].msaa == samples &&
-        kPresets[i].ssaa == percent)
-      return i;
-  }
-  return kPresetCustom;
-}
-
+// The game's own [Window] FullScreen. There is no borderless entry: unlike the
+// Arland mod this one has no window-mode override of its own, so the only two
+// states are the two the game itself can be in.
 const ComboItem kWindowModeItems[] = {
   { L"Windowed",   "0" },
   { L"Fullscreen", "1" },
@@ -300,12 +224,11 @@ const int kLangCount = 4;
 HWND g_hTabs = nullptr;
 HWND g_hGameLabel = nullptr;   // sits on the tab strip; painted transparent
 HWND g_hRes = nullptr, g_hWinMode = nullptr, g_hLang = nullptr;
+HWND g_hSsaa = nullptr, g_hRendLbl = nullptr, g_hSmaa = nullptr;
 HWND g_hOutline = nullptr;
-HWND g_hPreset = nullptr;
-HWND g_hSmaa = nullptr, g_hMsaa = nullptr, g_hSsaa = nullptr;
+HWND g_hSkipLogos = nullptr, g_hSkipMovie = nullptr;
 HWND g_hSkipLauncher = nullptr;
-HWND g_hStart = nullptr, g_hOpenLauncher = nullptr, g_hOpenEnv = nullptr;
-HWND g_hPlayVanilla = nullptr;
+HWND g_hStart = nullptr;
 HWND g_hRepoLink = nullptr;
 
 HWND g_pageCtrls[kPageCount][40] = {};
@@ -329,21 +252,23 @@ COLORREF g_secondaryText = RGB(102, 102, 102);
 
 bool nativeStyling();
 LRESULT CALLBACK TabProc(HWND, UINT, WPARAM, LPARAM, UINT_PTR, DWORD_PTR);
+void repaintUnder(HWND ctrl);
 
 // The base layout, in logical pixels. Sized for 720p at 100% so chooseScale
 // always has an enlargement it can fall back from.
 const int kBaseWidth = 700;
-const int kBaseHeight = 430;
+const int kBaseHeight = 440;
 
 // Two scale factors, as in the Arland launcher. g_dpiScale is the display's,
 // applied because the process is DPI aware and lays itself out in real pixels.
 // g_userScale is ours, for a TV or handheld where the DPI-correct size is still
-// too small to read across a room.
+// too small to read across a room. Multiplying the font by both is the mistake
+// this split exists to prevent: the system metrics already carry the DPI.
 int g_dpiScale = 100;
 int g_userScale = 100;
 int S(int value) { return value * g_dpiScale / 100 * g_userScale / 100; }
 
-// ---- ini helpers -----------------------------------------------------------
+// ---- ini reading -----------------------------------------------------------
 
 bool iniString(const char* path, const char* section, const char* key,
                char* out, DWORD outSize, const char* def = "") {
@@ -365,20 +290,208 @@ bool iniBool(const char* path, const char* section, const char* key, bool def) {
          value[0] == 'y' || value[0] == 'Y';
 }
 
+// ---- ini writing, and knowing when it did not happen ------------------------
+//
+// Every write is checked. WritePrivateProfileStringA caches, so a failure can
+// surface at any call or only at the flush that commits the file, and the user
+// needs to be told which of the two files did not get written rather than which
+// line failed. saveToIni clears these on entry and reports them back.
+//
+// What failed is kept alongside whether it failed, because "could not be
+// written" on its own leaves nobody anywhere: the Win32 error separates a
+// read-only file from a missing folder from something holding the file open.
+struct WriteFailure {
+  bool failed = false;
+  DWORD error = 0;
+  char where[64] = {};        // "Section/Key", or "flush" for the commit call
+};
+WriteFailure g_iniFailure;
+WriteFailure g_settingsFailure;
+
+// The last value this save committed to each file, kept so a reported failure
+// can be checked against what is actually on disk. See verifyWrite below.
+struct LastWrite {
+  bool have = false;
+  char section[32] = {};
+  char key[32] = {};
+  char value[64] = {};
+};
+LastWrite g_iniLastWrite;
+LastWrite g_settingsLastWrite;
+
+void noteLastWrite(LastWrite* last, const char* section, const char* key,
+                   const char* value) {
+  if (!section || !key || !value)
+    return;                   // the flush carries no key to check
+  last->have = true;
+  lstrcpynA(last->section, section, sizeof(last->section));
+  lstrcpynA(last->key, key, sizeof(last->key));
+  lstrcpynA(last->value, value, sizeof(last->value));
+}
+
+bool iniWrite(const char* section, const char* key, const char* value,
+              const char* path) {
+  // No adopted game folder means no settings file to write, which is a normal
+  // state rather than a failure. Writing there anyway would report a problem
+  // the user cannot act on.
+  if (!path || !path[0])
+    return true;
+  const bool settings = path == g_settingsPath;
+  if (WritePrivateProfileStringA(section, key, value, path)) {
+    noteLastWrite(settings ? &g_settingsLastWrite : &g_iniLastWrite,
+                  section, key, value);
+    return true;
+  }
+  WriteFailure* failure = settings ? &g_settingsFailure : &g_iniFailure;
+  const DWORD error = GetLastError();
+  // Keep the FIRST failure. It is the one that explains the rest, and a later
+  // call overwriting it with a stale or cleared error is how this kind of
+  // report ends up saying ERROR_SUCCESS.
+  if (!failure->failed) {
+    failure->failed = true;
+    failure->error = error;
+    if (section && key)
+      wsprintfA(failure->where, "%.28s/%.28s", section, key);
+    else
+      lstrcpynA(failure->where, "flush", sizeof(failure->where));
+  }
+  return false;
+}
+
 void iniWriteBool(const char* path, const char* section, const char* key,
                   bool on) {
-  if (path[0])
-    WritePrivateProfileStringA(section, key, on ? "true" : "false", path);
+  iniWrite(section, key, on ? "true" : "false", path);
 }
 
 void iniWriteInt(const char* path, const char* section, const char* key,
                  unsigned value) {
-  if (!path[0])
-    return;
   char text[16];
   wsprintfA(text, "%u", value);
-  WritePrivateProfileStringA(section, key, text, path);
+  iniWrite(section, key, text, path);
 }
+
+// Did the write actually not happen? WritePrivateProfileStringA reporting
+// failure and the value not reaching the file are different things, and under
+// Wine the flush form (null section, null key) reports failure while every
+// value written before it is on disk. Reporting a lost save that was not lost
+// is the worse error of the two: it sends the user to check permissions on a
+// folder that is fine, and it teaches them to ignore the warning.
+//
+// So a reported failure is checked against the file: read back the last value
+// this save wrote and see whether it is there. Nothing to check against means
+// trusting the report, which is the safe direction.
+bool verifyWrite(const char* path, const LastWrite& last) {
+  if (!path || !path[0] || !last.have)
+    return false;
+  char readBack[64] = {};
+  GetPrivateProfileStringA(last.section, last.key, "\x01", readBack,
+    sizeof(readBack), path);
+  return readBack[0] != '\x01' && lstrcmpA(readBack, last.value) == 0;
+}
+
+// The launcher shares dusk-fix.log with the DLL rather than opening a second
+// file: it is the file the user is asked for when reporting a problem, and a
+// save failure is exactly the kind of thing that needs to be in it. Appended,
+// never truncated, and every failure here is silent -- a tool that cannot write
+// the ini very possibly cannot write the log either, and saying so twice helps
+// nobody.
+void appendToLog(const char* line) {
+  if (!g_iniPath[0] || !line)
+    return;
+  char logPath[MAX_PATH];
+  lstrcpynA(logPath, g_iniPath, MAX_PATH);
+  const size_t len = std::strlen(logPath);
+  if (len < 4 || len >= MAX_PATH)
+    return;
+  std::memcpy(logPath + len - 3, "log", 3);   // dusk-fix.ini -> .log
+  const HANDLE file = CreateFileA(logPath, FILE_APPEND_DATA,
+    FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
+    FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE)
+    return;
+  DWORD written = 0;
+  WriteFile(file, line, (DWORD)std::strlen(line), &written, nullptr);
+  CloseHandle(file);
+}
+
+// The short version of a Win32 error, for the ones that actually come up here.
+// The number is always printed too, because the interesting case is the one
+// this list does not cover.
+const char* writeErrorName(DWORD error) {
+  switch (error) {
+    case ERROR_ACCESS_DENIED:    return "access denied (read-only file or folder)";
+    case ERROR_FILE_NOT_FOUND:   return "file not found";
+    case ERROR_PATH_NOT_FOUND:   return "path not found (folder missing)";
+    case ERROR_SHARING_VIOLATION:return "file is open in another program";
+    case ERROR_WRITE_PROTECT:    return "media is write protected";
+    case ERROR_DISK_FULL:        return "disk full";
+    case ERROR_SUCCESS:          return "the call reported failure without setting an error";
+    default:                     return "see the Win32 error code";
+  }
+}
+
+// One line per file per save, and only when something reported a failure.
+// `verifiedOk` says whether the value was actually on disk afterwards: a
+// reported failure that verified fine is logged as misreported, which is the
+// line that explains a warning the user did not get.
+void logSaveFailure(const char* name, const char* path,
+                    const WriteFailure& failure, bool verifiedOk) {
+  if (!failure.failed)
+    return;
+  char line[512];
+  wsprintfA(line,
+    "[launcher] %s write %s at %s: error %lu, %s (path %s)\r\n",
+    name,
+    verifiedOk ? "MISREPORTED (the value is on disk)" : "FAILED",
+    failure.where, failure.error, writeErrorName(failure.error),
+    path && path[0] ? path : "(none)");
+  appendToLog(line);
+}
+
+// What saveToIni managed to write. Both files are written independently, so a
+// partial failure leaves the resolution split across them, which is the state
+// the two are kept in step to avoid.
+struct SaveOutcome {
+  bool ini = true;
+  bool settings = true;
+  bool ok() const { return ini && settings; }
+};
+
+// Name the file that did not get written. "Settings were saved" over a failed
+// write is worse than the failure: the user has no way to tell it happened, and
+// the most likely cause, a read-only dusk-fix.ini left behind by a Steam file
+// verification, is something they can fix in a moment once they know.
+void reportSaveFailure(HWND owner, SaveOutcome outcome) {
+  if (outcome.ok())
+    return;
+  const wchar_t* which =
+    !outcome.ini && !outcome.settings
+      ? L"dusk-fix.ini and the game's own Setting.ini could not be written."
+      : (!outcome.ini
+           ? L"dusk-fix.ini could not be written."
+           : L"The game's own Setting.ini could not be written, so the "
+             L"resolution and language there are unchanged.");
+  // Name the reason, not just the fact. The user cannot act on "could not be
+  // written"; they can act on "read-only file or folder", and the code and the
+  // failing key are what makes a report from someone else diagnosable.
+  const WriteFailure& first =
+    !outcome.ini && g_iniFailure.failed ? g_iniFailure : g_settingsFailure;
+  wchar_t reason[192] = {};
+  if (first.failed) {
+    char detail[160];
+    wsprintfA(detail, "%s (error %lu, writing %s)",
+      writeErrorName(first.error), first.error, first.where);
+    MultiByteToWideChar(CP_ACP, 0, detail, -1, reason, 160);
+  }
+  wchar_t text[768];
+  wsprintfW(text,
+    L"%s\n\n%s%sYour settings have not been saved.\n\n"
+    L"The details are in dusk-fix.log beside the game.",
+    which, reason[0] ? reason : L"", reason[0] ? L"\n\n" : L"");
+  MessageBoxW(owner, text, L"Atelier Dusk Fixes", MB_OK | MB_ICONWARNING);
+}
+
+// ---- combo helpers ---------------------------------------------------------
 
 void comboFill(HWND combo, const ComboItem* items, int count) {
   for (int i = 0; i < count; ++i)
@@ -403,11 +516,21 @@ const char* comboValue(HWND combo, const ComboItem* items, int count) {
   return items[index].value;
 }
 
-// ---- resolution combo ------------------------------------------------------
+bool isChecked(HWND ctrl) {
+  return ctrl && SendMessageW(ctrl, BM_GETCHECK, 0, 0) == BST_CHECKED;
+}
+
+void setChecked(HWND ctrl, bool on) {
+  if (ctrl)
+    SendMessageW(ctrl, BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0);
+}
+
+// ---- the resolution list ---------------------------------------------------
 
 // Every entry the resolution combo currently offers, in the order shown. Held
 // alongside the control because the list is not a fixed table: the desktop's
-// own mode and the ini's existing value are appended when not already present.
+// own mode and the game file's existing value are appended when not already
+// present.
 std::vector<Resolution> g_resolutions;
 
 bool desktopResolution(unsigned* width, unsigned* height) {
@@ -428,6 +551,26 @@ bool desktopResolution(unsigned* width, unsigned* height) {
   return true;
 }
 
+// The largest mode the display reports. The resolution chosen here is what gets
+// presented, so offering more than the panel has is offering a worse picture:
+// the extra pixels are only scaled away again. Rendering higher than the screen
+// is what the supersampling multiplier is for.
+void displayMaximum(unsigned* width, unsigned* height) {
+  *width = 0;
+  *height = 0;
+  DEVMODEW mode = {};
+  mode.dmSize = sizeof(mode);
+  for (DWORD i = 0; EnumDisplaySettingsW(nullptr, i, &mode); ++i) {
+    if ((unsigned long long)mode.dmPelsWidth * mode.dmPelsHeight >
+        (unsigned long long)*width * *height) {
+      *width = mode.dmPelsWidth;
+      *height = mode.dmPelsHeight;
+    }
+  }
+  if (!*width || !*height)
+    desktopResolution(width, height);
+}
+
 void addResolution(unsigned width, unsigned height) {
   for (const Resolution& r : g_resolutions) {
     if (r.width == width && r.height == height)
@@ -436,137 +579,9 @@ void addResolution(unsigned width, unsigned height) {
   g_resolutions.push_back({ width, height });
 }
 
-// Rebuild the combo from g_resolutions, sorted by pixel count so an appended
-// entry lands where it belongs rather than at the bottom.
 // Rebuild the combo from g_resolutions. Auto stays pinned at index 0; the rest
 // are sorted by pixel count so an appended entry lands where it belongs rather
 // than at the bottom. `selectAuto` wins over the width/height pair.
-// The resolution the game will actually run at, which is what supersampling
-// multiplies. Auto resolves to the desktop, exactly as saving would.
-bool supersamplingBase(unsigned* width, unsigned* height) {
-  const LRESULT index = SendMessageW(g_hRes, CB_GETCURSEL, 0, 0);
-  if (index < 0 || size_t(index) >= g_resolutions.size())
-    return false;
-  const Resolution chosen = g_resolutions[size_t(index)];
-  if (chosen.width && chosen.height) {
-    *width = chosen.width;
-    *height = chosen.height;
-    return true;
-  }
-  return desktopResolution(width, height);
-}
-
-// The list is filtered, so its positions are not kSsaaItems positions; the
-// item data carries the real index.
-int ssaaSelectedIndex() {
-  if (!g_hSsaa)
-    return 0;   // "Off", which is also what the DLL does with it
-  const LRESULT at = SendMessageW(g_hSsaa, CB_GETCURSEL, 0, 0);
-  if (at < 0)
-    return 0;
-  const LRESULT data = SendMessageW(g_hSsaa, CB_GETITEMDATA, WPARAM(at), 0);
-  if (data < 0 || data >= kSsaaCount)
-    return 0;
-  return int(data);
-}
-
-// Rebuild the supersampling list for the resolution now selected. Each entry
-// carries the size it produces, so "what does 1.5x actually render at?" is
-// answered in the list being chosen from rather than somewhere else in the
-// window; and anything past the 8K ceiling is left out rather than offered and
-// then quietly reduced by the DLL.
-//
-// The multiplier in front of the user is kept across the rebuild when the new
-// resolution still allows it, and falls back to Off when the ceiling has taken
-// it away. Callers have to re-derive the preset afterwards, because that
-// fallback changes a quality setting without anybody having edited one.
-void refillSupersampling() {
-  // Null before the Image Quality page has been built.
-  if (!g_hSsaa)
-    return;
-  // Read through the item data rather than off the raw selection index: after
-  // the first filtered rebuild the two are not the same list.
-  const char* const wanted = kSsaaItems[ssaaSelectedIndex()].value;
-
-  unsigned baseWidth = 0, baseHeight = 0;
-  const bool haveBase = supersamplingBase(&baseWidth, &baseHeight);
-  SendMessageW(g_hSsaa, CB_RESETCONTENT, 0, 0);
-  int selected = 0;
-  for (int i = 0; i < kSsaaCount; ++i) {
-    const unsigned percent = unsigned(atoi(kSsaaItems[i].value));
-    unsigned renderWidth = 0, renderHeight = 0;
-    if (i && haveBase) {
-      // Bit for bit what ssaaSceneSize computes in src/core/supersample.cpp,
-      // and deliberately so: truncating division, the ceiling tested on the
-      // untruncated-to-even value, then the even mask. This used to round to
-      // nearest and skip the mask, which made the size in the label something
-      // the DLL never allocates -- two definitions of one number, which is the
-      // failure this whole area was rewritten to stop repeating. (The rounding
-      // could not actually cross the ceiling for any multiplier on this ladder,
-      // but that held only by arithmetic accident of the five values.)
-      const unsigned exactWidth = (baseWidth * percent) / 100;
-      const unsigned exactHeight = (baseHeight * percent) / 100;
-      if (exactWidth > kMaxRenderWidth || exactHeight > kMaxRenderHeight)
-        continue;
-      renderWidth = exactWidth & ~1u;
-      renderHeight = exactHeight & ~1u;
-    }
-    wchar_t label[96];
-    if (i && haveBase)
-      wsprintfW(label, L"%s  (%u x %u)", kSsaaItems[i].label, renderWidth,
-        renderHeight);
-    else
-      lstrcpynW(label, kSsaaItems[i].label, 96);
-    const int at = int(SendMessageW(g_hSsaa, CB_ADDSTRING, 0, (LPARAM)label));
-    SendMessageW(g_hSsaa, CB_SETITEMDATA, at, LPARAM(i));
-    if (!lstrcmpA(kSsaaItems[i].value, wanted))
-      selected = at;
-  }
-  SendMessageW(g_hSsaa, CB_SETCURSEL, selected, 0);
-}
-
-// ---- reading and writing the three quality controls ------------------------
-
-// The values the three controls currently hold, in the form the ini and
-// presetFromControls use. Nothing else converts between combo positions and
-// values, so a filtered list or a reordered table cannot make one caller
-// disagree with another.
-int msaaSelectedSamples() {
-  const LRESULT at = SendMessageW(g_hMsaa, CB_GETCURSEL, 0, 0);
-  if (at < 0 || at >= kMsaaCount)
-    return 0;
-  return atoi(kMsaaItems[at].value);
-}
-
-int ssaaSelectedPercent() {
-  return atoi(kSsaaItems[ssaaSelectedIndex()].value);
-}
-
-void selectMsaaSamples(int samples) {
-  char value[16];
-  wsprintfA(value, "%d", samples);
-  comboSelectByValue(g_hMsaa, kMsaaItems, kMsaaCount, value, 0);
-}
-
-// Select a multiplier by percentage, searching the list as it currently
-// stands. It can genuinely be absent -- the 8K ceiling drops entries at large
-// resolutions -- and Off is the only honest answer when it is, which is
-// exactly the case the sanity pass in applyPreset exists to notice.
-void selectSsaaPercent(int percent) {
-  if (!g_hSsaa)
-    return;
-  const int count = int(SendMessageW(g_hSsaa, CB_GETCOUNT, 0, 0));
-  for (int at = 0; at < count; ++at) {
-    const LRESULT data = SendMessageW(g_hSsaa, CB_GETITEMDATA, WPARAM(at), 0);
-    if (data >= 0 && data < kSsaaCount &&
-        atoi(kSsaaItems[data].value) == percent) {
-      SendMessageW(g_hSsaa, CB_SETCURSEL, at, 0);
-      return;
-    }
-  }
-  SendMessageW(g_hSsaa, CB_SETCURSEL, 0, 0);   // Off is always offered
-}
-
 void refillResolutions(unsigned selectWidth, unsigned selectHeight,
                        bool selectAuto) {
   // Everything but the Auto sentinel takes part in the sort.
@@ -584,8 +599,8 @@ void refillResolutions(unsigned selectWidth, unsigned selectHeight,
     wchar_t label[96];
     if (!r.width && !r.height) {
       // Auto carries what it currently resolves to, for the same reason the
-      // Arland launcher shows it: the answer belongs in the list being chosen
-      // from, not somewhere the user has to go and look it up.
+      // supersampling list carries its render size: the answer belongs in the
+      // list being chosen from, not somewhere the user has to go and look it up.
       if (haveDesktop)
         wsprintfW(label, L"Auto  (%u x %u)", desktopWidth, desktopHeight);
       else
@@ -601,6 +616,149 @@ void refillResolutions(unsigned selectWidth, unsigned selectHeight,
       selected = int(i);
   }
   SendMessageW(g_hRes, CB_SETCURSEL, selected, 0);
+}
+
+// The resolution the game will actually run at, which is what supersampling
+// multiplies. Auto resolves to the desktop, exactly as saving would.
+bool supersamplingBase(unsigned* width, unsigned* height) {
+  const LRESULT index = SendMessageW(g_hRes, CB_GETCURSEL, 0, 0);
+  if (index < 0 || size_t(index) >= g_resolutions.size())
+    return false;
+  const Resolution chosen = g_resolutions[size_t(index)];
+  if (chosen.width && chosen.height) {
+    *width = chosen.width;
+    *height = chosen.height;
+    return true;
+  }
+  return desktopResolution(width, height);
+}
+
+// ---- the supersampling list ------------------------------------------------
+
+// The list holds only the multipliers that fit the current resolution, so its
+// positions are not kSsaaItems positions; each item carries its own as item
+// data. These are the only way to read and write the selection.
+int ssaaSelectedIndex() {
+  if (!g_hSsaa)
+    return 0;   // "Off", which is also what the DLL does with an absent key
+  const LRESULT at = SendMessageW(g_hSsaa, CB_GETCURSEL, 0, 0);
+  if (at < 0)
+    return 0;
+  const LRESULT data = SendMessageW(g_hSsaa, CB_GETITEMDATA, WPARAM(at), 0);
+  if (data < 0 || data >= kSsaaCount)
+    return 0;
+  return int(data);
+}
+
+// Select the entry for a kSsaaItems index, or Off when the list does not hold
+// it (the resolution is too large for that multiplier).
+void setSsaaIndex(int index) {
+  if (!g_hSsaa)
+    return;
+  const int count = int(SendMessageW(g_hSsaa, CB_GETCOUNT, 0, 0));
+  for (int at = 0; at < count; ++at) {
+    if (int(SendMessageW(g_hSsaa, CB_GETITEMDATA, WPARAM(at), 0)) == index) {
+      SendMessageW(g_hSsaa, CB_SETCURSEL, at, 0);
+      return;
+    }
+  }
+  SendMessageW(g_hSsaa, CB_SETCURSEL, 0, 0);
+}
+
+// Set when the multiplier that was selected (or loaded from the ini) does not
+// fit the current resolution and was reduced to the largest one that does.
+// Someone who asked for 4x at 4K wants as much supersampling as they can have,
+// not none of it, so the cap lands them on 2x -- and it says so, because
+// silently changing a setting and then writing it back on Save is how a
+// configuration gets lost.
+bool g_ssaaReduced = false;
+
+// Select a kSsaaItems index, reducing rather than discarding. setSsaaIndex on
+// its own lands on Off, which throws the setting away instead of honouring as
+// much of it as fits, so every caller that means "restore this selection" comes
+// through here.
+void setSsaaIndexReducing(int index) {
+  setSsaaIndex(index);
+  g_ssaaReduced = false;
+  if (g_hSsaa && index > 0 && ssaaSelectedIndex() != index) {
+    // The list is built in ascending order, so its last entry is the largest
+    // multiplier available for this resolution.
+    const int count = int(SendMessageW(g_hSsaa, CB_GETCOUNT, 0, 0));
+    if (count > 1) {
+      SendMessageW(g_hSsaa, CB_SETCURSEL, count - 1, 0);
+      g_ssaaReduced = true;
+    }
+  }
+}
+
+// Rebuild the list for the resolution now selected. Each entry carries the size
+// it produces, so "what does 1.5x actually render at?" is answered in the list
+// being chosen from rather than somewhere else in the window; anything past the
+// 8K ceiling is left out rather than offered and then quietly reduced by the
+// DLL.
+void refillSupersampling() {
+  // Null when the running game has no supersampling, and before the Graphics
+  // page has been built.
+  if (!g_hSsaa)
+    return;
+  const int wanted = ssaaSelectedIndex();
+
+  unsigned baseWidth = 0, baseHeight = 0;
+  const bool haveBase = supersamplingBase(&baseWidth, &baseHeight);
+  SendMessageW(g_hSsaa, CB_RESETCONTENT, 0, 0);
+  for (int i = 0; i < kSsaaCount; ++i) {
+    unsigned renderWidth = 0, renderHeight = 0;
+    if (i && haveBase) {
+      // Bit for bit what ssaaSceneSize computes in src/core/supersample.cpp,
+      // and deliberately so: truncating division, the ceiling tested on the
+      // untruncated-to-even value, then the even mask. This used to round to
+      // nearest and skip the mask, which made the size in the label something
+      // the DLL never allocates -- two definitions of one number, which is the
+      // failure this whole area was rewritten to stop repeating.
+      const unsigned percent = unsigned(atoi(kSsaaItems[i].value));
+      const unsigned exactWidth = (baseWidth * percent) / 100;
+      const unsigned exactHeight = (baseHeight * percent) / 100;
+      if (exactWidth > kMaxRenderWidth || exactHeight > kMaxRenderHeight)
+        continue;
+      renderWidth = exactWidth & ~1u;
+      renderHeight = exactHeight & ~1u;
+    }
+    wchar_t label[96];
+    if (i && haveBase)
+      wsprintfW(label, L"%s  (%u x %u)", kSsaaItems[i].label, renderWidth,
+        renderHeight);
+    else
+      lstrcpynW(label, kSsaaItems[i].label, 96);
+    const int at = int(SendMessageW(g_hSsaa, CB_ADDSTRING, 0, (LPARAM)label));
+    SendMessageW(g_hSsaa, CB_SETITEMDATA, at, LPARAM(i));
+  }
+  setSsaaIndexReducing(wanted);
+}
+
+// Rebuild the multiplier list and the note under it. Called after loading and
+// after every change to the resolution.
+void updateRenderResolution() {
+  if (!g_hSsaa)
+    return;
+  unsigned baseWidth = 0, baseHeight = 0;
+  const bool haveBase = supersamplingBase(&baseWidth, &baseHeight);
+  refillSupersampling();
+  EnableWindow(g_hSsaa, haveBase);
+  if (!haveBase)
+    SendMessageW(g_hSsaa, CB_SETCURSEL, 0, 0);   // force Off
+
+  // The render sizes themselves are in the dropdown, so this row says only what
+  // the dropdown cannot: why the multiplier that was configured is not the one
+  // selected. Empty the rest of the time.
+  char text[96] = "";
+  if (g_ssaaReduced)
+    lstrcpyA(text, "Reduced to fit the 8K limit.");
+  else if (!haveBase)
+    lstrcpyA(text, "Supersampling needs a resolution to work from.");
+  SetWindowTextA(g_hRendLbl, text);
+  // The only label whose text changes while the window is up, so the only one
+  // that has to clear what it said before.
+  repaintUnder(g_hRendLbl);
 }
 
 // ---- path and game resolution ----------------------------------------------
@@ -683,6 +841,9 @@ void adoptFolder(const char* dir, int game) {
 // configure the build directory it was linked from. The working directory stays
 // the folder the tool was started in, which is the folder the user means --
 // Explorer, the test scripts and the msimg32 redirect all set it that way.
+//
+// Returns false when neither folder holds a recognised game, which the caller
+// reports to the user.
 bool resolveGameFolder() {
   char exeDir[MAX_PATH] = {};
   const DWORD n = GetModuleFileNameA(nullptr, exeDir, MAX_PATH);
@@ -719,71 +880,44 @@ bool resolveGameFolder() {
   return false;
 }
 
+// Create dusk-fix.ini for a folder that has the DLL but has never run the game.
+// This is the same key src/core/config.cpp seeds in configPath() when it creates
+// the file itself, so a launcher-made file and a DLL-made one are the same file.
+// The per-feature keys are deliberately absent from both: featureEnabled() seeds
+// those lazily from the per-game capability matrix, which this tool cannot see.
+//
+// False when the write fails, which is the only interesting outcome: the file is
+// created by that write.
+bool seedIniDefaults() {
+  if (!g_iniPath[0])
+    return false;
+  return WritePrivateProfileStringA("Launcher", "SkipLauncher", "false",
+    g_iniPath) != 0;
+}
+
 // ---- load, save, dirty tracking --------------------------------------------
 
-bool isChecked(HWND ctrl) {
-  return ctrl && SendMessageW(ctrl, BM_GETCHECK, 0, 0) == BST_CHECKED;
-}
-
-void setChecked(HWND ctrl, bool on) {
-  if (ctrl)
-    SendMessageW(ctrl, BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0);
-}
-
-// Show whichever rung the three controls now amount to. Called after loading,
-// after every manual edit, after applying a preset, and after a resolution
-// change has rebuilt the supersampling list -- everywhere the answer could
-// have changed, and always through the one mapping.
-void refreshPreset() {
-  if (!g_hPreset)
-    return;
-  SendMessageW(g_hPreset, CB_SETCURSEL,
-    presetFromControls(isChecked(g_hSmaa), msaaSelectedSamples(),
-                       ssaaSelectedPercent()), 0);
-}
-
-// Push a rung's values into the three controls.
-//
-// Custom applies nothing: it is the NAME for control values no rung describes,
-// not a seventh setting. But it does not leave the box alone either -- it
-// re-derives, because the box's one job is to describe the controls, and a user
-// who picks Custom while the controls happen to spell Normal must be shown
-// Normal rather than a label that has quietly stopped being true. Picking
-// Custom on genuinely custom controls re-derives to Custom and nothing moves.
-void applyPreset(int index) {
-  if (index < 0 || index >= kPresetCustom) {
-    refreshPreset();
-    return;
-  }
-  const Preset& preset = kPresets[index];
-  setChecked(g_hSmaa, preset.smaa);
-  selectMsaaSamples(preset.msaa);
-  selectSsaaPercent(preset.ssaa);
-  // Then ask what the controls actually ended up saying, rather than assuming
-  // they took the values just handed to them. They need not have: the 8K
-  // ceiling can leave a rung's supersampling multiplier out of the list at a
-  // large resolution, and the window has to say Custom then instead of naming
-  // a preset it did not manage to set.
-  refreshPreset();
-}
-
 // Everything the window can change, packed so two states can be compared. Used
-// only to decide whether closing needs to ask.
+// only to decide whether closing needs to ask. Snapshotting what saveToIni
+// reads, rather than watching for change notifications, means no control can be
+// missed and changing a setting back to its old value correctly counts as
+// unchanged.
 struct UiState {
   int  resolution;
   int  windowMode;
   int  language;
-  bool outline;
-  int  smaa;
-  int  msaa;
   int  ssaa;
+  bool smaa;
+  bool outline;
+  bool skipLogos;
+  bool skipMovie;
   bool skipLauncher;
 
   bool operator == (const UiState& o) const {
     return resolution == o.resolution && windowMode == o.windowMode &&
-           language == o.language &&
-           outline == o.outline && smaa == o.smaa && msaa == o.msaa &&
-           ssaa == o.ssaa && skipLauncher == o.skipLauncher;
+           language == o.language && ssaa == o.ssaa && smaa == o.smaa &&
+           outline == o.outline && skipLogos == o.skipLogos &&
+           skipMovie == o.skipMovie && skipLauncher == o.skipLauncher;
   }
 };
 
@@ -792,10 +926,11 @@ UiState currentState() {
   state.resolution = int(SendMessageW(g_hRes, CB_GETCURSEL, 0, 0));
   state.windowMode = int(SendMessageW(g_hWinMode, CB_GETCURSEL, 0, 0));
   state.language = int(SendMessageW(g_hLang, CB_GETCURSEL, 0, 0));
-  state.outline = isChecked(g_hOutline);
-  state.smaa = isChecked(g_hSmaa);
-  state.msaa = int(SendMessageW(g_hMsaa, CB_GETCURSEL, 0, 0));
   state.ssaa = ssaaSelectedIndex();
+  state.smaa = isChecked(g_hSmaa);
+  state.outline = isChecked(g_hOutline);
+  state.skipLogos = isChecked(g_hSkipLogos);
+  state.skipMovie = isChecked(g_hSkipMovie);
   state.skipLauncher = isChecked(g_hSkipLauncher);
   return state;
 }
@@ -815,32 +950,43 @@ void loadFromIni() {
     GetPrivateProfileIntA("Graphics", "ScreenHeight", 0, g_settingsPath);
 
   g_resolutions.assign(1, kAutoResolution);
-  g_resolutions.insert(g_resolutions.end(), kResolutions,
-    kResolutions + kResolutionCount);
+  unsigned maxWidth = 0, maxHeight = 0;
+  displayMaximum(&maxWidth, &maxHeight);
+  for (int i = 0; i < kResolutionCount; ++i) {
+    // Skip anything the display cannot show, as the Arland launcher does.
+    if (maxWidth && maxHeight &&
+        (kResolutions[i].width > maxWidth || kResolutions[i].height > maxHeight))
+      continue;
+    addResolution(kResolutions[i].width, kResolutions[i].height);
+  }
   unsigned desktopWidth = 0, desktopHeight = 0;
   if (desktopResolution(&desktopWidth, &desktopHeight))
     addResolution(desktopWidth, desktopHeight);
-  // Whatever the file already holds is offered too, so this window never
-  // silently rewrites a resolution it did not have in its list.
+  // Whatever the game's file already holds is offered too, even when it is
+  // larger than this display. That is the one place this list is wider than
+  // Arland's, and it is deliberate: rendering above the panel is how the
+  // 1440p render-target census was measured on a 1080p screen, and a
+  // deliberate downsampling setup must survive being looked at. Nothing is
+  // added that the user did not already choose.
   if (width && height)
     addResolution(width, height);
   // Auto is the launcher's own memory of a choice, not a value the game could
   // hold, so it lives in dusk-fix.ini rather than in Setting.ini.
   //
-  // Its default is what a file that has never been saved gets, and it has to
-  // be Auto to match the Arland launcher, which selects Auto whenever its own
-  // ini carries no resolution (`int baseSel = 0; // Auto by default`). Dusk
-  // defaulted to false, and since `AutoResolution` is never seeded at file
-  // creation -- only SkipLauncher is -- a fresh install opened this window and
-  // saw the game's shipped 1280x720 instead of its own display, which is
-  // exactly the outcome resetToDefaults says defaults must not produce.
+  // The two projects have to resolve Auto in different places. Arland leaves
+  // its ini keys blank and its DLL decides what they mean when the device is
+  // created, so Auto there follows the display even if it changes between
+  // launches. This mod writes a literal number into the game's own Setting.ini,
+  // because the game reads that field itself and this mod deliberately adds no
+  // resolution override to duplicate it -- and "Auto" is not something the
+  // game's integer parse can be handed. So Auto is resolved at save time and
+  // the choice is remembered here.
   //
-  // The default is conditional rather than a flat `true`, though, because a
-  // flat true would break the other rule this window keeps: opening it must
-  // never silently replace a resolution the user already chose. If the game's
-  // file already carries one, that choice wins and Auto is not assumed; a
-  // deliberate 4K on a 1080p panel (downsampling) survives being looked at.
-  // Auto is assumed only when there is no resolution to overrule.
+  // Its default is what a file that has never been saved gets, and it has to be
+  // Auto to match the Arland launcher, which selects Auto whenever its own ini
+  // carries no resolution. The default is conditional rather than a flat `true`,
+  // though, because a flat true would break the other rule this window keeps:
+  // opening it must never silently replace a resolution the user already chose.
   refillResolutions(width, height,
     iniBool(g_iniPath, "Launcher", "AutoResolution", !(width && height)));
 
@@ -857,100 +1003,149 @@ void loadFromIni() {
   // ---- the mod's dusk-fix.ini
   //
   // Every shipping fix is on by default and absent from this window: the
-  // font-atlas read cache, the two field-jitter halves, and the
-  // high-resolution correction. None of them is a choice. The last is the one
-  // that had to be argued rather than assumed -- rendering at 4K costs real
-  // performance -- but choosing the resolution IS that decision, and the fix
-  // only makes the resolution already chosen honest. A second checkbox asking
-  // whether the chosen resolution should actually be used is not a preference.
-  // Each has an environment switch for the A/B a bug report needs.
+  // font-atlas read cache, the two field-jitter halves, the high-resolution
+  // correction, the travel-map cursor, the synthesis animation rate, the
+  // system-save guard and the loading-text correction. None of them is a
+  // choice. The high-resolution one is the only one that had to be argued
+  // rather than assumed -- rendering at 4K costs real performance -- but
+  // choosing the resolution IS that decision, and the fix only makes the
+  // resolution already chosen honest. Each has an environment switch for the
+  // A/B a bug report needs.
   //
-  // What is left is the same on all three games, which is why nothing here is
-  // gated on the engine any more.
-  // The antialiasing settings. Defaults repeat src/core/game.cpp: SMAA off
-  // (it currently antialiases the UI too), MSAA off, no supersampling.
-  //
-  // These three keys are the only thing loaded here. The preset is not read
-  // from the file because it is not written to it: it is derived from them
-  // below, so a hand-edited ini and a set of controls holding the same values
-  // can never be described differently.
-  setChecked(g_hSmaa, iniBool(g_iniPath, "Rendering", "SMAA", false));
-  {
-    char value[16] = { };
-    iniString(g_iniPath, "Rendering", "MSAA", value, sizeof(value), "0");
-    comboSelectByValue(g_hMsaa, kMsaaItems, kMsaaCount, value, 0);
-    // Rebuild against the resolution just loaded, which is what decides both
-    // the sizes shown and which multipliers fit under the ceiling, and only
-    // then select out of the list that produced.
-    refillSupersampling();
+  // What is left is the two antialiasing settings, and both exist only where
+  // the capability matrix says the game has them.
+  if (capabilities().smaa)
+    setChecked(g_hSmaa, iniBool(g_iniPath, "Rendering", "SMAA", false));
+  if (capabilities().supersampling) {
     iniString(g_iniPath, "Rendering", "Supersampling", value, sizeof(value),
       "100");
-    selectSsaaPercent(atoi(value));
+    const int percent = atoi(value);
+    int index = 0;
+    for (int i = 0; i < kSsaaCount; ++i) {
+      if (atoi(kSsaaItems[i].value) == percent) {
+        index = i;
+        break;
+      }
+    }
+    // The list has to hold the multipliers for this resolution before one can
+    // be selected. A saved value the resolution no longer allows is reduced to
+    // the largest that fits, not discarded.
+    refillSupersampling();
+    setSsaaIndexReducing(index);
   }
-  refreshPreset();
+
+  // [Startup]: both off by default, and Ayesha-only.
+  if (capabilities().startupSkips) {
+    setChecked(g_hSkipLogos, iniBool(g_iniPath, "Startup", "SkipLogos", false));
+    setChecked(g_hSkipMovie,
+      iniBool(g_iniPath, "Startup", "SkipIntroMovie", false));
+  }
 
   setChecked(g_hSkipLauncher,
     iniBool(g_iniPath, "Launcher", "SkipLauncher", false));
 
+  // Last, once every quality control holds its loaded value.
+  updateRenderResolution();
   markSaved();
 }
 
-void saveToIni() {
+SaveOutcome saveToIni() {
+  g_iniFailure = WriteFailure{};
+  g_settingsFailure = WriteFailure{};
+  g_iniLastWrite = LastWrite{};
+  g_settingsLastWrite = LastWrite{};
+
   const LRESULT index = SendMessageW(g_hRes, CB_GETCURSEL, 0, 0);
   if (index >= 0 && size_t(index) < g_resolutions.size()) {
     Resolution chosen = g_resolutions[size_t(index)];
     const bool automatic = !chosen.width && !chosen.height;
-    // Auto is resolved to a literal here, because the game's own field can
-    // only hold a number. If the display cannot be read, fall back to 1080p
-    // rather than writing a zero the game would pass straight through: its
-    // reader only replaces a NEGATIVE value with a default.
+    // Auto is resolved to a literal here, because the game's own field can only
+    // hold a number. If the display cannot be read, fall back to 1080p rather
+    // than writing a zero the game would pass straight through: its reader only
+    // replaces a NEGATIVE value with a default.
     if (automatic && !desktopResolution(&chosen.width, &chosen.height))
       chosen = { 1920, 1080 };
     iniWriteInt(g_settingsPath, "Graphics", "ScreenWidth", chosen.width);
     iniWriteInt(g_settingsPath, "Graphics", "ScreenHeight", chosen.height);
     iniWriteBool(g_iniPath, "Launcher", "AutoResolution", automatic);
   }
-  WritePrivateProfileStringA("Window", "FullScreen",
+  iniWrite("Window", "FullScreen",
     comboValue(g_hWinMode, kWindowModeItems, kWindowModeCount), g_settingsPath);
-  WritePrivateProfileStringA("Lang", "Language",
+  iniWrite("Lang", "Language",
     comboValue(g_hLang, kLangItems, kLangCount), g_settingsPath);
-  WritePrivateProfileStringA("Graphics", "Outline",
-    isChecked(g_hOutline) ? "1" : "0", g_settingsPath);
+  iniWrite("Graphics", "Outline", isChecked(g_hOutline) ? "1" : "0",
+    g_settingsPath);
 
-  iniWriteBool(g_iniPath, "Rendering", "SMAA", isChecked(g_hSmaa));
-  WritePrivateProfileStringA("Rendering", "MSAA",
-    comboValue(g_hMsaa, kMsaaItems, kMsaaCount), g_iniPath);
-  if (g_hSsaa)
-    WritePrivateProfileStringA("Rendering", "Supersampling",
+  // Written only where the game has the feature, so a game the DLL would refuse
+  // it for never grows the key. That is the same rule featureEnabled() follows
+  // on the other side of the ini.
+  if (capabilities().smaa)
+    iniWriteBool(g_iniPath, "Rendering", "SMAA", isChecked(g_hSmaa));
+  if (capabilities().supersampling)
+    iniWrite("Rendering", "Supersampling",
       kSsaaItems[ssaaSelectedIndex()].value, g_iniPath);
+
+  if (capabilities().startupSkips) {
+    iniWriteBool(g_iniPath, "Startup", "SkipLogos", isChecked(g_hSkipLogos));
+    iniWriteBool(g_iniPath, "Startup", "SkipIntroMovie",
+      isChecked(g_hSkipMovie));
+  }
 
   iniWriteBool(g_iniPath, "Launcher", "SkipLauncher",
     isChecked(g_hSkipLauncher));
+
+  // Flush the cache so each file is on disk before we report success.
+  iniWrite(nullptr, nullptr, nullptr, g_iniPath);
+  iniWrite(nullptr, nullptr, nullptr, g_settingsPath);
+
+  // A reported failure is checked against the file before it becomes a warning,
+  // and every failure is logged either way: the ones that turn out to be real
+  // need the Win32 error to be diagnosable at all, and the ones that do not are
+  // worth knowing about because they mean the platform is misreporting.
+  SaveOutcome outcome;
+  outcome.ini = !g_iniFailure.failed ||
+                verifyWrite(g_iniPath, g_iniLastWrite);
+  outcome.settings = !g_settingsFailure.failed ||
+                     verifyWrite(g_settingsPath, g_settingsLastWrite);
+  logSaveFailure("dusk-fix.ini", g_iniPath, g_iniFailure, outcome.ini);
+  logSaveFailure("Setting.ini", g_settingsPath, g_settingsFailure,
+                 outcome.settings);
+  return outcome;
 }
 
+// Put every setting back to a known-good starting point: the mod's own
+// defaults, plus Auto windowed.
+//
+// Language is the one exception, and deliberately so. It is not tuning that can
+// be wrong -- it is what the player reads the game in, and resetting someone to
+// English because they wanted their graphics settings back would be a hostile
+// reading of "defaults". saveToIni writes it back unchanged from its control.
+//
+// The resolution deliberately differs from the Arland launcher, which resets to
+// 1280x720 as a safe floor it knows every display can show. Auto is that floor
+// here and a better one: it resolves to the desktop mode, which is by
+// definition displayable, and this launcher has to write a literal number into
+// the game's file either way. A fresh install looking far worse than the screen
+// it is running on is the outcome "defaults" should not produce.
 void resetToDefaults() {
-  // Auto, not the game's own 1280x720 default: a fresh install looking far
-  // worse than the screen it is running on is the outcome "defaults" should not
-  // produce, and Auto keeps being right if the display changes later.
   unsigned width = 1920, height = 1080;
   if (desktopResolution(&width, &height))
     addResolution(width, height);
   refillResolutions(width, height, true);
 
   SendMessageW(g_hWinMode, CB_SETCURSEL, 0, 0);   // windowed
-  SendMessageW(g_hLang, CB_SETCURSEL, 1, 0);      // English
-  setChecked(g_hOutline, true);
+  setChecked(g_hOutline, true);                   // on as the game shipped
 
-  // Rebuilt first, against the resolution just chosen, so the preset applies
-  // into the list it will actually be selecting from.
-  refillSupersampling();
-  // Off, not the recommended rung. Reset is for getting back to a known state,
-  // and a reset that quietly switched multisampling and SMAA on would cost
+  // Off, not a recommended setting. Reset is for getting back to a known state,
+  // and a reset that quietly switched supersampling and SMAA on would cost
   // frame rate that nobody asked to spend -- on the weakest machine running
-  // this, which is where reset is most likely to be reached for. "Recommended"
-  // is where someone can see it: in the name of the Normal preset.
-  applyPreset(kPresetDefault);
+  // this, which is where reset is most likely to be reached for.
+  setChecked(g_hSmaa, false);
+  setSsaaIndex(0);
+  setChecked(g_hSkipLogos, false);
+  setChecked(g_hSkipMovie, false);
   setChecked(g_hSkipLauncher, false);
+  updateRenderResolution();
 }
 
 // ---- starting things -------------------------------------------------------
@@ -1000,8 +1195,20 @@ bool startGame(HWND w, bool standDownMod) {
   // one outcome nobody wants from either of these buttons. It matters just as
   // much without the mod, since resolution and language live in the game's own
   // settings file and it reads them either way.
-  saveToIni();
-  markSaved();   // nothing pending, so a failed launch leaves no close prompt
+  const SaveOutcome saved = saveToIni();
+  if (!saved.ok()) {
+    // Launching now would run with settings that were never written, which is
+    // the confusing outcome: the game ignores what is on screen and nothing
+    // says why. Offer the choice rather than deciding it.
+    reportSaveFailure(w, saved);
+    if (MessageBoxW(w, L"Start the game anyway, with the settings that are "
+                       L"already in the file?", L"Atelier Dusk Fixes",
+                    MB_YESNO | MB_ICONQUESTION) != IDYES)
+      return false;
+  } else {
+    // Nothing is pending any more, so a failed launch leaves no close prompt.
+    markSaved();
+  }
 
   // Which executable runs follows the language just saved, exactly as the
   // game's own launcher decides it. Read from the control rather than the file
@@ -1106,6 +1313,13 @@ int buttonHeight()  { return g_lineHeight + S(12); }
 // place afterwards. That is the Arland arrangement and it is what lets the
 // layout be a single top-to-bottom pass rather than a set of coordinates that
 // have to agree with each other.
+HWND mkLabel(HWND parent, const wchar_t* text, int x, int y, int w, int h) {
+  HWND c = CreateWindowExW(0, L"STATIC", text, WS_CHILD | WS_VISIBLE,
+    x, y, w, h, parent, nullptr, nullptr, nullptr);
+  setFont(c);
+  return c;
+}
+
 HWND mkCheck(HWND parent, const wchar_t* text, int x, int y, int w, int id) {
   HWND c = CreateWindowExW(0, L"BUTTON", text,
     WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
@@ -1329,6 +1543,8 @@ void onPage(int page, HWND ctrl) {
 // they had before stays on screen until the tab page underneath is redrawn --
 // which needs the parent, the tab control and the label itself, in that order.
 void repaintUnder(HWND ctrl) {
+  if (!ctrl)
+    return;
   HWND parent = GetParent(ctrl);
   if (!parent)
     return;
@@ -1486,6 +1702,15 @@ struct Layout {
     y += height + S(12);
   }
 
+  // A line belonging to the control above it, so it starts at the control
+  // column rather than the label margin.
+  void under(HWND control) {
+    MoveWindow(control, controlLeft(), y,
+      fullWidth() - (controlLeft() - left()), labelHeight(), TRUE);
+    onPage(page, control);
+    y += labelHeight() + S(10);
+  }
+
   // A SysLink measures itself: LM_GETIDEALSIZE takes the width it will be given
   // and reports the height that width needs. Asked rather than assumed, for the
   // same reason the notes are measured -- and with a fallback, since the message
@@ -1525,8 +1750,7 @@ void createControls(HWND w) {
   SetWindowSubclass(g_hTabs, TabProc, 0, 0);
   TCITEMW tab = {};
   tab.mask = TCIF_TEXT;
-  const wchar_t* pageNames[kPageCount] = { L"Display", L"Image Quality",
-    L"Game", L"About" };
+  const wchar_t* pageNames[kPageCount] = { L"General", L"Graphics", L"About" };
   for (int i = 0; i < kPageCount; ++i) {
     tab.pszText = (LPWSTR)pageNames[i];
     SendMessageW(g_hTabs, TCM_INSERTITEMW, i, (LPARAM)&tab);
@@ -1565,12 +1789,19 @@ void createControls(HWND w) {
     w, nullptr, nullptr, nullptr);
   setFont(g_hGameLabel);
 
-  // ---------------- page 0: Display ----------------
+  // ---------------- page 0: General ----------------
   {
     Layout page(w, 0);
+    g_hLang = mkCombo(w, 0, 0, 10, IDC_LANG);
+    comboFill(g_hLang, kLangItems, kLangCount);
+    page.row(L"Language:", g_hLang,
+      L"Written to the game's own settings, and decides which of the game's "
+      L"two executables starts.");
+
     g_hRes = mkCombo(w, 0, 0, 10, IDC_RES);
     page.row(L"Resolution:", g_hRes,
-      L"What reaches the screen. Also written to the game's own settings.");
+      L"What reaches the screen. Written to the game's own settings, which is "
+      L"where this one lives.");
 
     g_hWinMode = mkCombo(w, 0, 0, 10, IDC_WINMODE);
     comboFill(g_hWinMode, kWindowModeItems, kWindowModeCount);
@@ -1578,84 +1809,93 @@ void createControls(HWND w) {
       L"Fullscreen takes over the display; windowed does not, so alt-tab is "
       L"instant.");
 
-    // The stock front-ends are still reachable: this tool replaces them, it
-    // does not remove them. Greyed out when the executable is not present.
-    page.heading(L"The game as it shipped");
-    g_hOpenEnv = mkButton(w, L"Settings &editor", 0, 0, 10, IDC_OPENENV);
-    g_hOpenLauncher = mkButton(w, L"&Original launcher", 0, 0, 10,
-      IDC_OPENLAUNCHER);
-    g_hPlayVanilla = mkButton(w, L"Play &without the mod", 0, 0, 10,
-      IDC_PLAYVANILLA);
-    page.buttons(g_hOpenEnv, g_hOpenLauncher, g_hPlayVanilla);
-    if (!stockToolPresent(g_game >= 0 ? kGames[g_game].stockEnv : nullptr))
-      EnableWindow(g_hOpenEnv, FALSE);
-    if (!stockToolPresent(g_game >= 0 ? kGames[g_game].stockLauncher : nullptr))
-      EnableWindow(g_hOpenLauncher, FALSE);
-    if (!g_gameExePath[0])
-      EnableWindow(g_hPlayVanilla, FALSE);
-    page.fullNote(
-      L"Koei Tecmo's own settings editor and launcher, unmodified. The third "
-      L"saves and starts the game with the mod turned off, changing nothing.");
+    // A statement of fact rather than a setting, so it spans the width.
+    page.fullNote(runningUnderWine()
+      ? L"The game runs at your display's refresh rate, 120 Hz and 144 Hz "
+        L"included. The mod does not cap the frame rate, so a limit set by "
+        L"Steam or the compositor is respected."
+      : L"The game runs at your display's refresh rate, 120 Hz and 144 Hz "
+        L"included. The mod does not cap the frame rate.");
+
+    // [Startup]. Ayesha-only: the two KTGL games run a different boot path and
+    // neither the logo object nor the movie routine has a homolog there.
+    if (capabilities().startupSkips) {
+      page.heading(L"Startup");
+      g_hSkipLogos = mkCheck(w, L"Skip the startup logos", 0, 0, 10,
+        IDC_SKIPLOGOS);
+      page.checkRow(g_hSkipLogos,
+        L"The logos play while the game loads, so this shows a black screen "
+        L"for as long as loading takes rather than starting sooner.");
+      g_hSkipMovie = mkCheck(w, L"Skip the opening movie", 0, 0, 10,
+        IDC_SKIPMOVIE);
+      page.checkRow(g_hSkipMovie,
+        L"Goes straight to the title screen. The ending and event movies still "
+        L"play, but the opening cannot be replayed from the Movies menu while "
+        L"this is on.");
+    }
+
+    // [Launcher] SkipLauncher. Read by the 32-bit msimg32 proxy rather than by
+    // the DLL, and about the launch Steam performs rather than the window in
+    // front of you, which is the half of it that is easy to get wrong.
+    page.heading(L"Launcher");
+    g_hSkipLauncher = mkCheck(w, L"Skip this window when launching from Steam",
+      0, 0, 10, IDC_SKIPLAUNCHER);
+    page.checkRow(g_hSkipLauncher,
+      L"Play in Steam goes straight into the game with the settings already "
+      L"saved here. Run dusk-fix-launcher.exe to get back to this window.");
   }
 
-  // ---------------- page 1: Image Quality ----------------
-  // Its own page, as in the Arland launcher, and for the same reason: these are
-  // the settings with a frame-rate cost, and grouping them puts that cost in
-  // one place instead of scattering it through settings that have none.
+  // ---------------- page 1: Graphics ----------------
+  // These are the settings with a frame-rate cost, grouped so that cost is in
+  // one place instead of scattered through settings that have none.
   {
     Layout page(w, 1);
+    const Capabilities caps = capabilities();
 
-    // The preset first, above the settings it sets: it is the row most people
-    // will use, and it reads as a summary of the three under it rather than as
-    // a fourth setting beside them.
-    g_hPreset = mkCombo(w, 0, 0, 10, IDC_PRESET);
-    for (int i = 0; i < kPresetCount; ++i)
-      SendMessageW(g_hPreset, CB_ADDSTRING, 0, (LPARAM)kPresets[i].label);
-    page.row(L"Preset:", g_hPreset, L"Sets the three options below.");
+    if (caps.supersampling) {
+      g_hSsaa = mkCombo(w, 0, 0, 10, IDC_SSAA);
+      page.row(L"Supersampling:", g_hSsaa,
+        L"Renders higher, then scales down. The sharpest, and the costliest. "
+        L"Limited to 8K.");
 
-    // Laid out in the Arland launcher's order -- supersampling, multisampling,
-    // then edge smoothing -- so a player who uses both mods finds the same
-    // controls in the same places. Anisotropic filtering and shadow detail sit
-    // between them there; neither exists here, so the rows are simply absent
-    // rather than present and inert.
-    g_hSsaa = mkCombo(w, 0, 0, 10, IDC_SSAA);
-    page.row(L"Supersampling:", g_hSsaa,
-      L"Renders higher, then scales down. The sharpest, and the costliest. "
-      L"Limited to 8K.");
+      // The live readout under the supersampling row. Registered as a note so
+      // it draws in the secondary colour, but it is not created by note(): its
+      // text changes at runtime, so it keeps a fixed height rather than being
+      // measured once against a string it will not be showing later.
+      g_hRendLbl = mkLabel(w, L"", 0, 0, 10, 10);
+      if (g_descCount < 32)
+        g_hDesc[g_descCount++] = g_hRendLbl;
+      page.under(g_hRendLbl);
+    }
 
-    g_hMsaa = mkCombo(w, 0, 0, 10, IDC_MSAA);
-    comboFill(g_hMsaa, kMsaaItems, kMsaaCount);
-    page.row(L"Anti-aliasing (MSAA):", g_hMsaa,
-      L"Smooths the edges of 3D models. Supersampling usually does more.");
+    if (caps.smaa) {
+      g_hSmaa = mkCheck(w, L"Edge smoothing", 0, 0, 10, IDC_SMAA);
+      page.checkRow(g_hSmaa,
+        L"Cheap, and smooths edges inside textures as well as along the edges "
+        L"of models.");
+    }
 
-    g_hSmaa = mkCheck(w, L"Edge smoothing", 0, 0, 10, IDC_SMAA);
-    page.checkRow(g_hSmaa,
-      L"Cheap, and smooths edges multisampling cannot -- including "
-      L"edges inside textures.");
-
-    page.fullNote(
-      L"Anisotropic filtering is always on at 16x. It is effectively "
-      L"free, so there is no setting for it.");
-  }
-
-  // ---------------- page 2: Game ----------------
-  {
-    Layout page(w, 2);
-    g_hLang = mkCombo(w, 0, 0, 10, IDC_LANG);
-    comboFill(g_hLang, kLangItems, kLangCount);
-    page.row(L"Language:", g_hLang,
-      L"Written to the game's own settings, and decides which of the game's "
-      L"two executables starts.");
-
+    // The game's own, and present in all three titles' Setting.ini.
     g_hOutline = mkCheck(w, L"Character outlines", 0, 0, 10, IDC_OUTLINE);
     page.checkRow(g_hOutline,
       L"The game's own outline rendering. On as it shipped.");
+
+    // Said plainly rather than left as an empty page. Escha & Logy and Shallie
+    // run a renderer this mod has not censused, so it knows nothing about which
+    // surface carries their 3D scene -- and every one of its image-quality
+    // features needs that answer before it can touch anything.
+    if (!caps.supersampling && !caps.smaa)
+      page.fullNote(
+        L"The mod's own image-quality settings are not available for this "
+        L"game yet. Supersampling and edge smoothing need to know which part "
+        L"of the frame carries the 3D scene, and that has only been "
+        L"established for Atelier Ayesha so far.");
   }
 
-  // ---------------- page 3: About ----------------
+  // ---------------- page 2: About ----------------
   // What is installed, where it came from, and what it is not.
   {
-    Layout page(w, 3);
+    Layout page(w, 2);
     wchar_t installed[160];
     wsprintfW(installed, L"Mod version: %s", modVersion());
     page.label(installed);
@@ -1679,6 +1919,27 @@ void createControls(HWND w) {
     // here not built by a helper that sets it, so it has to be told explicitly.
     setFont(g_hRepoLink);
     page.link(g_hRepoLink);
+
+    // The stock front-ends are still reachable: this tool replaces them, it
+    // does not remove them. They sit here rather than among the settings
+    // because they lead out of this window instead of changing anything in it.
+    // Greyed out when the executable is not present.
+    page.heading(L"The game as it shipped");
+    HWND openEnv = mkButton(w, L"Settings &editor", 0, 0, 10, IDC_OPENENV);
+    HWND openLauncher = mkButton(w, L"&Original launcher", 0, 0, 10,
+      IDC_OPENLAUNCHER);
+    HWND playVanilla = mkButton(w, L"Play &without the mod", 0, 0, 10,
+      IDC_PLAYVANILLA);
+    page.buttons(openEnv, openLauncher, playVanilla);
+    if (!stockToolPresent(g_game >= 0 ? kGames[g_game].stockEnv : nullptr))
+      EnableWindow(openEnv, FALSE);
+    if (!stockToolPresent(g_game >= 0 ? kGames[g_game].stockLauncher : nullptr))
+      EnableWindow(openLauncher, FALSE);
+    if (!g_gameExePath[0])
+      EnableWindow(playVanilla, FALSE);
+    page.fullNote(
+      L"Koei Tecmo's own settings editor and launcher, unmodified. The third "
+      L"saves and starts the game with the mod turned off, changing nothing.");
   }
 
   // Grow the window if the tallest page outran the space set aside for it.
@@ -1747,32 +2008,12 @@ void createControls(HWND w) {
     EnableWindow(g_hStart, FALSE);
 
   // Distinct mnemonics across the whole window: P play, R reset, C close,
-  // E editor, O original launcher, W play without the mod, S skip.
+  // E editor, O original launcher, W play without the mod.
   HWND reset = CreateWindowExW(0, L"BUTTON", L"&Reset to defaults",
     WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
     rightEdge - closeW - S(12) - wideW, buttonTop, wideW, buttonH, w,
     (HMENU)(INT_PTR)IDC_RESET, nullptr, nullptr);
   setFont(reset);
-
-  // [Launcher] SkipLauncher, beside Play with mod because that is what it is
-  // about: the next launch from Steam does what that button does, without
-  // stopping here first. It belongs to no tab page, so it is not registered
-  // with onPage and stays visible whichever page is showing -- which also means
-  // it stands on the window background rather than a tab page, and
-  // WM_CTLCOLORBTN colours it accordingly.
-  //
-  // Two lines, because the qualifier is the half that is easy to get wrong:
-  // this is about the launch Steam performs, not about the window in front of
-  // you. BS_MULTILINE is what makes the break in the caption take effect.
-  const int skipLeft = margin + wideW + S(16);
-  const int skipHeight = 2 * checkHeight();
-  g_hSkipLauncher = CreateWindowExW(0, L"BUTTON",
-    L"&Skip the launcher\n(when launching via Steam)",
-    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX | BS_MULTILINE,
-    skipLeft, buttonTop + (buttonH - skipHeight) / 2,
-    std::max(S(60), (rightEdge - closeW - S(12) - wideW) - S(12) - skipLeft),
-    skipHeight, w, (HMENU)(INT_PTR)IDC_SKIPLAUNCHER, nullptr, nullptr);
-  setFont(g_hSkipLauncher);
 
   HWND close = CreateWindowExW(0, L"BUTTON", L"&Close",
     WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
@@ -1812,7 +2053,6 @@ LRESULT CALLBACK WndProc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
       createControls(w);
       loadFromIni();
       applyGameIcon(w);
-      SetFocus(g_hStart);
       return 0;
 
     case WM_NOTIFY: {
@@ -1844,18 +2084,9 @@ LRESULT CALLBACK WndProc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
         SetTextColor((HDC)wp, g_secondaryText);
         return (LRESULT)GetStockObject(NULL_BRUSH);
       }
-      // The skip checkbox is the one control that sits in the button row rather
-      // than on a page, so it takes the window's own background. With the page
-      // colour it would read as a patch laid on the strip, which is exactly
-      // what the rule below exists to prevent everywhere else.
-      if ((HWND)lp == g_hSkipLauncher) {
-        SetBkColor((HDC)wp, g_windowBack);
-        SetTextColor((HDC)wp, g_text);
-        return (LRESULT)g_windowBrush;
-      }
-      // Every other static and checkbox stands on the tab page, so all of them
-      // get the page's colour -- the theme's on Windows, the flat white under
-      // Wine. This is what stops them reading as patches laid over the panel.
+      // Every static and checkbox stands on a tab page, so all of them get the
+      // page's colour -- the theme's on Windows, the flat white under Wine.
+      // This is what stops them reading as patches laid over the panel.
       SetBkColor((HDC)wp, g_pageBack);
       SetTextColor((HDC)wp, g_text);
       // The notes beside each control are secondary text, so they are drawn
@@ -1871,34 +2102,48 @@ LRESULT CALLBACK WndProc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_COMMAND:
       // The supersampling list is computed from the selected resolution, so it
-      // has to follow every change to it -- and the rebuild can drop the
-      // multiplier that was selected, which changes a quality setting, so the
-      // preset is re-derived afterwards like any other change to one.
+      // has to follow every change to it.
       if (LOWORD(wp) == IDC_RES && HIWORD(wp) == CBN_SELCHANGE) {
-        refillSupersampling();
-        refreshPreset();
-        return 0;
-      }
-      if (LOWORD(wp) == IDC_PRESET && HIWORD(wp) == CBN_SELCHANGE) {
-        applyPreset((int)SendMessageW(g_hPreset, CB_GETCURSEL, 0, 0));
-        return 0;
-      }
-      // Any hand-edited quality setting means the box may no longer describe
-      // what is selected, so it is re-derived rather than left claiming a rung
-      // the controls have moved off.
-      if ((HIWORD(wp) == CBN_SELCHANGE &&
-           (LOWORD(wp) == IDC_MSAA || LOWORD(wp) == IDC_SSAA)) ||
-          (HIWORD(wp) == BN_CLICKED && LOWORD(wp) == IDC_SMAA)) {
-        refreshPreset();
+        updateRenderResolution();
         return 0;
       }
       switch (LOWORD(wp)) {
-        case IDC_START:
-          if (startGame(w, false))
-            DestroyWindow(w);
+        case IDC_RESET: {
+          // Destructive and not undoable, so it asks first, and the question
+          // names what it will and will not touch. Defaulting to No: this sits
+          // next to Close, and the cost of a mis-click is someone's whole
+          // configuration.
+          const int answer = MessageBoxW(w,
+            L"Reset all of the mod's settings to their defaults? This will "
+            L"also set your game resolution back to your desktop's, in "
+            L"windowed mode. Your language is left alone.",
+            L"Atelier Dusk Fixes",
+            MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
+          if (answer != IDYES)
+            return 0;
+          resetToDefaults();
+          const SaveOutcome reset = saveToIni();
+          if (!reset.ok()) {
+            // No markSaved: the values are on screen but not on disk, so the
+            // close prompt has to stay armed.
+            reportSaveFailure(w, reset);
+            return 0;
+          }
+          markSaved();
+          // Name the game back to the user: this tool configures whichever
+          // folder it sits in, and saying which one closes that loop.
+          wchar_t saved[320];
+          wsprintfW(saved,
+            L"The settings have been reset to the mod's defaults and saved. "
+            L"The next time you launch %s they will be used.",
+            g_gameName ? g_gameName : L"the game");
+          MessageBoxW(w, saved, L"Atelier Dusk Fixes",
+            MB_OK | MB_ICONINFORMATION);
           return 0;
+        }
+        case IDC_START:
         case IDC_PLAYVANILLA:
-          if (startGame(w, true))
+          if (startGame(w, LOWORD(wp) == IDC_PLAYVANILLA))
             DestroyWindow(w);
           return 0;
         case IDC_OPENLAUNCHER:
@@ -1906,20 +2151,30 @@ LRESULT CALLBACK WndProc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
           // Saved first, so the stock tool opens onto the settings on screen
           // rather than the ones on disk. Both of them edit the same
           // Setting.ini this window does.
-          saveToIni();
-          markSaved();
+          const SaveOutcome saved = saveToIni();
+          if (!saved.ok())
+            reportSaveFailure(w, saved);
+          else
+            markSaved();
+          const bool env = LOWORD(wp) == IDC_OPENENV;
           const char* tool = g_game < 0 ? nullptr
-            : (LOWORD(wp) == IDC_OPENLAUNCHER ? kGames[g_game].stockLauncher
-                                              : kGames[g_game].stockEnv);
-          if (!runStockTool(tool))
-            MessageBoxW(w, L"That program could not be started.",
-              L"Atelier Dusk Fixes", MB_OK | MB_ICONWARNING);
+            : (env ? kGames[g_game].stockEnv : kGames[g_game].stockLauncher);
+          if (!runStockTool(tool)) {
+            wchar_t failed[256];
+            wsprintfW(failed,
+              L"%s could not be started. It may have been moved or removed "
+              L"from the game folder.",
+              env ? L"The settings editor" : L"The original launcher");
+            MessageBoxW(w, failed, L"Atelier Dusk Fixes",
+              MB_OK | MB_ICONWARNING);
+          }
           return 0;
         }
-        case IDC_RESET:
-          resetToDefaults();
-          return 0;
         case IDC_CLOSE:
+        // IsDialogMessage turns Escape into IDCANCEL, so this is the Escape
+        // key. Both go through WM_CLOSE so the unsaved-changes check sits in
+        // one place, shared with the window's own close button.
+        case IDCANCEL:
           SendMessageW(w, WM_CLOSE, 0, 0);
           return 0;
         default:
@@ -1928,16 +2183,19 @@ LRESULT CALLBACK WndProc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
       break;
 
     case WM_CLOSE:
+      // Settings are written when the game starts, so closing after an edit
+      // would throw it away with no sign that it happened. Cancel is the
+      // default: of the three answers it is the only one that loses nothing.
       if (hasUnsavedChanges()) {
         const int answer = MessageBoxW(w,
-          L"Save the changed settings before closing?",
-          L"Atelier Dusk Fixes", MB_YESNOCANCEL | MB_ICONQUESTION);
+          L"Save the changes you made to the settings before closing? They "
+          L"are normally written when you start the game.",
+          L"Atelier Dusk Fixes",
+          MB_YESNOCANCEL | MB_ICONQUESTION | MB_DEFBUTTON3);
         if (answer == IDCANCEL)
           return 0;
-        if (answer == IDYES) {
-          saveToIni();
-          markSaved();
-        }
+        if (answer == IDYES)
+          reportSaveFailure(w, saveToIni());
       }
       DestroyWindow(w);
       return 0;
@@ -1962,15 +2220,47 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int show) {
   controls.dwICC = ICC_STANDARD_CLASSES | ICC_TAB_CLASSES | ICC_LINK_CLASS;
   InitCommonControlsEx(&controls);
 
-  resolveGameFolder();
-  initStyling();
-
-  const DWORD style = (WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX);
+  // Fixed-size dialog-style window (no maximize / resize). Declared here
+  // because the scale has to know the frame it will be measured with.
+  const DWORD style =
+    (WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX);
   chooseScale(style);
+  // Before the font and the brushes: both are chosen by the regime it picks.
+  initStyling();
   g_uiFont = createUiFont();
   g_headingFont = createHeadingFont();
   g_windowBrush = CreateSolidBrush(g_windowBack);
   g_pageBrush = CreateSolidBrush(g_pageBack);
+
+  // This tool edits the files beside it, so a game must be there. Saying where
+  // to put it is the whole of the diagnosis for a misplaced copy. An earlier
+  // version opened the window anyway and reported the problem in a message box,
+  // which left a settings window on screen that could not start anything and
+  // whose Save wrote into a folder no game reads.
+  if (!resolveGameFolder()) {
+    MessageBoxW(nullptr,
+      L"No Atelier Dusk game was found in this folder.\n\n"
+      L"Put dusk-fix-launcher.exe in the game's installation folder, beside "
+      L"the game executable and d3d11.dll, and run it from there.",
+      L"Atelier Dusk Fixes", MB_OK | MB_ICONERROR);
+    return 1;
+  }
+  // A missing dusk-fix.ini is not a reason to stop. Deleting the ini to start
+  // over, or copying the launcher into a folder before ever running the game,
+  // would otherwise leave this window editing a file that does not exist.
+  // Create it with the same key src/core/config.cpp seeds in configPath(), so a
+  // launcher-made file and a DLL-made one are the same file. Only a failure to
+  // write it is worth stopping for, and that is a real problem the user can act
+  // on.
+  if (GetFileAttributesA(g_iniPath) == INVALID_FILE_ATTRIBUTES &&
+      !seedIniDefaults()) {
+    MessageBoxW(nullptr,
+      L"dusk-fix.ini is missing and could not be created in this folder.\n\n"
+      L"The game folder may be read-only, which a Steam file verification can "
+      L"leave behind. Check the folder's permissions and try again.",
+      L"Atelier Dusk Fixes", MB_OK | MB_ICONERROR);
+    return 1;
+  }
 
   WNDCLASSEXW cls = {};
   cls.cbSize = sizeof(cls);
@@ -1989,6 +2279,11 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int show) {
   AdjustWindowRect(&frame, style, FALSE);
   const int frameWidth = frame.right - frame.left;
   const int frameHeight = frame.bottom - frame.top;
+
+  // Centred rather than left to the default cascade position. This window is
+  // the first thing seen when the game is started, so it should arrive where
+  // the eye already is. Centred on the work area of the monitor holding the
+  // cursor, so a taskbar cannot push the lower buttons off-screen.
   RECT area = {};
   int x = CW_USEDEFAULT, y = CW_USEDEFAULT;
   if (cursorWorkArea(&area)) {
@@ -1996,19 +2291,27 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int show) {
     y = area.top + (area.bottom - area.top - frameHeight) / 2;
   }
 
-  HWND window = CreateWindowExW(0, cls.lpszClassName, L"Atelier Dusk Fixes",
+  // Name the game in the title, not just in the window: with the game's icon
+  // beside it this is what identifies the right one on a taskbar holding more
+  // than one of these.
+  wchar_t title[192];
+  if (g_gameName)
+    wsprintfW(title, L"%s - Atelier Dusk Fixes", g_gameName);
+  else
+    lstrcpynW(title, L"Atelier Dusk Fixes", 192);
+
+  HWND window = CreateWindowExW(0, cls.lpszClassName, title,
     style, x, y, frameWidth, frameHeight, nullptr, nullptr, instance, nullptr);
   if (!window)
     return 1;
 
-  if (g_game < 0)
-    MessageBoxW(window,
-      L"No Atelier Dusk game was found in this folder, so there is nothing to "
-      L"start. Put dusk-fix-launcher.exe next to the game executable.",
-      L"Atelier Dusk Fixes", MB_OK | MB_ICONINFORMATION);
-
   ShowWindow(window, show);
   UpdateWindow(window);
+  // After the controls exist and the window is up, so nothing takes it back.
+  // Skipped when there is no game to start, since focus on a disabled control
+  // would leave the keyboard nowhere.
+  if (g_hStart && IsWindowEnabled(g_hStart))
+    SetFocus(g_hStart);
 
   MSG message;
   while (GetMessageW(&message, nullptr, 0, 0) > 0) {

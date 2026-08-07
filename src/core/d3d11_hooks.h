@@ -16,10 +16,10 @@
 //
 // This used to live inside highres.cpp, on the reasoning that the file already
 // owned the device vtable for its own CreateTexture2D hook. That held while
-// there was one feature. It stopped holding once supersampling and then MSAA
-// needed slots too: the resolution fix ended up hosting five detours belonging
-// to a feature it has nothing to do with, and "which module owns the vtables"
-// became invisible.
+// there was one feature. It stopped holding once the scene-pass detours and
+// supersampling needed slots too: the resolution fix ended up hosting detours
+// belonging to features it has nothing to do with, and "which module owns the
+// vtables" became invisible.
 //
 // The split now is: this file owns installation and the trampolines; each
 // feature owns its own detours and its own policy. Nothing here knows what a
@@ -45,8 +45,6 @@ namespace atfix {
 using PFN_CreateTexture2D = HRESULT (STDMETHODCALLTYPE *) (
   ID3D11Device*, const D3D11_TEXTURE2D_DESC*, const D3D11_SUBRESOURCE_DATA*,
   ID3D11Texture2D**);
-using PFN_CreateRasterizerState = HRESULT (STDMETHODCALLTYPE *) (
-  ID3D11Device*, const D3D11_RASTERIZER_DESC*, ID3D11RasterizerState**);
 using PFN_CreateSamplerState = HRESULT (STDMETHODCALLTYPE *) (
   ID3D11Device*, const D3D11_SAMPLER_DESC*, ID3D11SamplerState**);
 
@@ -56,7 +54,6 @@ using PFN_CreateSamplerState = HRESULT (STDMETHODCALLTYPE *) (
 // since an uninstalled hook is never called.
 struct DeviceOriginals {
   PFN_CreateTexture2D createTexture2D = nullptr;
-  PFN_CreateRasterizerState createRasterizerState = nullptr;
   PFN_CreateSamplerState createSamplerState = nullptr;
 };
 
@@ -81,19 +78,8 @@ using PFN_OMSetRenderTargets = void (STDMETHODCALLTYPE *) (
   ID3D11DepthStencilView*);
 using PFN_PSSetShaderResources = void (STDMETHODCALLTYPE *) (
   ID3D11DeviceContext*, UINT, UINT, ID3D11ShaderResourceView* const*);
-using PFN_CopyResource = void (STDMETHODCALLTYPE *) (
-  ID3D11DeviceContext*, ID3D11Resource*, ID3D11Resource*);
-using PFN_CopySubresourceRegion = void (STDMETHODCALLTYPE *) (
-  ID3D11DeviceContext*, ID3D11Resource*, UINT, UINT, UINT, UINT,
-  ID3D11Resource*, UINT, const D3D11_BOX*);
 using PFN_FinishCommandList = HRESULT (STDMETHODCALLTYPE *) (
   ID3D11DeviceContext*, BOOL, ID3D11CommandList**);
-using PFN_ExecuteCommandList = void (STDMETHODCALLTYPE *) (
-  ID3D11DeviceContext*, ID3D11CommandList*, BOOL);
-using PFN_ClearRenderTargetView = void (STDMETHODCALLTYPE *) (
-  ID3D11DeviceContext*, ID3D11RenderTargetView*, const FLOAT[4]);
-using PFN_ClearDepthStencilView = void (STDMETHODCALLTYPE *) (
-  ID3D11DeviceContext*, ID3D11DepthStencilView*, UINT, FLOAT, UINT8);
 using PFN_OMSetRenderTargetsAndUnorderedAccessViews =
   void (STDMETHODCALLTYPE *) (
     ID3D11DeviceContext*, UINT, ID3D11RenderTargetView* const*,
@@ -121,12 +107,7 @@ struct ContextOriginals {
   PFN_DrawIndexedInstanced drawIndexedInstanced = nullptr;
   PFN_OMSetRenderTargets omSetRenderTargets = nullptr;
   PFN_PSSetShaderResources psSetShaderResources = nullptr;
-  PFN_CopyResource copyResource = nullptr;
-  PFN_CopySubresourceRegion copySubresourceRegion = nullptr;
   PFN_FinishCommandList finishCommandList = nullptr;
-  PFN_ExecuteCommandList executeCommandList = nullptr;
-  PFN_ClearRenderTargetView clearRenderTargetView = nullptr;
-  PFN_ClearDepthStencilView clearDepthStencilView = nullptr;
   PFN_OMSetRenderTargetsAndUnorderedAccessViews
     omSetRenderTargetsAndUnorderedAccessViews = nullptr;
 };
@@ -140,10 +121,10 @@ const ContextOriginals& d3d11OriginalsFor(ID3D11DeviceContext* context);
 // falling back to the public method when that hook is not installed.
 //
 // Any module doing its own internal binds should use this. A present-time pass
-// that binds through the public method walks back into the MSAA substitution
-// logic for binds MSAA was never meant to examine -- harmless today only
-// because the immediate context happens to hold no scene marker by then, which
-// is a property of one engine and not a guarantee.
+// that binds through the public method walks back into the scene-pass boundary
+// logic for binds it was never meant to examine -- harmless today only because
+// the immediate context happens to hold no scene marker by then, which is a
+// property of one engine and not a guarantee.
 void d3d11SetRenderTargets(ID3D11DeviceContext* context, UINT numViews,
                            ID3D11RenderTargetView* const* views,
                            ID3D11DepthStencilView* depth);

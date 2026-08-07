@@ -11,8 +11,8 @@
 #include "d3d11_hooks.h"
 #include "highres.h"
 #include "log.h"
-#include "msaa.h"
 #include "sampler.h"
+#include "scene_pass.h"
 #include "smaa.h"
 #include "supersample.h"
 #include "../../vendor/minhook/include/MinHook.h"
@@ -58,37 +58,18 @@ const ContextHookSpec kRasterHooks[] = {
     ORIGINAL_AT(drawInstanced), "DrawInstanced" },
 };
 
-// MSAA's set: one bind point and four read points. Owned by msaa.cpp.
-const ContextHookSpec kMsaaHooks[] = {
+// The scene-pass set: the two bind points that carry the scene/UI boundary, the
+// sample the composite makes, and the close of a recorded list. Owned by
+// scene_pass.cpp, and wanted by whichever of SMAA and supersampling is on.
+const ContextHookSpec kScenePassHooks[] = {
   { 33, reinterpret_cast<void*>(&hookedOMSetRenderTargets),
     ORIGINAL_AT(omSetRenderTargets), "OMSetRenderTargets" },
   { 8, reinterpret_cast<void*>(&hookedPSSetShaderResources),
     ORIGINAL_AT(psSetShaderResources), "PSSetShaderResources" },
-  { 47, reinterpret_cast<void*>(&hookedCopyResource),
-    ORIGINAL_AT(copyResource), "CopyResource" },
-  { 46, reinterpret_cast<void*>(&hookedCopySubresourceRegion),
-    ORIGINAL_AT(copySubresourceRegion), "CopySubresourceRegion" },
   { 114, reinterpret_cast<void*>(&hookedFinishCommandList),
     ORIGINAL_AT(finishCommandList), "FinishCommandList" },
-  // The clears are not optional, and leaving them out was a real defect in the
-  // first version of this feature. The game clears the view IT created -- the
-  // host -- while the twin is what is actually bound and rendered into, so
-  // without these the twin is never cleared and every frame accumulates on top
-  // of the last. Both reference implementations hook them for exactly this
-  // reason (sync_fix.cpp:2928/2942, impl.cpp:1564/1575).
-  // Belt and braces, and NOT copied from prior art: neither reference
-  // implementation does anything MSAA-related here. The replay clobbers the
-  // immediate context's render-target state, so anything this context still has
-  // marked as bound should be landed before that happens rather than resolved
-  // later against bindings that no longer exist.
-  { 58, reinterpret_cast<void*>(&hookedExecuteCommandList),
-    ORIGINAL_AT(executeCommandList), "ExecuteCommandList" },
-  { 50, reinterpret_cast<void*>(&hookedClearRenderTargetView),
-    ORIGINAL_AT(clearRenderTargetView), "ClearRenderTargetView" },
-  { 53, reinterpret_cast<void*>(&hookedClearDepthStencilView),
-    ORIGINAL_AT(clearDepthStencilView), "ClearDepthStencilView" },
-  // The other way to bind render targets. A game that uses it would otherwise
-  // bind the host directly and bypass the substitution entirely.
+  // The other way to bind render targets. Nothing in these engines is known to
+  // use it, but "known" here means "never looked".
   { 34,
     reinterpret_cast<void*>(&hookedOMSetRenderTargetsAndUnorderedAccessViews),
     ORIGINAL_AT(omSetRenderTargetsAndUnorderedAccessViews),
@@ -174,13 +155,12 @@ void d3d11InstallHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
   // Ask each feature what it needs before touching anything, so a session that
   // wants nothing installs nothing.
   const HighResWants highRes = highResResolveWants();
-  const unsigned int msaa = msaaSamples();
   // Supersampling owns no hook of its own, but it is not hookless either: it
   // reads the bind detour to identify the composite and the shader-resource
-  // detour to substitute at its sample, and both live in the MSAA set below.
-  // Naming it here is what keeps `DUSK_SSAA=200` with everything else off from
-  // installing nothing and reporting nothing.
-  if (!highRes.createTexture2D && !highRes.rasterCorrection && msaa <= 1 &&
+  // detour to substitute at its sample, and both live in the scene-pass set
+  // below. Naming it here is what keeps `DUSK_SSAA=200` with everything else
+  // off from installing nothing and reporting nothing.
+  if (!highRes.createTexture2D && !highRes.rasterCorrection &&
       !anisotropyLevel() && !smaaPreUiEnabled() && !ssaaConfigured())
     return;
 
@@ -208,8 +188,9 @@ void d3d11InstallHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
 
   // Context hooks are grouped, and each group goes in only when its feature is
   // on. The census alone needs no raster correction -- a diagnostic that
-  // changed raster state would not be a diagnostic -- and a session without
-  // MSAA should not pay for five detours on calls this hot.
+  // changed raster state would not be a diagnostic -- and a session with
+  // neither SMAA nor supersampling should not pay for four detours on calls
+  // this hot.
   ContextHookSpec specs[32];
   int specCount = 0;
   auto append = [&](const ContextHookSpec* from, int count) {
@@ -223,19 +204,19 @@ void d3d11InstallHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
   //
   // NOT for the pre-UI SMAA path, though a version of this line briefly said so
   // on the grounds that SMAA "fires after the composite draw, and the draw
-  // detours are in this set". It does not: it fires from msaaNoteSceneBoundary
-  // inside the OMSetRenderTargets detour, which is in the MSAA set below, and
-  // there is no draw-time entry point anywhere in smaa.cpp. Installing six
+  // detours are in this set". It does not: it fires from scenePassNoteBoundary
+  // inside the OMSetRenderTargets detour, which is in the scene-pass set below,
+  // and there is no draw-time entry point anywhere in smaa.cpp. Installing six
   // detours on the hottest functions in the frame to satisfy a dependency that
   // does not exist is worth avoiding even when they are inert.
   if (highRes.rasterCorrection || ssaaConfigured())
     append(kRasterHooks, int(sizeof(kRasterHooks) / sizeof(kRasterHooks[0])));
-  // Also when the pre-UI SMAA path is on: it needs the OMSetRenderTargets
-  // detour to see the scene/UI boundary, and that detour lives in this set.
-  // And when supersampling is on: it identifies the composite from that same
-  // detour and substitutes at PSSetShaderResources, both of them here.
-  if (msaa > 1 || smaaPreUiEnabled() || ssaaConfigured())
-    append(kMsaaHooks, int(sizeof(kMsaaHooks) / sizeof(kMsaaHooks[0])));
+  // The pre-UI SMAA path needs the OMSetRenderTargets detour to see the
+  // scene/UI boundary, and supersampling identifies the composite from that
+  // same detour and substitutes at PSSetShaderResources. Both live here.
+  if (smaaPreUiEnabled() || ssaaConfigured())
+    append(kScenePassHooks,
+           int(sizeof(kScenePassHooks) / sizeof(kScenePassHooks[0])));
 
   if (specCount && !context) {
     log("D3D11HOOKS: no immediate context available, so the context hooks"
@@ -259,26 +240,6 @@ void d3d11InstallHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
       if (owned)
         owned->Release();
       return;
-    }
-  }
-
-  // Device slot 22, CreateRasterizerState. Only when MSAA is on.
-  if (msaa > 1) {
-    msaaInitialize(device);
-    msaaSetTargetBinder(&msaaBindTargets);
-    void* rasterTarget = deviceVtable[22];
-    if (MH_CreateHook(rasterTarget,
-          reinterpret_cast<void*>(&hookedCreateRasterizerState),
-          reinterpret_cast<void**>(&g_deviceOriginals.createRasterizerState))
-            != MH_OK ||
-        MH_EnableHook(rasterTarget) != MH_OK) {
-      // Fatal for this feature rather than cosmetic: without it the twins fill
-      // with single-sample coverage and MSAA silently does nothing.
-      log("D3D11HOOKS: could not hook CreateRasterizerState; MSAA would bind"
-          " multisample targets and rasterise single-sample into them, so it"
-          " is left off this session");
-      msaaSetTargetBinder(nullptr);
-      msaaInitialize(nullptr);
     }
   }
 
@@ -354,17 +315,6 @@ void d3d11InstallHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
 
   highResNoteImmediateContext(context);
 
-  // Stated even when off: "did MSAA engage" should not need a diagnostic run to
-  // answer. Note the careful wording -- this line says MSAA is CONFIGURED.
-  // Whether it attached to anything is a different question, and msaa.cpp
-  // answers it with its own line, because conflating the two is precisely how
-  // the previous implementation went unnoticed.
-  if (msaa > 1)
-    log("FIXES msaa=", std::dec, msaa,
-        "x requested (twin targets; 'MSAA: engaged' confirms it attached)");
-  else
-    log("FIXES msaa=off");
-
   // Only the OFF half of supersampling's configured line is logged here. The ON
   // half carries the scene and display sizes, and neither exists yet: Ayesha
   // creates its device before its swap chain, and the main render size is
@@ -375,18 +325,17 @@ void d3d11InstallHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
 
   // The trap that costs a whole session when it is hit. DUSK_HIGHRES=0 stands
   // down the CreateTexture2D hook, which is the only thing that ever learns a
-  // main render size -- so Ayesha's MSAA scene test can never match, and there
-  // is nothing enlarged for supersampling to downscale. Both features then
-  // report themselves configured and do nothing, which is exactly the state
-  // this project has now been in three times.
-  if (!highRes.rasterCorrection && (msaa > 1 || ssaaConfigured()))
+  // main render size -- so Ayesha's scene test can never match, and there is
+  // nothing enlarged for supersampling to downscale. Both features that read
+  // the scene pass then report themselves configured and do nothing, which is
+  // exactly the state this project has now been in three times.
+  if (!highRes.rasterCorrection && (smaaPreUiEnabled() || ssaaConfigured()))
     log("D3D11HOOKS: WARNING the high-resolution fix is off, so no main render"
-        " size is ever learned; the scene test cannot match and neither MSAA"
-        " nor supersampling will do anything this session");
+        " size is ever learned; the scene test cannot match and neither the"
+        " pre-UI SMAA pass nor supersampling will do anything this session");
 
   log("D3D11HOOKS: installed highres=", highRes.rasterCorrection ? 1 : 0,
       " census=", highRes.createTexture2D && !highRes.rasterCorrection ? 1 : 0,
-      " msaa=", msaa,
       " ssaa=", ssaaPercent(),
       " aniso=", anisotropyLevel(),
       " contextVtables=", hookedVtables,

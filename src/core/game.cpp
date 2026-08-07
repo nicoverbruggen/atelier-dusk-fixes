@@ -170,20 +170,37 @@ constexpr Support X = Support::OnByDefault;
 // Ayesha builds -- see the comment on the offset constants in field_physics.cpp
 // -- so nothing about this fix is now inherited on trust.
 //
-// Smaa is Ayesha-only and OptIn, and is the one shipping-quality feature here
-// that is deliberately NOT on by default yet. The passes themselves are the
-// Arland project's own, ported unchanged, so the antialiasing is not the
-// experiment. What is missing is where to inject it: Arland runs SMAA on the
-// scene target before the game composites its interface, and no equivalent
-// boundary has been established for PhyreEngine. Until one is, this runs at
-// Present over the finished frame, which antialiases the UI and its text along
-// with the scene. That is a real visual cost and exactly the kind of trade-off
-// a user should get to refuse, so it stays opt-in and keeps its switch.
+// Smaa is available in all three games, and the cell differs because WHERE it
+// runs differs. The passes themselves are the Arland project's own, ported
+// unchanged, so the antialiasing is never the experiment; the injection point
+// is.
 //
-// Escha & Logy and Shallie are Unsupported rather than OptIn only for want of
-// evidence: the full-frame path needs no engine knowledge and would very likely
-// work there unchanged. Nothing has been measured on KTGL, so nothing is
-// claimed.
+// Ayesha is ON BY DEFAULT because it has a pre-UI injection point. smaa.cpp
+// runs there on the scene target before the game composites its interface, so
+// menus and text are left alone, and that is what made on-by-default
+// defensible -- it was OptIn for exactly as long as the only available path was
+// the full-frame one.
+//
+// Escha & Logy and Shallie are OPT-IN because they only have the full-frame
+// path. Their renderer has never been censused, so no scene-target test is
+// registered for it, so scenePassNoteBoundary declines every bind and the
+// pre-UI pass never claims a frame. smaaApply then runs at Present over the
+// finished image -- which antialiases the interface and its text along with the
+// scene. That is a real visual cost and exactly the kind of trade a user should
+// get to refuse, which is what OptIn is for.
+//
+// Nothing engine-specific is involved in that path and that is the whole reason
+// these two cells could change without new addresses: smaaApply takes the swap
+// chain's back buffer, creates a render-target view over it and runs the
+// passes. No scene test, no mapped address, no dependency on the
+// high-resolution fix. The three gates in smaaApply that stand the Present path
+// down -- the per-frame latch, the pre-UI-proven latch, and g_broken -- are all
+// driven by the pre-UI path, which never engages here.
+//
+// The log says which one ran. "SMAA: pre-UI injection on the scene target" is
+// Ayesha; "SMAA: running at Present over the finished frame -- the interface is
+// antialiased too" is the KTGL games. Those two lines exist because "SMAA is
+// on" and "SMAA is on in the good place" are different facts.
 //
 // Supersampling is OptIn on Ayesha and Unsupported on the KTGL games, and it is
 // a rebuild rather than a repair: four implementations preceded it and none of
@@ -208,6 +225,32 @@ constexpr Support X = Support::OnByDefault;
 //
 // Its key is the one in this table that featureEnabled must not be asked about
 // -- see the note on the Descriptor row.
+//
+// Escha & Logy reaches the same feature by the opposite route, and its cell is
+// OptIn for the same cost reason. Ayesha pins its scene targets, so the mod
+// enlarges them and owns the resolve. KTGL sizes every full-frame target from
+// its own Setting.ini, so the launcher writes that file at base x factor and
+// the mod only has to stop the swap chain following it up: it clamps the back
+// buffer to the base and resolves the oversized scene into it at the
+// composite's own sample. A 2026-08-08 run confirmed the engine half with no
+// code at all -- Setting.ini at 5120x2880 on a 1440p panel produced every
+// full-frame target at 5120x2880, blur pyramid chaining down from it.
+//
+// Shallie gets the same cell, and the caution that kept it Unsupported for a
+// day turned out to be about a design that was abandoned. It has roughly twice
+// as many places re-reading the resolution out of the ini as Escha does, which
+// would have mattered to the settings-reader hook that was never built: that
+// one wrote the in-memory settings object and left the file holding the base,
+// so every re-reader would have disagreed with it. THE SHIPPED DESIGN WRITES
+// THE FILE. Every re-reader gets the multiplied number, because that is what is
+// on disk, and there is nothing to disagree with.
+//
+// One residual is real rather than theoretical, and it is Shallie-only: its
+// `0x5881a0` takes a width from the bound surface and a height from a fresh ini
+// read. The mod clamps that surface, so those two now come from different
+// worlds and the result would be a target with the wrong aspect. It is one
+// function, the failure would be visible rather than silent, and enabling the
+// row is what puts a run in front of it.
 //
 // WorldMapCursor is Ayesha-only and ships ON BY DEFAULT, on the same reasoning
 // as the field-jitter fix it is a sibling of: a cursor that crosses the map
@@ -298,8 +341,8 @@ constexpr Support X = Support::OnByDefault;
 // fails loudly the next time a Feature is added without extending every row.
 //                               Stats Trace Verfy Censu Probe Targt HiRes Cache Field Stabl Smaa  Ssaa  Aniso WMap  Logo  Movi  Typo  SysSv Promt PadRe Synth
 constexpr Support kAyesha[]  = { O,    O,    O,    O,    O,    O,    X,    X,    X,    X,    X,    O,    X,    X,    O,    O,    U,    U,    U,    O,    U };
-constexpr Support kEscha[]   = { U,    U,    U,    U,    U,    O,    U,    U,    U,    U,    U,    U,    O,    U,    U,    U,    X,    X,    U,    O,    X };
-constexpr Support kShallie[] = { U,    U,    U,    U,    U,    O,    U,    U,    U,    U,    U,    U,    O,    U,    U,    U,    X,    X,    O,    O,    X };
+constexpr Support kEscha[]   = { U,    U,    U,    U,    U,    O,    U,    U,    U,    U,    O,    O,    O,    U,    U,    U,    X,    X,    U,    O,    X };
+constexpr Support kShallie[] = { U,    U,    U,    U,    U,    O,    U,    U,    U,    U,    O,    O,    O,    U,    U,    U,    X,    X,    O,    O,    X };
 
 constexpr std::size_t kColumns = static_cast<std::size_t>(Feature::Count);
 static_assert(std::size(kAyesha) == kColumns,  "Ayesha row is not one entry per Feature");

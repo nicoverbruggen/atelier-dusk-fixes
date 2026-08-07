@@ -139,6 +139,37 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* swapChain,
   return originalPresent(swapChain, syncInterval, flags);
 }
 
+// The engine resizes its own swap chain during device init, so clamping only at
+// creation is not enough -- ResizeBuffers would put the oversized backbuffer
+// straight back and ResizeTarget would ask the display for a mode it does not
+// have. Both are clamped for the same reason and by the same rule.
+using PFN_ResizeBuffers = HRESULT (STDMETHODCALLTYPE*)(
+  IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT);
+using PFN_ResizeTarget = HRESULT (STDMETHODCALLTYPE*)(
+  IDXGISwapChain*, const DXGI_MODE_DESC*);
+
+PFN_ResizeBuffers originalResizeBuffers = nullptr;
+PFN_ResizeTarget originalResizeTarget = nullptr;
+
+HRESULT STDMETHODCALLTYPE hookedResizeBuffers(
+    IDXGISwapChain* swapChain, UINT bufferCount, UINT width, UINT height,
+    DXGI_FORMAT format, UINT flags) {
+  ssaaClampPresentSize(&width, &height, "ResizeBuffers");
+  return originalResizeBuffers(swapChain, bufferCount, width, height, format,
+                               flags);
+}
+
+HRESULT STDMETHODCALLTYPE hookedResizeTarget(
+    IDXGISwapChain* swapChain, const DXGI_MODE_DESC* mode) {
+  if (!mode)
+    return originalResizeTarget(swapChain, mode);
+  // The caller's structure is never written to; the substitution is made on a
+  // copy, as the window-background fix does with its class.
+  DXGI_MODE_DESC clamped = *mode;
+  ssaaClampPresentSize(&clamped.Width, &clamped.Height, "ResizeTarget");
+  return originalResizeTarget(swapChain, &clamped);
+}
+
 // Present lives in the swap chain's vtable, so it can only be hooked once an
 // instance exists. Called after each successful device/swapchain creation.
 void hookPresent(IDXGISwapChain* swapChain) {
@@ -156,6 +187,29 @@ void hookPresent(IDXGISwapChain* swapChain) {
     return;
   done = true;
   log("Present hook installed");
+
+  // IDXGISwapChain slots 13 and 14, counted from the same base as Present at 8:
+  // IUnknown 0-2, IDXGIObject 3-6, IDXGIDeviceSubObject 7, Present 8, GetBuffer
+  // 9, SetFullscreenState 10, GetFullscreenState 11, GetDesc 12, ResizeBuffers
+  // 13, ResizeTarget 14. Installed only when the clamp is on, so an ordinary
+  // session has neither.
+  if (!ssaaPresentClampEnabled())
+    return;
+  void* resizeBuffers = vtable[13];
+  void* resizeTarget = vtable[14];
+  const bool buffersOk =
+    MH_CreateHook(resizeBuffers, reinterpret_cast<void*>(&hookedResizeBuffers),
+      reinterpret_cast<void**>(&originalResizeBuffers)) == MH_OK &&
+    MH_EnableHook(resizeBuffers) == MH_OK;
+  const bool targetOk =
+    MH_CreateHook(resizeTarget, reinterpret_cast<void*>(&hookedResizeTarget),
+      reinterpret_cast<void**>(&originalResizeTarget)) == MH_OK &&
+    MH_EnableHook(resizeTarget) == MH_OK;
+  // Named individually: a clamp that holds at creation and is then undone by an
+  // unhooked ResizeBuffers is the exact failure this pair exists to prevent, and
+  // it would otherwise look like the clamp simply did not work.
+  log("SSAA present clamp: enabled, ResizeBuffers=", buffersOk ? "hooked" : "FAILED",
+      " ResizeTarget=", targetOk ? "hooked" : "FAILED");
 }
 
 using PFN_IDXGIFactory_CreateSwapChain = HRESULT (STDMETHODCALLTYPE *) (
@@ -166,6 +220,11 @@ PFN_IDXGIFactory_CreateSwapChain originalCreateSwapChain = nullptr;
 HRESULT STDMETHODCALLTYPE hookedCreateSwapChain(
     IDXGIFactory* factory, IUnknown* device,
     DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** swapChain) {
+  // Before the call, so the swap chain is created at the display size while the
+  // engine's own render size stays where the ini put it. See supersample.h.
+  if (desc)
+    ssaaClampPresentSize(&desc->BufferDesc.Width, &desc->BufferDesc.Height,
+                         "CreateSwapChain");
   const HRESULT result = originalCreateSwapChain(factory, device, desc, swapChain);
   // Reported from the succeeded call, so the line names the swap chain the game
   // actually got rather than the one it asked for.
@@ -301,6 +360,18 @@ DLLEXPORT HRESULT __stdcall D3D11CreateDeviceAndSwapChain(
 
   if (!proc.D3D11CreateDeviceAndSwapChain)
     return E_FAIL;
+
+  // The other swap-chain route, clamped for the same reason as the factory one.
+  // The parameter is const, so the substitution is made on a copy and the
+  // caller's structure is never written to. Escha & Logy takes the factory
+  // route; covering both is what keeps this from depending on which.
+  DXGI_SWAP_CHAIN_DESC clampedDesc = {};
+  if (pSwapChainDesc) {
+    clampedDesc = *pSwapChainDesc;
+    atfix::ssaaClampPresentSize(&clampedDesc.BufferDesc.Width,
+      &clampedDesc.BufferDesc.Height, "D3D11CreateDeviceAndSwapChain");
+    pSwapChainDesc = &clampedDesc;
+  }
 
   HRESULT hr = (*proc.D3D11CreateDeviceAndSwapChain)(pAdapter, DriverType,
     Software, Flags, pFeatureLevels, FeatureLevels, SDKVersion, pSwapChainDesc,

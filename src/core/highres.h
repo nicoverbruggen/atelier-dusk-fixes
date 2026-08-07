@@ -89,6 +89,14 @@ bool highResMainSize(unsigned int* width, unsigned int* height);
 // and enabling one turned the other off. One definition, used by both.
 bool highResSceneSize(unsigned int* width, unsigned int* height);
 
+// The size the swap chain was actually created at. False before one exists.
+//
+// Exposed for the KTGL present-clamp route, where it IS the display size and so
+// the size the scene has to be resolved down to. On Ayesha highResMainSize
+// answers that instead, because there the swap chain and the scene agree and
+// the pinned size is the interesting number.
+bool highResSwapChainSize(unsigned int* width, unsigned int* height);
+
 // Records the size the swap chain was actually created at. Logged once, and
 // independently of whether either feature is enabled -- one line naming the
 // present resolution is worth having in every log.

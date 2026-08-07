@@ -161,7 +161,7 @@ void d3d11InstallHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
   // below. Naming it here is what keeps `DUSK_SSAA=200` with everything else
   // off from installing nothing and reporting nothing.
   if (!highRes.createTexture2D && !highRes.rasterCorrection &&
-      !anisotropyLevel() && !smaaPreUiEnabled() && !ssaaConfigured())
+      !anisotropyLevel() && !smaaPreUiEnabled() && !ssaaActive())
     return;
 
   // The Phyre module initializes MinHook for Ayesha, but this subsystem is the
@@ -214,7 +214,7 @@ void d3d11InstallHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
   // The pre-UI SMAA path needs the OMSetRenderTargets detour to see the
   // scene/UI boundary, and supersampling identifies the composite from that
   // same detour and substitutes at PSSetShaderResources. Both live here.
-  if (smaaPreUiEnabled() || ssaaConfigured())
+  if (smaaPreUiEnabled() || ssaaActive())
     append(kScenePassHooks,
            int(sizeof(kScenePassHooks) / sizeof(kScenePassHooks[0])));
 

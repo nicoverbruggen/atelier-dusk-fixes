@@ -127,15 +127,36 @@ const int kGameCount = 3;
 // renderer has never been censused and nothing is known about what it binds.
 struct Capabilities {
   bool supersampling;   // [Rendering] Supersampling
+  bool ssaaScalesGameIni;  // ...by multiplying the game's own resolution?
   bool smaa;            // [Rendering] SMAA
+  bool smaaPreUi;       // ...and does it run before the interface is drawn?
   bool startupSkips;    // [Startup] SkipLogos / SkipIntroMovie
 };
 
+// `ssaaScalesGameIni` is where the two engines' supersampling differs, and the
+// launcher has to know because the difference lands in the files it writes.
+//
+// On Ayesha the mod enlarges the scene targets itself, so the game's own
+// Setting.ini keeps the resolution the player chose and the factor lives only
+// in dusk-fix.ini.
+//
+// On KTGL the engine already sizes every full-frame target from its own ini, so
+// the launcher writes THAT file at base x factor and records the base in
+// `[Rendering] DisplayWidth`/`DisplayHeight` for the DLL to clamp the swap
+// chain back down to. Same two controls on screen, same key names as the Arland
+// launcher, opposite plumbing underneath.
+
+// `smaaPreUi` is not a second setting. It is the same checkbox with a different
+// consequence, and the window has to say which: Ayesha has a scene-target test
+// so the pass runs before the interface is composited, while the KTGL games
+// have none, so it runs at Present over the finished frame and softens the
+// interface along with everything else. Offering the same one-line description
+// for both would be describing the wrong trade to two thirds of the users.
 const Capabilities kCapabilities[kGameCount] = {
-  //             Ssaa   Smaa   Startup
-  /* Ayesha  */ { true,  true,  true  },
-  /* Escha   */ { false, false, false },
-  /* Shallie */ { false, false, false },
+  //             Ssaa   ScalesIni  Smaa  PreUI  Startup
+  /* Ayesha  */ { true,  false,     true,  true,  true  },
+  /* Escha   */ { true,  true,      true,  false, false },
+  /* Shallie */ { true,  true,      true,  false, false },
 };
 
 char g_iniPath[MAX_PATH] = {};       // dusk-fix.ini, in the game folder
@@ -147,7 +168,7 @@ int g_game = -1;                     // index into kGames, -1 when none found
 
 Capabilities capabilities() {
   if (g_game < 0 || g_game >= kGameCount)
-    return Capabilities{ false, false, false };
+    return Capabilities{ false, false, false, false, false };
   return kCapabilities[g_game];
 }
 
@@ -944,10 +965,25 @@ void loadFromIni() {
   //
   // Read with a 0 sentinel rather than the game's 1280x720 default, because
   // whether these keys exist at all is what decides the Auto default below.
-  const unsigned width =
+  unsigned width =
     GetPrivateProfileIntA("Graphics", "ScreenWidth", 0, g_settingsPath);
-  const unsigned height =
+  unsigned height =
     GetPrivateProfileIntA("Graphics", "ScreenHeight", 0, g_settingsPath);
+
+  // On the KTGL route the game's own file holds base x factor, so the base has
+  // to come back out of dusk-fix.ini or the window would show the multiplied
+  // number as if the player had chosen it -- and then multiply it again on the
+  // next save. The base is what this control is about; the factor has its own.
+  if (capabilities().ssaaScalesGameIni) {
+    const unsigned baseWidth =
+      GetPrivateProfileIntA("Rendering", "DisplayWidth", 0, g_iniPath);
+    const unsigned baseHeight =
+      GetPrivateProfileIntA("Rendering", "DisplayHeight", 0, g_iniPath);
+    if (baseWidth && baseHeight) {
+      width = baseWidth;
+      height = baseHeight;
+    }
+  }
 
   g_resolutions.assign(1, kAutoResolution);
   unsigned maxWidth = 0, maxHeight = 0;
@@ -1065,8 +1101,30 @@ SaveOutcome saveToIni() {
     // replaces a NEGATIVE value with a default.
     if (automatic && !desktopResolution(&chosen.width, &chosen.height))
       chosen = { 1920, 1080 };
-    iniWriteInt(g_settingsPath, "Graphics", "ScreenWidth", chosen.width);
-    iniWriteInt(g_settingsPath, "Graphics", "ScreenHeight", chosen.height);
+
+    // What the game is told to render at. On the KTGL route that is the base
+    // multiplied by the factor, and the base itself goes into dusk-fix.ini so
+    // the DLL can clamp the swap chain back to it. Everywhere else the game
+    // gets the base and nothing else changes.
+    Resolution render = chosen;
+    const int percent = capabilities().supersampling
+      ? atoi(kSsaaItems[ssaaSelectedIndex()].value) : 100;
+    if (capabilities().ssaaScalesGameIni && percent > 100) {
+      // The same arithmetic the dropdown labels show and the DLL expects:
+      // truncating division, then masked even. Three definitions of one number
+      // is how this area went wrong before; there is one, and it is here.
+      render.width = ((chosen.width * unsigned(percent)) / 100) & ~1u;
+      render.height = ((chosen.height * unsigned(percent)) / 100) & ~1u;
+      iniWriteInt(g_iniPath, "Rendering", "DisplayWidth", chosen.width);
+      iniWriteInt(g_iniPath, "Rendering", "DisplayHeight", chosen.height);
+    } else if (capabilities().ssaaScalesGameIni) {
+      // Cleared rather than left behind: a stale base would have the DLL clamp
+      // the swap chain below a resolution nobody is supersampling.
+      iniWrite("Rendering", "DisplayWidth", nullptr, g_iniPath);
+      iniWrite("Rendering", "DisplayHeight", nullptr, g_iniPath);
+    }
+    iniWriteInt(g_settingsPath, "Graphics", "ScreenWidth", render.width);
+    iniWriteInt(g_settingsPath, "Graphics", "ScreenHeight", render.height);
     iniWriteBool(g_iniPath, "Launcher", "AutoResolution", automatic);
   }
   iniWrite("Window", "FullScreen",
@@ -1870,9 +1928,13 @@ void createControls(HWND w) {
 
     if (caps.smaa) {
       g_hSmaa = mkCheck(w, L"Edge smoothing", 0, 0, 10, IDC_SMAA);
-      page.checkRow(g_hSmaa,
-        L"Cheap, and smooths edges inside textures as well as along the edges "
-        L"of models.");
+      page.checkRow(g_hSmaa, caps.smaaPreUi
+        ? L"Cheap, and smooths edges inside textures as well as along the "
+          L"edges of models. Runs before the interface is drawn, so menus and "
+          L"text are left sharp."
+        : L"Cheap, and smooths edges inside textures as well as along the "
+          L"edges of models. In this game it runs over the finished picture, "
+          L"so menu text is softened too.");
     }
 
     // The game's own, and present in all three titles' Setting.ini.
@@ -1880,16 +1942,15 @@ void createControls(HWND w) {
     page.checkRow(g_hOutline,
       L"The game's own outline rendering. On as it shipped.");
 
-    // Said plainly rather than left as an empty page. Escha & Logy and Shallie
-    // run a renderer this mod has not censused, so it knows nothing about which
-    // surface carries their 3D scene -- and every one of its image-quality
-    // features needs that answer before it can touch anything.
-    if (!caps.supersampling && !caps.smaa)
+    // Said plainly rather than left as a gap. Supersampling needs the engine to
+    // render the scene larger than it displays it, and on this renderer nothing
+    // yet does that; edge smoothing needs nothing of the sort, which is why it
+    // is offered above and this note is only about the one that is missing.
+    if (!caps.supersampling)
       page.fullNote(
-        L"The mod's own image-quality settings are not available for this "
-        L"game yet. Supersampling and edge smoothing need to know which part "
-        L"of the frame carries the 3D scene, and that has only been "
-        L"established for Atelier Ayesha so far.");
+        L"Supersampling is not available for this game yet. It needs the game "
+        L"to render at a higher resolution than it displays, and that has only "
+        L"been established for Atelier Ayesha so far.");
   }
 
   // ---------------- page 2: About ----------------

@@ -6,7 +6,7 @@ This document records finalized, measured behavior for the first planned Dusk re
 
 One 64-bit `d3d11.dll` recognizes all six Dusk game executables. Ayesha is the PhyreEngine-derived target and uses the atlas, field, and scene modules under `src/engines/phyre`. Escha & Logy and Shallie use LTGL/KTGL and are served by `src/engines/ktgl`.
 
-The capability matrix in `src/core/game.cpp` is the source of truth. Every engine-specific feature is hard-off for an unsupported title, and an unrecognized build receives only normal D3D11 forwarding. Ayesha has the atlas cache, high-resolution correction, field correction, antialiasing, and travel-map correction enabled by default. Escha & Logy and Shallie have the loading-text correction, the system-save guard, and the synthesis-animation correction enabled by default. Target census is available as a diagnostic for all three games.
+The capability matrix in `src/core/game.cpp` is the source of truth. Every engine-specific feature is hard-off for an unsupported title, and an unrecognized build receives only normal D3D11 forwarding. Ayesha has the atlas cache, high-resolution correction, field correction, antialiasing, and travel-map correction enabled by default. Escha & Logy and Shallie have the loading-text correction, the system-save guard, and the synthesis-animation correction enabled by default, and can additionally be given SMAA. Target census is available as a diagnostic for all three games.
 
 ## Font-atlas cache
 
@@ -36,13 +36,21 @@ Escha & Logy and Shallie do not have this defect. Both size the swap chain and e
 
 ## Antialiasing
 
-Two features, both Ayesha-only and both confirmed in game at 2560x1440.
+**Supersampling** is available in all three games and confirmed in game in each. It renders the scene above the display size and resamples it down with a box filter sized to the ratio, with sharpening folded into the same pass. Because the resample is the mod's own, fractional multipliers are usable; the ladder is 125%, 150%, 200%, 300%, and 400%. It is opt-in everywhere: 200% is four times the shaded pixels.
 
-**Supersampling** renders the scene above the display size and resamples it down with a box filter sized to the ratio, with sharpening folded into the same pass. The composite is identified positively, by the bind whose color target is the swap-chain back buffer, rather than inferred from when the engine stops drawing into the scene. Because the resample is the mod's own, fractional multipliers are usable; the ladder is 125%, 150%, 200%, 300%, and 400%. It is opt-in: 200% is four times the shaded pixels.
+The two engines reach it by opposite routes, and only the plumbing differs. On Ayesha the engine pins its scene targets, so the mod enlarges them itself and the game's own `Setting.ini` keeps the resolution the player chose. On Escha & Logy and Shallie the engine already sizes every full-frame target from its own `Setting.ini`, so the launcher writes that file at base times factor and records the base separately; the mod then clamps the swap chain back to the base, resolves the oversized frame into it at the composite's own sample, and corrects the composite's viewport, which the engine still sets from the size it believes it is rendering at.
 
-**SMAA** runs pre-UI, inside the downscale pass, so it smooths the rendered scene without softening menu text.
+In both cases the composite is identified positively, by the bind whose color target is the swap-chain back buffer, rather than inferred from when the engine stops drawing into the scene.
 
-Both depend on knowing which render-target bind carries the 3D scene. That question is a property of the renderer rather than of Direct3D, so it is answered in `src/engines/phyre/scene_target.cpp` for Ayesha and nowhere else. Escha & Logy and Shallie have no equivalent rule, so both features are hard-off there.
+On the KTGL games the whole frame is supersampled rather than the scene alone, because the interface is composed in the same coordinate space. That costs more and is also the only thing in the mod that improves the interface art at high resolutions.
+
+**SMAA** is available in all three games, and where it runs differs.
+
+On Ayesha it runs pre-UI, inside the downscale pass, so it smooths the rendered scene without softening menu text. That is what makes it defensible on by default.
+
+On Escha & Logy and Shallie it runs at Present over the finished frame, because no scene-target rule exists for their renderer and so the pre-UI pass never claims a frame. The interface and its text are antialiased along with the scene. Confirmed working in game, and that softening is the reason it is opt-in and off unless asked for: it is the only antialiasing these two games currently have, not the one they should end up with. Nothing engine-specific is involved in that path: it takes the swap chain's back buffer and runs the same passes.
+
+The log distinguishes the two. `SMAA: pre-UI injection on the scene target` is the first; `SMAA: running at Present over the finished frame` is the second.
 
 Multisampling is deliberately not offered, and was removed rather than left switched off. It cannot reach what actually aliases in these games, which is detail inside textures and along alpha-tested edges; only supersampling resolves that. The engine's own multisampled targets are never rendered into, so there is no engine setting to turn up either.
 

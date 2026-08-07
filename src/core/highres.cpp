@@ -566,6 +566,10 @@ void STDMETHODCALLTYPE hookedDraw(
   g_drawCalls.fetch_add(1, std::memory_order_relaxed);
   if (g_fixEnabled)
     updateViewportScissor(self);
+  // The other engine's correction. Ayesha's is above and enlarges the viewport
+  // to match targets this module grew; KTGL's shrinks it to match a back buffer
+  // supersample.cpp clamped. Exactly one of the two ever does anything.
+  ssaaCorrectCompositeViewport(self);
   d3d11OriginalsFor(self).draw(self, vertexCount, startVertex);
 }
 
@@ -575,6 +579,10 @@ void STDMETHODCALLTYPE hookedDrawIndexed(
   g_drawCalls.fetch_add(1, std::memory_order_relaxed);
   if (g_fixEnabled)
     updateViewportScissor(self);
+  // The other engine's correction. Ayesha's is above and enlarges the viewport
+  // to match targets this module grew; KTGL's shrinks it to match a back buffer
+  // supersample.cpp clamped. Exactly one of the two ever does anything.
+  ssaaCorrectCompositeViewport(self);
   d3d11OriginalsFor(self).drawIndexed(self, indexCount, startIndex, baseVertex);
 }
 
@@ -584,6 +592,10 @@ void STDMETHODCALLTYPE hookedDrawInstanced(
   g_drawCalls.fetch_add(1, std::memory_order_relaxed);
   if (g_fixEnabled)
     updateViewportScissor(self);
+  // The other engine's correction. Ayesha's is above and enlarges the viewport
+  // to match targets this module grew; KTGL's shrinks it to match a back buffer
+  // supersample.cpp clamped. Exactly one of the two ever does anything.
+  ssaaCorrectCompositeViewport(self);
   d3d11OriginalsFor(self).drawInstanced(self, vertexCountPerInstance, instanceCount,
                                    startVertex, startInstance);
 }
@@ -594,6 +606,10 @@ void STDMETHODCALLTYPE hookedDrawIndexedInstanced(
   g_drawCalls.fetch_add(1, std::memory_order_relaxed);
   if (g_fixEnabled)
     updateViewportScissor(self);
+  // The other engine's correction. Ayesha's is above and enlarges the viewport
+  // to match targets this module grew; KTGL's shrinks it to match a back buffer
+  // supersample.cpp clamped. Exactly one of the two ever does anything.
+  ssaaCorrectCompositeViewport(self);
   d3d11OriginalsFor(self).drawIndexedInstanced(self, indexCountPerInstance,
                                           instanceCount, startIndex,
                                           baseVertex, startInstance);
@@ -645,6 +661,16 @@ bool highResSceneSize(unsigned int* width, unsigned int* height) {
 bool highResMainSize(unsigned int* width, unsigned int* height) {
   const UINT w = g_mainWidth.load(std::memory_order_relaxed);
   const UINT h = g_mainHeight.load(std::memory_order_relaxed);
+  if (!w || !h)
+    return false;
+  *width = w;
+  *height = h;
+  return true;
+}
+
+bool highResSwapChainSize(unsigned int* width, unsigned int* height) {
+  const UINT w = g_swapWidth.load(std::memory_order_relaxed);
+  const UINT h = g_swapHeight.load(std::memory_order_relaxed);
   if (!w || !h)
     return false;
   *width = w;

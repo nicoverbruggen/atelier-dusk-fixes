@@ -36,6 +36,7 @@
 #include "highres.h"
 #include "smaa.h"
 #include "supersample.h"
+#include "supersample_policy.h"
 
 namespace atfix {
 
@@ -141,10 +142,6 @@ bool ssaaSceneSize(unsigned int mainWidth, unsigned int mainHeight,
 
 namespace {
 
-// Cached display size for the present clamp; see displaySize().
-unsigned int g_clampWidth = 0;
-unsigned int g_clampHeight = 0;
-
 // Private-data keys. A distinct base from scene_pass.cpp's, and from the Arland
 // project's: the two mods are never loaded into the same process, but colliding
 // GUIDs across sibling codebases costs a day to find if it ever happens.
@@ -195,8 +192,6 @@ std::atomic<uint64_t> g_passFailures{0};
 std::atomic<uint64_t> g_backBufferRetags{0};
 std::atomic<bool> g_backBufferKnown{false};
 std::atomic<UINT> g_backWidth{0};
-std::atomic<UINT> g_clampedRenderWidth{0};
-std::atomic<UINT> g_clampedRenderHeight{0};
 std::atomic<UINT> g_backHeight{0};
 
 // The pass's own re-entry guard.
@@ -894,11 +889,9 @@ bool ssaaSubstituteShaderResources(ID3D11DeviceContext* context,
   // there at all -- the high-resolution fix is unsupported on those games, so
   // highResMainSize would return false and this would decline every call.
   unsigned int destWidth = 0, destHeight = 0;
-  const bool clampRoute = ssaaPresentClampEnabled();
-  const bool haveDest = clampRoute
-    ? highResSwapChainSize(&destWidth, &destHeight)
-    : highResMainSize(&destWidth, &destHeight);
-  if (!haveDest || !destWidth || !destHeight)
+  const SsaaPolicy& policy = ssaaPolicy();
+  if (!policy.substitutionDestSize(&destWidth, &destHeight) ||
+      !destWidth || !destHeight)
     return false;
 
   // Which of these views reads a scene colour host that is genuinely larger
@@ -924,7 +917,8 @@ bool ssaaSubstituteShaderResources(ID3D11DeviceContext* context,
     if (!resource)
       continue;
     ID3D11Texture2D* texture = nullptr;
-    if ((clampRoute || hasMarker(resource, IID_DuskSceneHost)) &&
+    if ((!policy.requiresSceneHostTag ||
+         hasMarker(resource, IID_DuskSceneHost)) &&
         SUCCEEDED(resource->QueryInterface(
           IID_ID3D11Texture2D, reinterpret_cast<void**>(&texture))) && texture) {
       D3D11_TEXTURE2D_DESC desc = {};
@@ -1024,80 +1018,68 @@ bool ssaaEngaged() {
   return g_substitutions.load(std::memory_order_relaxed) > 0;
 }
 
-// ---- the KTGL present-size clamp (experimental, env-only) ------------------
+// ---- the two engine routes ------------------------------------------------
 //
-// See supersample.h for the run this came out of and why it clamps the swap
-// chain rather than writing the engine's own override fields.
+// Which route this process takes is answered by supersample_policy.h, resolved
+// lazily from the executable. Nothing below asks which engine it is running in.
 
 bool ssaaActive() {
-  return ssaaConfigured() || ssaaPresentClampEnabled();
+  return ssaaPolicy().routeActive();
 }
 
-bool ssaaPresentClampEnabled() {
-  static const bool on = [] {
-    // The env switch forces it on for an experiment on any engine.
-    if (const char* env = std::getenv("DUSK_PRESENT_CLAMP"))
-      return env[0] != '0';
-    // Otherwise it is simply what supersampling means on KTGL. The two engines
-    // reach the same feature by opposite routes and the difference is not a
-    // preference: Ayesha pins its scene targets, so the mod has to enlarge them
-    // and own the resolve; KTGL sizes everything from its own ini, so the mod
-    // only has to stop the swap chain following it up. Choosing by engine
-    // rather than by a key keeps that from being something a user can get
-    // wrong.
-    return currentEngine() == Engine::Ktgl && ssaaConfigured();
-  }();
-  return on;
+// Every function present, every answer no. Returned by the dispatcher when no
+// engine matched, and used by the Ayesha policy for the two clamp entries it has
+// no use for -- so no caller has to test a pointer before calling.
+const SsaaPolicy& ssaaNoPolicy() {
+  static const SsaaPolicy policy = {
+    [] { return false; },
+    [] (unsigned int*, unsigned int*) { return false; },
+    [] (ID3D11DeviceContext*, unsigned int*, unsigned int*) { return false; },
+    [] (UINT*, UINT*, const char*) {},
+    [] (const DXGI_SWAP_CHAIN_DESC*) {},
+    false,
+    false,
+    false,
+  };
+  return policy;
 }
 
-namespace {
-
-// The size to present at, read once and cached.
-//
-// TOLD, NOT GUESSED. The launcher writes the base resolution the user chose
-// into `[Rendering] DisplayWidth`/`DisplayHeight` and multiplies the game's own
-// Setting.ini by the supersampling factor, so the two numbers are produced
-// together by one control pair and cannot disagree. That is the same split the
-// Arland launcher has -- base resolution plus a multiplier -- and the same key
-// names, so a reader moving between the two mods finds the same file.
-//
-// Deriving the base by dividing the requested size by the factor would look
-// simpler and is not: the launcher truncates and masks to an even size, so the
-// division does not always invert, and a 1.5x factor is exactly where it stops
-// being exact.
-//
-// The desktop is the fallback, for the env-only experimental path where nobody
-// wrote the keys. Read at DEVICE CREATION rather than lazily, because once the
-// game is fullscreen the metrics report the mode it asked for rather than the
-// desktop -- which is the very size being clamped away.
-bool displaySize(unsigned int* width, unsigned int* height) {
-  static const bool have = [] {
-    const int configuredWidth = duskConfigInt("Rendering", "DisplayWidth", 0);
-    const int configuredHeight = duskConfigInt("Rendering", "DisplayHeight", 0);
-    if (configuredWidth > 0 && configuredHeight > 0) {
-      g_clampWidth = unsigned(configuredWidth);
-      g_clampHeight = unsigned(configuredHeight);
-      return true;
-    }
-    const int cx = GetSystemMetrics(SM_CXSCREEN);
-    const int cy = GetSystemMetrics(SM_CYSCREEN);
-    if (cx <= 0 || cy <= 0)
-      return false;
-    g_clampWidth = unsigned(cx);
-    g_clampHeight = unsigned(cy);
-    log("SSAA present clamp: no [Rendering] DisplayWidth/DisplayHeight in the"
-        " ini, falling back to the desktop size ", std::dec, g_clampWidth, "x",
-        g_clampHeight);
-    return true;
-  }();
-  if (!have)
+bool ssaaBoundColorTargetSize(ID3D11DeviceContext* context, unsigned int* width,
+                              unsigned int* height) {
+  if (!context || !width || !height)
     return false;
-  *width = g_clampWidth;
-  *height = g_clampHeight;
+  ID3D11RenderTargetView* rtv = nullptr;
+  context->OMGetRenderTargets(1, &rtv, nullptr);
+  if (!rtv) {
+    static std::atomic<bool> warned{false};
+    if (!warned.exchange(true, std::memory_order_relaxed))
+      log("SSAA: the composite draw has no colour target bound, so the"
+          " viewport cannot be checked against it");
+    return false;
+  }
+  ID3D11Resource* resource = nullptr;
+  rtv->GetResource(&resource);
+  rtv->Release();
+  if (!resource)
+    return false;
+  unsigned int foundWidth = 0, foundHeight = 0;
+  ID3D11Texture2D* texture = nullptr;
+  if (SUCCEEDED(resource->QueryInterface(IID_ID3D11Texture2D,
+                                         reinterpret_cast<void**>(&texture)))
+      && texture) {
+    D3D11_TEXTURE2D_DESC desc = {};
+    texture->GetDesc(&desc);
+    foundWidth = desc.Width;
+    foundHeight = desc.Height;
+    texture->Release();
+  }
+  resource->Release();
+  if (!foundWidth || !foundHeight)
+    return false;
+  *width = foundWidth;
+  *height = foundHeight;
   return true;
 }
-
-}  // namespace
 
 void ssaaCorrectCompositeViewport(ID3D11DeviceContext* context) {
   // THE HALF THE SUBSTITUTION DOES NOT COVER, and the first run without it
@@ -1121,52 +1103,14 @@ void ssaaCorrectCompositeViewport(ID3D11DeviceContext* context) {
   if (!hasMarker(context, IID_DuskSsaaComposite))
     return;
 
-  // WHERE THE DESTINATION SIZE COMES FROM, and the two routes disagree for a
-  // reason. On the clamp route the back buffer has been resized behind the
-  // engine's back, so the ini's display size is the authority. Elsewhere the
-  // authority is the back buffer itself, read from its own descriptor when it
-  // was identified -- because the size the game believes it is rendering at is
-  // exactly what is wrong in windowed mode.
+  // WHERE THE DESTINATION SIZE COMES FROM, and the two engines disagree for a
+  // reason -- so the answer comes from the policy rather than from a branch
+  // here. Ayesha reads the colour target that is actually bound; KTGL cannot,
+  // because the clamp resized the back buffer behind the engine's back. See
+  // supersample_policy.h.
   unsigned int destWidth = 0, destHeight = 0;
-  if (ssaaPresentClampEnabled()) {
-    // The clamp route resized the back buffer behind the engine's back, so the
-    // ini's display size is the authority and the target's own size is not.
-    if (!displaySize(&destWidth, &destHeight))
-      return;
-  } else {
-    // ASK THE TARGET THAT IS ACTUALLY BOUND, every time. A size cached when the
-    // swap chain was created is wrong the moment anything resizes the buffers,
-    // and reading it once is what put Ayesha's gameplay in the top-left corner
-    // of its own window: the composite was clamped to the size the back buffer
-    // had at startup while the buffer itself had since grown.
-    ID3D11RenderTargetView* rtv = nullptr;
-    context->OMGetRenderTargets(1, &rtv, nullptr);
-    if (!rtv) {
-      static std::atomic<bool> warned{false};
-      if (!warned.exchange(true, std::memory_order_relaxed))
-        log("SSAA: the composite draw has no colour target bound, so the"
-            " viewport cannot be checked against it");
-      return;
-    }
-    ID3D11Resource* resource = nullptr;
-    rtv->GetResource(&resource);
-    rtv->Release();
-    if (!resource)
-      return;
-    ID3D11Texture2D* texture = nullptr;
-    if (SUCCEEDED(resource->QueryInterface(IID_ID3D11Texture2D,
-                                           reinterpret_cast<void**>(&texture)))
-        && texture) {
-      D3D11_TEXTURE2D_DESC desc = {};
-      texture->GetDesc(&desc);
-      destWidth = desc.Width;
-      destHeight = desc.Height;
-      texture->Release();
-    }
-    resource->Release();
-    if (!destWidth || !destHeight)
-      return;
-  }
+  if (!ssaaPolicy().compositeViewportSize(context, &destWidth, &destHeight))
+    return;
 
   UINT count = 1;
   D3D11_VIEWPORT viewport = {};
@@ -1237,71 +1181,15 @@ void ssaaFitOutputWindow(const DXGI_SWAP_CHAIN_DESC* desc) {
           desc->Windowed ? " (windowed)" : " (fullscreen)");
   }
 
-  if (!ssaaPresentClampEnabled() || !desc->Windowed)
-    return;
-  const UINT clientWidth = desc->BufferDesc.Width;
-  const UINT clientHeight = desc->BufferDesc.Height;
-  if (!clientWidth || !clientHeight)
-    return;
-
-  RECT client = {};
-  if (GetClientRect(desc->OutputWindow, &client) &&
-      client.right - client.left == LONG(clientWidth) &&
-      client.bottom - client.top == LONG(clientHeight))
-    return;
-
-  // The window has to end up with this CLIENT area, so the frame is measured
-  // rather than assumed: a border and caption are not the same width on every
-  // theme, and getting it wrong here would trade one wrong window size for
-  // another.
-  RECT want = { 0, 0, LONG(clientWidth), LONG(clientHeight) };
-  const LONG style = GetWindowLongA(desc->OutputWindow, GWL_STYLE);
-  const LONG exStyle = GetWindowLongA(desc->OutputWindow, GWL_EXSTYLE);
-  if (!AdjustWindowRectEx(&want, DWORD(style), FALSE, DWORD(exStyle)))
-    return;
-
-  // Size only. The game placed the window where it wanted it, and moving it is
-  // not this fix's business.
-  SetWindowPos(desc->OutputWindow, nullptr, 0, 0, want.right - want.left,
-               want.bottom - want.top,
-               SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
-
-  static std::atomic<bool> logged{false};
-  if (!logged.exchange(true, std::memory_order_relaxed))
-    log("SSAA present clamp: output window resized to a ", std::dec,
-        clientWidth, "x", clientHeight, " client area (the engine had sized it"
-        " from the render resolution in its own ini)");
+  // The resize itself belongs to whichever engine needs one. Ayesha's policy
+  // supplies a no-op here; KTGL's sizes the window to the clamped client area.
+  ssaaPolicy().fitOutputWindow(desc);
 }
 
 void ssaaClampPresentSize(UINT* width, UINT* height, const char* where) {
-  if (!ssaaPresentClampEnabled() || !width || !height)
-    return;
-  unsigned int displayWidth = 0, displayHeight = 0;
-  if (!displaySize(&displayWidth, &displayHeight))
-    return;
-  // Only ever downwards, and only when the game asked for more than the panel
-  // has. A game already at or below the display size is not supersampling and
-  // must not be touched.
-  if (*width <= displayWidth && *height <= displayHeight)
-    return;
-  const UINT wasWidth = *width;
-  const UINT wasHeight = *height;
-  // Remembered so the window hook can recognise the window the engine sizes
-  // from this same number. See engines/ktgl/window_size.cpp.
-  g_clampedRenderWidth.store(wasWidth, std::memory_order_relaxed);
-  g_clampedRenderHeight.store(wasHeight, std::memory_order_relaxed);
-  *width = displayWidth;
-  *height = displayHeight;
-  // Once per distinct call site and size, so a per-frame resize cannot flood
-  // the log while a one-off still gets recorded.
-  static std::atomic<uint64_t> reported{0};
-  const uint64_t key = (uint64_t(wasWidth) << 32) | wasHeight;
-  if (reported.exchange(key, std::memory_order_relaxed) != key)
-    log("SSAA present clamp: ", where, " ", std::dec, wasWidth, "x", wasHeight,
-        " -> ", displayWidth, "x", displayHeight,
-        " (the engine keeps rendering at the larger size; its own device init"
-        " should now take the offscreen branch)");
+  ssaaPolicy().clampPresentSize(width, height, where);
 }
+
 
 void ssaaFrameTick(IDXGISwapChain* swapChain) {
   if (!ssaaActive())
@@ -1334,7 +1222,7 @@ void ssaaFrameTick(IDXGISwapChain* swapChain) {
   // "supersampling is inactive" there would be the opposite of true, and it was
   // printed three lines above a line reporting the feature engaged.
   static std::atomic<bool> highResWarned{false};
-  if (!ssaaPresentClampEnabled() &&
+  if (ssaaPolicy().requiresHighRes &&
       !featureEnabled(Feature::HighResRendering) &&
       !highResWarned.exchange(true, std::memory_order_relaxed))
     log("SSAA: high-resolution fix is off; supersampling requires it and is"
@@ -1388,26 +1276,6 @@ void ssaaFrameTick(IDXGISwapChain* swapChain) {
         // a per-host destination texture is worth building.
         " secondHostRefusals=",
         g_secondHostRefusals.load(std::memory_order_relaxed));
-}
-
-}  // namespace atfix
-
-namespace atfix {
-
-bool ssaaClampedDisplaySize(unsigned int* width, unsigned int* height) {
-  if (!ssaaPresentClampEnabled())
-    return false;
-  return displaySize(width, height);
-}
-
-bool ssaaClampedRenderSize(unsigned int* width, unsigned int* height) {
-  const UINT w = g_clampedRenderWidth.load(std::memory_order_relaxed);
-  const UINT h = g_clampedRenderHeight.load(std::memory_order_relaxed);
-  if (!w || !h)
-    return false;
-  *width = w;
-  *height = h;
-  return true;
 }
 
 }  // namespace atfix

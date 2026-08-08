@@ -185,38 +185,16 @@ void ssaaCorrectCompositeViewport(ID3D11DeviceContext* context);
 // per-context state that the next recording must not inherit.
 void ssaaClearContextState(ID3D11DeviceContext* context);
 
-// ---- the KTGL present-size clamp (experimental, env-only) ------------------
+// ---- the two engine routes ------------------------------------------------
 //
-// A SECOND ROUTE TO SUPERSAMPLING, for the engine that has its own. Everything
-// above is the Ayesha design: the mod substitutes its own downscale at the
-// composite's sample, because that engine has no notion of rendering larger
-// than it presents. KTGL does have one, and a 2026-08-08 run proved half of it
-// works with no code at all -- setting `Setting.ini` to 5120x2880 on a 2560x1440
-// panel produced every full-frame target at 5120x2880, confirmed by the target
-// census, 21 targets across 12 shapes with the blur pyramid chaining down from
-// it.
+// Supersampling is one feature reached by two opposite routes, and everything
+// above is the Ayesha one: the mod enlarges the engine's pinned scene targets
+// and substitutes its own downscale at the composite's sample.
 //
-// What that run also proved is why the picture was still aliased: the SWAP
-// CHAIN came out at 5120x2880 too, so nothing in the game ever resolved it and
-// the compositor was left to do the reduction. The engine's own present-size
-// override (`dev+0x300c`/`+0x3010`, applied by a `cmovg` in device init) stayed
-// at zero, and no writer feeding it from the ini was ever found.
-//
-// THE LEVER THIS INSTALLS. Device init reads the back buffer, compares its size
-// against the render size, and creates an offscreen at the render size when
-// they DISAGREE -- which is exactly the path we want. So rather than hunting
-// for whatever writes the override, make the sizes disagree directly: clamp the
-// swap chain to the display and leave the engine's render size alone. The
-// engine's scene targets come from its own GetScreenWidth/GetScreenHeight
-// accessors, not from the swap chain, so they stay at N x.
-//
-// This touches DXGI only. No mapped address, no prologue, no per-game table.
-//
-// Env-only and off by default, because it is an experiment rather than a
-// shipped feature: `DUSK_PRESENT_CLAMP=1`, with the game's own `Setting.ini`
-// set to the multiplied resolution. It gets no ini key until a run says the
-// image is right.
-bool ssaaPresentClampEnabled();
+// KTGL takes the other route -- it sizes everything from its own ini, so the mod
+// clamps the swap chain back down and lets the engine's device init take its own
+// offscreen branch. That code lives in engines/ktgl/present_clamp.cpp, and which
+// route this process takes is answered by supersample_policy.h.
 
 // Is either supersampling route on? The Ayesha route is `ssaaConfigured()`, the
 // KTGL one is the clamp above. Everything that only needs to know "is this
@@ -242,12 +220,6 @@ void ssaaClampPresentSize(UINT* width, UINT* height, const char* where);
 // Does nothing when the description is fullscreen, when the clamp route is off,
 // or when the window already has the right client area.
 void ssaaFitOutputWindow(const DXGI_SWAP_CHAIN_DESC* desc);
-
-// The two sizes the present clamp works between: what the display gets, and
-// what the engine asked for before being clamped. Both false when the clamp
-// route is not active or nothing has been clamped yet.
-bool ssaaClampedDisplaySize(unsigned int* width, unsigned int* height);
-bool ssaaClampedRenderSize(unsigned int* width, unsigned int* height);
 
 // Called at Present. Counters, the periodic line, and the one-shot lines that
 // name the states in which this feature is configured and doing nothing.

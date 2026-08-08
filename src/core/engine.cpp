@@ -8,12 +8,47 @@
 
 #include "game.h"
 #include "log.h"
+#include "supersample_policy.h"
 #include "../engines/ktgl/ktgl.h"
+#include "../engines/ktgl/present_clamp.h"
 #include "../engines/phyre/phyre.h"
+#include "../engines/phyre/ssaa_policy.h"
 
 namespace atfix {
 extern Log log;   // main.cpp
 }
+
+namespace atfix {
+
+// Which engine's supersampling policy this process runs on. Dispatch, so it
+// lives with the rest of the dispatch: this is the file that is entitled to name
+// both engine modules, and the only one.
+//
+// LAZY, and that is the whole point rather than an optimization. The clamp's
+// first customer is the DXGI CreateSwapChain hook, which runs before any engine
+// module has initialized -- so a policy that had to be registered at init would
+// arrive after the call that needed it, and the failure would be a silent
+// no-clamp rather than an error. currentEngine() fingerprints the running
+// executable and needs no initialization, which is what the code did before the
+// policy existed and is what it still does.
+const SsaaPolicy& ssaaPolicy() {
+  static const SsaaPolicy& policy = [] () -> const SsaaPolicy& {
+    // DUSK_PRESENT_CLAMP forces the clamp route on any engine, which is what it
+    // has always done. Checked before the engine, so the experiment still
+    // reaches Ayesha.
+    if (const char* env = std::getenv("DUSK_PRESENT_CLAMP"))
+      if (env[0] != '0')
+        return ktglSsaaPolicy();
+    switch (currentEngine()) {
+      case Engine::Ktgl:  return ktglSsaaPolicy();
+      case Engine::Phyre: return phyreSsaaPolicy();
+      default:            return ssaaNoPolicy();
+    }
+  }();
+  return policy;
+}
+
+}  // namespace atfix
 
 namespace dusk {
 

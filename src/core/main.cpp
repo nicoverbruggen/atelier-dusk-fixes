@@ -27,6 +27,7 @@
 #include "sampler.h"
 #include "smaa.h"
 #include "supersample.h"
+#include "supersample_policy.h"
 #include "util.h"
 #include "window_background.h"
 #include "../engines/ktgl/window_size.h"
@@ -194,7 +195,7 @@ void hookPresent(IDXGISwapChain* swapChain) {
   // 9, SetFullscreenState 10, GetFullscreenState 11, GetDesc 12, ResizeBuffers
   // 13, ResizeTarget 14. Installed only when the clamp is on, so an ordinary
   // session has neither.
-  if (!ssaaPresentClampEnabled())
+  if (!ssaaPolicy().clampsPresentSize)
     return;
   void* resizeBuffers = vtable[13];
   void* resizeTarget = vtable[14];

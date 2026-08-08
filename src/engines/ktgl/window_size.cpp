@@ -42,6 +42,7 @@
 #include "../../core/hook_util.h"
 #include "../../core/log.h"
 #include "../../core/supersample.h"
+#include "present_clamp.h"
 
 namespace atfix {
 
@@ -75,7 +76,7 @@ HWND WINAPI hookedCreateWindowExA(DWORD exStyle, LPCSTR className,
   unsigned int displayWidth = 0, displayHeight = 0;
   if (sizeStated && sizing.load(std::memory_order_relaxed) && !parent &&
       instance == GetModuleHandleW(nullptr) &&
-      ssaaClampedDisplaySize(&displayWidth, &displayHeight)) {
+      ktglClampedDisplaySize(&displayWidth, &displayHeight)) {
     // What client area would this call produce as it stands?
     RECT frame = { 0, 0, 0, 0 };
     if (AdjustWindowRectEx(&frame, style, menu != nullptr, exStyle)) {
@@ -169,7 +170,7 @@ BOOL WINAPI tracedSetWindowPos(HWND hwnd, HWND after, int x, int y, int cx,
   if (sizing.load(std::memory_order_relaxed) && !(flags & SWP_NOSIZE) &&
       cx > 0 && cy > 0) {
     unsigned int displayWidth = 0, displayHeight = 0;
-    if (ssaaClampedDisplaySize(&displayWidth, &displayHeight)) {
+    if (ktglClampedDisplaySize(&displayWidth, &displayHeight)) {
       const LONG style = GetWindowLongA(hwnd, GWL_STYLE);
       const LONG exStyle = GetWindowLongA(hwnd, GWL_EXSTYLE);
       RECT frame = { 0, 0, 0, 0 };
@@ -246,7 +247,7 @@ bool installKtglWindowSize() {
   // -- which runs when the D3D11 proxy is first used -- was too late by the
   // time the window already existed, and left the after-the-fact resize as the
   // only thing doing the work, which is the flashing this replaces.
-  if (!ssaaPresentClampEnabled())
+  if (!ktglPresentClampEnabled())
     return false;
 
   HMODULE user32 = GetModuleHandleA("user32.dll");

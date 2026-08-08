@@ -23,6 +23,7 @@
 #include "window_size.h"
 #include "../../core/game.h"
 #include "../../core/mix_card.h"
+#include "../../core/pad_notify_trace.h"
 #include "../../core/pad_rescan.h"
 #include "../../../vendor/minhook/include/MinHook.h"
 #include "../../core/hook_util.h"
@@ -171,6 +172,13 @@ bool initializeKtglFixes() {
     // then per-build, which is why the window is stored here rather than shared.
     atfix::installPadRescanBackoff(id.base,
       { game->padCreateWrapperRva, game->padCreateExpected });
+
+    // Observes the rescan's other half and installs nothing: it asks whether a
+    // controller arriving under Proton is announced to this process, which is
+    // what would let the rescan be suppressed outright instead of rate-limited.
+    // Off unless DUSK_PAD_NOTIFY_TRACE is set. Here rather than in DllMain
+    // because it starts a thread, which the loader lock forbids.
+    atfix::startPadNotifyTrace();
 
     // The synthesis pump's prologue is byte-identical in all ten builds of all
     // six games, so unlike the pad wrapper this window is shared rather than

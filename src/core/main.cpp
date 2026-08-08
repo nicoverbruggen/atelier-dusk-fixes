@@ -22,6 +22,7 @@
 #include "engine.h"
 #include "game.h"
 #include "log.h"
+#include "pad_notify_trace.h"
 #include "d3d11_hooks.h"
 #include "highres.h"
 #include "sampler.h"
@@ -446,8 +447,14 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
     case DLL_PROCESS_DETACH:
       // Only on real process teardown (lpvReserved non-null means the process is
       // exiting and the loader will not run other DLLs' cleanup reliably).
-      if (!lpvReserved)
+      // Same gate for the pad-notification trace, which owns a thread and two
+      // windows: on process exit its pump has already been terminated, so
+      // posting to its windows and waiting for it would wait for a thread that
+      // cannot answer.
+      if (!lpvReserved) {
+        atfix::stopPadNotifyTrace();
         MH_Uninitialize();
+      }
       break;
     default:
       break;

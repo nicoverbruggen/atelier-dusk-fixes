@@ -10,9 +10,9 @@
 // A diagnostic, and the checksum is half its value. The other half is that the
 // file can simply be looked at, which is the only honest way to judge a
 // rendering change; but a change that alters nothing produces a byte-identical
-// checksum, and that answer arrives without anyone having to look or reason. On
-// 2026-08-10 an experiment cost a build and a boot before a tally left switched
-// on by luck revealed it had changed nothing at all.
+// checksum, and that answer arrives without anyone having to look or reason. An
+// experiment once cost a build and a boot before a tally left switched on by
+// luck revealed it had changed nothing at all.
 //
 // A FIXED FRAME NUMBER RATHER THAN A DELAY, so two runs are comparable. Frame
 // 600 holds the same content across runs; "five seconds in" drifts with load

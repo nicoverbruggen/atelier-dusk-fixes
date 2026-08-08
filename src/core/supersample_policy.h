@@ -15,9 +15,9 @@
 // in the middle is the same work in both cases; everything around it is not.
 //
 // Before this header the difference was nine `if (ssaaPresentClampEnabled())`
-// branches spread through supersample.cpp, and one of them was read wrongly on
-// 2026-08-09: a change made for Ayesha shipped a call that is null on KTGL and
-// crashed both of those games on boot. The branches are now one table, answered
+// branches spread through supersample.cpp, and one of them was read wrongly: a
+// change made for Ayesha shipped a call that is null on KTGL and crashed both
+// of those games on boot. The branches are now one table, answered
 // once per engine, in that engine's own directory.
 //
 // PULLED, NOT PUSHED, and that is the whole reason this is a lazy accessor

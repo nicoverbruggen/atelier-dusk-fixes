@@ -19,6 +19,7 @@
 #include "scene_target.h"
 #include "worldmap_fix.h"
 #include "../../core/game.h"
+#include "../../core/pad_notify_trace.h"
 #include "../../core/pad_rescan.h"
 #include "../../core/log.h"
 #include "../../../vendor/minhook/include/MinHook.h"
@@ -160,6 +161,13 @@ bool initializePhyreFixes() {
     // flag here.
     atfix::installPadRescanBackoff(g_base,
       { g_game->padCreateWrapperRva, g_game->padCreateExpected });
+
+    // Observes the rescan's other half and installs nothing: it asks whether a
+    // controller arriving under Proton is announced to this process, which is
+    // what would let the rescan be suppressed outright instead of rate-limited.
+    // Off unless DUSK_PAD_NOTIFY_TRACE is set. Here rather than in DllMain
+    // because it starts a thread, which the loader lock forbids.
+    atfix::startPadNotifyTrace();
 
     return true;
   }();

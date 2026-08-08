@@ -158,7 +158,7 @@ void STDMETHODCALLTYPE hookedOMSetRenderTargets(
   // AFTER the boundary, not before. scenePassNoteBoundary is what tags the
   // arriving surface as a scene colour host, and an anchor that runs first sees
   // every surface untagged on its first bind -- which is exactly what a
-  // diagnostic reported on 2026-08-08, as "sceneHostTag=no" on the scene.
+  // diagnostic reported, as "sceneHostTag=no" on the scene.
   scenePassNoteBoundary(self, numViews, views, depth);
   scenePolicy().noteTargets(self, numViews, views);
 

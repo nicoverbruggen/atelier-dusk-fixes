@@ -24,7 +24,7 @@ namespace atfix {
 //
 // DUSK_FIELD_ENGINE_FIX overrides the threshold rescale.
 // DUSK_FIELD_STABILIZER overrides the controller-object writes and requires the
-// rescale. See TECHNICAL.md, "High-refresh field movement".
+// rescale.
 // `exeBuild` selects the address pack (BuildEnglish / BuildMultilingual); the
 // caller has already fingerprinted the executable. Nothing else about the Phyre
 // descriptor is relevant here -- the field fix shares no address with the atlas

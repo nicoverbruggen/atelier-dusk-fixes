@@ -162,8 +162,8 @@ BOOL WINAPI tracedSetWindowPos(HWND hwnd, HWND after, int x, int y, int cx,
     log("WINDOWTRACE: SetWindowPos ", std::dec, cx, "x", cy, " at ", x, ",", y,
         (flags & SWP_NOMOVE) ? " (size only)" : "");
 
-  // THIS is where the window gets its size, not CreateWindowEx. A trace on
-  // 2026-08-09 showed the window created 1x1 by another module and then sized
+  // THIS is where the window gets its size, not CreateWindowEx. A trace
+  // showed the window created 1x1 by another module and then sized
   // here to 2890x1656 -- a 2880x1620 client plus frame -- before the game ever
   // touches D3D11. Correcting it at creation could not work because at creation
   // there was no size to correct.

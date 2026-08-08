@@ -105,7 +105,7 @@ const Descriptor& descriptor(Feature f) {
     /* ControlPromptHold */
                           { "DUSK_CONTROL_PROMPT", "Interface", "SteadyControlPrompt" },
     /* PadRescanBackoff */
-                          { "DUSK_PAD_RESCAN",   "Interface", "PadRescanBackoff" },
+                          { "DUSK_PAD_RESCAN",        nullptr, nullptr },
     /* SynthesisAnimationRate */
                           { "DUSK_SYNTH_RATE",        nullptr, nullptr },
   };
@@ -144,7 +144,7 @@ constexpr Support X = Support::OnByDefault;
 // The pattern it addresses is measured, not assumed -- 2385 candidate locks onto
 // 3 atlases per 248 ms drain, plus a per-frame steady-state drip -- and the
 // measured effect is an 85% reduction in menu-build time at a 95.5% hit rate
-// (TECHNICAL.md, "Font-atlas cache"). Like the field-jitter fix it has no ini
+// (see engines/phyre/atlas_fix.h). Like the field-jitter fix it has no ini
 // key and no launcher control; `DUSK_ATLAS_CACHE=0` turns it off, which is what
 // an A/B or a bug report wants.
 //
@@ -154,7 +154,7 @@ constexpr Support X = Support::OnByDefault;
 // of the atelier's interior steps -- 12-18 px of vertical excursion while the
 // character is horizontally at rest, a gravity-versus-threshold sawtooth rather
 // than a bob -- and an in-game session with both switches on confirmed the fix
-// (TECHNICAL.md, "High-refresh field movement").
+// (see engines/phyre/field_physics.h).
 //
 // They are one feature in two keys, not two features. The stabilizer needs the
 // rescale it builds on and refuses to run without it (installFieldPhysics), so
@@ -232,7 +232,7 @@ constexpr Support X = Support::OnByDefault;
 // its own Setting.ini, so the launcher writes that file at base x factor and
 // the mod only has to stop the swap chain following it up: it clamps the back
 // buffer to the base and resolves the oversized scene into it at the
-// composite's own sample. A 2026-08-08 run confirmed the engine half with no
+// composite's own sample. A run confirmed the engine half with no
 // code at all -- Setting.ini at 5120x2880 on a 1440p panel produced every
 // full-frame target at 5120x2880, blur pyramid chaining down from it.
 //
@@ -347,9 +347,9 @@ constexpr Support X = Support::OnByDefault;
 // the extent come from the initializer instead and each static_assert below
 // fails loudly the next time a Feature is added without extending every row.
 //                               Stats Trace Verfy Censu Probe Targt HiRes Cache Field Stabl Smaa  Ssaa  Aniso WMap  Logo  Movi  Typo  SysSv Promt PadRe Synth
-constexpr Support kAyesha[]  = { O,    O,    O,    O,    O,    O,    X,    X,    X,    X,    X,    O,    X,    X,    O,    O,    U,    U,    U,    O,    U };
-constexpr Support kEscha[]   = { U,    U,    U,    U,    U,    O,    U,    U,    U,    U,    O,    O,    O,    X,    O,    O,    X,    X,    U,    O,    X };
-constexpr Support kShallie[] = { U,    U,    U,    U,    U,    O,    U,    U,    U,    U,    O,    O,    O,    U,    O,    O,    X,    X,    O,    O,    X };
+constexpr Support kAyesha[]  = { O,    O,    O,    O,    O,    O,    X,    X,    X,    X,    X,    O,    X,    X,    O,    O,    U,    U,    U,    X,    U };
+constexpr Support kEscha[]   = { U,    U,    U,    U,    U,    O,    U,    U,    U,    U,    O,    O,    O,    X,    O,    O,    X,    X,    U,    X,    X };
+constexpr Support kShallie[] = { U,    U,    U,    U,    U,    O,    U,    U,    U,    U,    O,    O,    O,    U,    O,    O,    X,    X,    O,    X,    X };
 
 constexpr std::size_t kColumns = static_cast<std::size_t>(Feature::Count);
 static_assert(std::size(kAyesha) == kColumns,  "Ayesha row is not one entry per Feature");

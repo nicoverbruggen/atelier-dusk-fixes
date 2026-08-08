@@ -160,7 +160,7 @@ struct Capabilities {
 // consequence, and the window has to say which.
 //
 // All three games run the pass before the interface now. Ayesha has always had
-// a scene-target test; the KTGL games got their own moment on 2026-08-10 -- the
+// a scene-target test; the KTGL games got their own moment -- the
 // first draw into the surface the interface is about to be drawn into. The
 // column stays because the distinction is real and could return: a game whose
 // pre-UI moment cannot be identified falls back to Present over the finished

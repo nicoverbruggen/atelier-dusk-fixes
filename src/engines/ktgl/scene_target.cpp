@@ -6,7 +6,7 @@
 // bloom composite in `PostEffectGlow.kps`, identified by checksum. That anchor
 // works -- it is found in the process and binds once per frame, every frame, in
 // gameplay -- but a dump of its own render target taken immediately after its
-// draw on 2026-08-10 shows the entire interface already present: the date panel,
+// draw shows the entire interface already present: the date panel,
 // the area scroll, the button prompts. This engine draws its interface INTO the
 // scene and then runs the post chain over everything, so the composite is
 // post-UI and antialiasing there would soften the interface exactly like the
@@ -30,7 +30,7 @@
 //
 // THE DEPTH PREDICATE IS DELIBERATELY LOOSER THAN THE RECORD. The private
 // investigation record derives `0x48` exactly -- depth allocated readable. A
-// target census run on 2026-08-10 measured the only screen-sized depth at
+// target census run measured the only screen-sized depth at
 // `0x40`, no SHADER_RESOURCE. Those disagree, and the census is the weaker
 // evidence of the two because it only ever ran over the title screen, which has
 // no 3D scene at all. Requiring 0x48 on the strength of a static read that the
@@ -129,7 +129,7 @@ bool ktglSceneTargets(const D3D11_TEXTURE2D_DESC& color,
 
 // ---- the pre-UI anchor ----------------------------------------------------
 //
-// FOUND BY MAPPING A FRAME, on 2026-08-10, after eight narrower probes each
+// FOUND BY MAPPING A FRAME, after eight narrower probes each
 // answered a slightly different question. One gameplay frame looks like this:
 //
 //   T0 T1 T2  59 draws          shadow pass
@@ -243,7 +243,7 @@ void ktglPreUiNoteTargets(unsigned int numViews,
     // WHICH SURFACE THIS ACTUALLY IS, reported once per distinct size.
     //
     // The rule above is a size-and-format rule, and with supersampling on it
-    // matches more than one surface: an Escha run on 2026-08-08 alternated
+    // matches more than one surface: an Escha run alternated
     // between 3840x2160 and 2560x1440 several times a minute, reinitialising
     // the SMAA targets at every switch. A size rule cannot say which of the two
     // is the scene. The tags can -- one is set by the engine's own scene test,
@@ -304,7 +304,7 @@ void ktglPreUiAfterDraw(ID3D11DeviceContext* self) {
   // three reasons that placement is better. Running here as well does not
   // double the antialiasing, it ALTERNATES with it: both claim the same
   // once-per-frame latch, so whichever reaches it first wins that frame. An
-  // Escha run on 2026-08-08 flipped between 3840x2160 and 2560x1440 several
+  // Escha run flipped between 3840x2160 and 2560x1440 several
   // times a minute, reinitialising SMAA's targets at every switch.
   //
   // Engaged, not configured: supersampling that is switched on but never

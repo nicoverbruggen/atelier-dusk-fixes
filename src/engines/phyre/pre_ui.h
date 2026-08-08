@@ -39,7 +39,7 @@
 // size-and-format rule matches both halves of the ping-pong pair, so it fired
 // mid-chain. "The first draw into the back buffer" fired on whatever the engine
 // draws there before the composite: the log line printed and the picture was
-// unchanged, on a run on 2026-08-08.
+// unchanged.
 namespace atfix {
 
 // Called from the render-target bind, before it is forwarded. Fires the passes

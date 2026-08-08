@@ -381,7 +381,7 @@ bool sharpenApply(ID3D11DeviceContext* ctx, ID3D11Texture2D* target) {
       // here therefore told it the composite was no longer bound, so the
       // composite's viewport correction did not fire on the draw that followed
       // and the engine drew its 3840x2160 scene 1:1 into a 2560x1440 target --
-      // a cropped picture, in an Escha run on 2026-08-08. The pass has always
+      // a cropped picture, in an Escha run. The pass has always
       // done this; it only became visible once sharpening started running
       // inside the downscale, where the composite marker is live.
       d3d11SetRenderTargets(ctx, 1, &rtv, nullptr);

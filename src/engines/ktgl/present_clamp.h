@@ -12,7 +12,7 @@
 // A SECOND ROUTE TO A FEATURE THAT ALREADY WORKED, for the engine that has its
 // own. The Ayesha design substitutes the mod's own downscale at the composite's
 // sample, because that engine has no notion of rendering larger than it
-// presents. KTGL does have one, and a 2026-08-08 run proved half of it works
+// presents. KTGL does have one, and a run proved half of it works
 // with no code at all -- setting `Setting.ini` to 5120x2880 on a 2560x1440 panel
 // produced every full-frame target at 5120x2880, confirmed by the target census,
 // 21 targets across 12 shapes with the blur pyramid chaining down from it.

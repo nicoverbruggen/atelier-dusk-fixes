@@ -38,14 +38,29 @@
 // suppress the KTGL games' keyboard and third-device retries, which is why the
 // pad wrapper specifically is the target.
 //
-// NOT YET MEASURED, and deliberately OptIn because of it. The mechanism is
-// mapped in all six executables and matches the reported symptom -- periodic,
-// only while no pad is present, gone the instant one is found -- but nobody has
-// timed the call. `DUSK_PAD_RESCAN_PROBE=1` reports how long the real wrapper
-// takes and how often it runs, which is the measurement that decides whether
-// this should ship on at all. A periodic spike of 3 ms or more confirms it;
-// consistently under half a millisecond falsifies it and the stutter is
-// something else.
+// MEASURED ON AYESHA, and it ships ON as a result. The thresholds
+// this comment used to state -- a periodic spike of 3 ms confirms it, under half
+// a millisecond falsifies it -- were cleared by a wide margin on the first run,
+// with no controller connected and the fix off:
+//
+//   PADRESCAN calls=211 suppressed=0 total_us=732975 mean_us=3473
+//             worst_us=9383 fix=0
+//
+// 3.47 ms is the MEAN, not a rare spike, with a 9.38 ms worst case, 3.3 times a
+// second. On a 200 Hz swap chain a frame is 5 ms, so the average call eats 70%
+// of one and the worst blows through nearly two. The maintainer saw the tick in
+// the same run.
+//
+// The rate also settles something previously inferred: 3.3 calls per second at
+// 200 Hz is one per 60 frames, so the input update does run once per rendered
+// frame and the engine's own `cmp eax, 0x3c` gate is counting frames.
+//
+// It has no ini key. A correction is not a setting -- the same rule that gives
+// the travel-map cursor an environment switch and nothing else. `DUSK_PAD_RESCAN=0`
+// stands it down for a comparison, and `DUSK_PAD_RESCAN_PROBE=1` still reports.
+//
+// Arland shares the mechanism instruction-for-instruction, and this measurement
+// is the evidence its own item was waiting on.
 namespace atfix {
 
 // One executable's row: the critical-section-guarded pad-create wrapper, and the

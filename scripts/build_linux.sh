@@ -7,7 +7,7 @@
 #
 # The container (default "atfix-build", override with $ATFIX_CONTAINER) provides
 # the MinGW-w64 toolchain, meson and ninja, and is shared with the Arland
-# project -- see ../atelier-arland-fixes/BUILDING.md for how to create it.
+# project. It is Fedora with meson, ninja and mingw64-gcc-c++.
 # Optional first argument: the meson build type (default: release).
 #
 # The two targets exist because the split is in the games: all six Dusk
@@ -19,7 +19,7 @@ container="${ATFIX_CONTAINER:-atfix-build}"
 buildtype="${1:-release}"
 
 if ! podman container exists "$container"; then
-    echo "Container '$container' does not exist. See ../atelier-arland-fixes/BUILDING.md." >&2
+    echo "Container '$container' does not exist: it is Fedora with meson, ninja and mingw64-gcc-c++." >&2
     exit 1
 fi
 if [[ "$(podman inspect -f '{{.State.Running}}' "$container" 2>/dev/null)" != "true" ]]; then

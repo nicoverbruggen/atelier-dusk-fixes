@@ -31,7 +31,6 @@ These things were not part of the original games, but were added with the mod. T
 | Supersampling | ✓ | ✓ | ✓ |
 | Skip the startup logos | ✓ | ✓ | ✓ |
 | Skip the opening movie | ✓ | ✓ | ✓ |
-| Steady control hints | N.A. | N.A. | ✓ |
 
 ## Configuration
 

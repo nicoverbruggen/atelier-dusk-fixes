@@ -28,7 +28,7 @@ Multisampling is deliberately not offered. It cannot reach what actually aliases
 
 - **A settings launcher**, in place of Koei Tecmo's. Resolution, window mode, language, character outlines and every option above in one window, with the game's own settings editor and launcher still reachable from it. It can be skipped so that Play in Steam goes straight into the game.
 - **Skipping the startup logos and the opening movie**, in all three games. On Escha & Logy and Shallie this reaches the title screen about five seconds sooner; on Ayesha it does not, because there the logos play while the game loads.
-- **A steady control-hint panel** in Shallie, which otherwise replays its slide-in entrance every time the interface is rebuilt.
+- **A steady control-hint panel** in Shallie, which otherwise replays its slide-in entrance every time the interface is rebuilt. Off by default, and set in `dusk-fix.ini` rather than the launcher: it suppresses a shipped behaviour rather than correcting a defect.
 
 ### Scope
 

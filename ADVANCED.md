@@ -30,6 +30,14 @@ The game's own `Setting.ini` remains separate. Resolution, fullscreen mode, lang
 
 `DUSK_NO_REDIRECT=1` temporarily opens Koei Tecmo's original launcher instead of the custom one. The custom launcher's buttons set this only for the child process so they cannot redirect back to themselves.
 
+### `[Interface]`
+
+| Key | Values | Default | Effect |
+|---|---|---|---|
+| `SteadyControlPrompt` | `true` / `false` | `false` | Shallie only. Stops the on-screen control-hint panel replaying its slide-in entrance every time the interface is rebuilt. The panel still appears and disappears when it did; it arrives in one frame instead of sliding. |
+
+This is the one setting with no control in the launcher, and deliberately so: it suppresses a shipped behaviour rather than correcting a defect, which makes it a matter of taste. Edit the ini by hand, or set `DUSK_CONTROL_PROMPT=1` for one session. It has no effect on Ayesha or Escha & Logy, which have no equivalent panel.
+
 ## One-session A/B switches
 
 These are environment variables, not ini keys. They are for comparison and bug reports and should not be exported permanently by wrapper scripts.

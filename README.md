@@ -44,6 +44,21 @@ Two notes worth having:
 
 [ADVANCED.md](ADVANCED.md) documents the configuration files, the one-session diagnostic switches and troubleshooting. [TECHNICAL.md](TECHNICAL.md) describes how each fix works and why it takes the form it does.
 
+## Credits
+
+> [!NOTE]
+> I did the reverse engineering and integration behind this mod, using large language models from OpenAI and Anthropic throughout to analyze the games, develop the fixes, and bundle the improvements together. I believe that LLMs were used responsibly in this project.
+
+This mod is a spin-off of [atelier-arland-fixes](https://github.com/nicoverbruggen/atelier-arland-fixes), which is where its architecture comes from. It was inspired by, and consulted, prior work by:
+
+- Philip Rebohle's [`atelier-sync-fix`](https://github.com/doitsujin/atelier-sync-fix)
+- TellowKrinkle's [`atelier-sync-fix` fork](https://github.com/TellowKrinkle/atelier-sync-fix)
+- Yuri Hime's [Atelier Graphics Tweak](https://steamcommunity.com/app/1152300/discussions/0/3345546664208090238/)
+
+The bundled SMAA anti-aliasing is by Jorge Jimenez, Jose I. Echevarria, Belen Masia, Fernando Navarro, and Diego Gutierrez ([SMAA](https://github.com/iryoku/smaa), MIT), vendored unchanged. The sharpening pass implements AMD's [FidelityFX Contrast Adaptive Sharpening](https://gpuopen.com/fidelityfx-cas/). [MinHook](https://github.com/TsudaKageyu/minhook) is by Tsuda Kageyu and contributors.
+
+See [TECHNICAL.md](TECHNICAL.md) for the full implementation details and the evidence behind them.
+
 ## License
 
 See [LICENSE](LICENSE) for the MIT and zlib license terms applying to the respective source files. 

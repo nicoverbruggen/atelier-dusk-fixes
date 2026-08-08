@@ -16,7 +16,6 @@ These are enabled by default, as they are crucial fixes.
 | Fixed some typos | N.A. | ✓ | ✓ |
 | Black instead of grey startup screen | ✓ | — | — |
 | Critical data loss fix | N.A. | ✓ | ✓ |
-| Various bug fixes | — | — | ✓ |
 
 ### Enhancements
 
@@ -28,13 +27,7 @@ These things were not part of the original games, but were added with the mod. T
 | Supersampling | ✓ | ✓ | ✓ |
 | Skip the startup logos | ✓ | — | — |
 | Skip the opening movie | ✓ | — | — |
-| Improved combat shadows | — | — | — |
-| Borderless fullscreen | — | — | — |
-| High-resolution fonts | — | — | — |
-
-## Before v1
-
-This repository is pre-release and still needs housekeeping before the first tagged version: a pass over the commit history, the working files, and anything that accumulated during development but does not belong in a published release. Treat the current tree as a development snapshot rather than a release candidate.
+| Steady control hints | N.A. | N.A. | ✓ |
 
 ## License
 

@@ -2,6 +2,8 @@
 
 Performance and rendering fixes for the Steam releases of **Atelier Ayesha DX, Atelier Escha & Logy DX, and Atelier Shallie DX**, the Dusk trilogy.
 
+For the Arland trilogy games, please see [this repository instead](https://github.com/nicoverbruggen/atelier-arland-fixes).
+
 ### Fixes
 
 These are enabled by default, as they are crucial fixes.
@@ -11,12 +13,11 @@ These are enabled by default, as they are crucial fixes.
 | New launcher | ✓ | ✓ | ✓ |
 | Fixed menu performance | ✓ | N.A. | N.A. |
 | Fixed high-resolution 3D rendering | ✓ | N.A. | N.A. |
-| Fixed frame-rate dependent movement | ✓ | — | — |
-| Fixed frame-rate dependent animations | — | ✓ | ✓ |
+| Fixed frame-rate dependent logic | ✓ | ✓ | ✓ |
 | Fixed some typos | N.A. | ✓ | ✓ |
-| Black instead of grey startup screen | ✓ | — | — |
 | Critical data loss fix | N.A. | ✓ | ✓ |
 | Local crash logging | ✓ | ✓ | ✓ |
+| Various small bug fixes | ✓ | ✓ | ✓ |
 
 If the game crashes, the mod appends a report to `dusk-fix.log` that helps pinpoint the cause. Include that file and your settings when reporting the problem, since these logs are never sent anywhere.
 
@@ -45,4 +46,6 @@ Two notes worth having:
 
 ## License
 
-See [LICENSE](LICENSE) for the MIT and zlib license terms applying to the respective source files.
+See [LICENSE](LICENSE) for the MIT and zlib license terms applying to the respective source files. 
+
+Since Ayesha's game engine is quite similar, see [arland-atelier-fix](https://github.com/nicoverbruggen/atelier-arland-fixes) for a version compatible with the Arland games, as this mod is a spin-off of the Arland trilogy one.

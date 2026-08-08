@@ -1087,6 +1087,14 @@ bool installAtlasHooks(BYTE* base, const PhyreGame& game) {
 
 namespace dusk {
 
+// Repeated from the anonymous namespace above on purpose, and not redundant.
+// MSVC's <cmath> declares ::log, so at any scope that reaches global scope the
+// name is ambiguous between it and atfix::log. Inside the anonymous namespace
+// the using-declaration there wins before lookup gets that far; out here it does
+// not, so this namespace needs its own. MinGW does not declare ::log the same
+// way, which is why the local cross-build compiles this file and CI does not.
+using atfix::log;
+
 bool installAtlasFix(BYTE* base, const PhyreGame& game, bool cache, bool stats,
                      bool trace, bool verify, bool census) {
   const bool ok = installAtlasHooks(base, game);

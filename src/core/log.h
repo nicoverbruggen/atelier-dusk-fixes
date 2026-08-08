@@ -47,4 +47,30 @@ private:
 
 };
 
-}
+// The process-wide log, defined in main.cpp.
+extern Log log;
+
+}  // namespace atfix
+
+namespace dusk {
+
+// WHY A USING-DECLARATION SITS IN THIS HEADER, and it is not a style choice.
+//
+// MSVC's <cmath> declares ::log at global scope. The engine modules also bring
+// atfix::log into global scope, by putting `using atfix::log;` in an anonymous
+// namespace that sits outside namespace atfix. Both names are then at global
+// scope, so an unqualified log(...) written inside namespace dusk walks out of
+// dusk, reaches global scope, and finds two candidates: error C2872, 'log':
+// ambiguous symbol.
+//
+// MinGW does not declare ::log the same way, so the local build stays green and
+// the break only appears on the Windows CI job. It has now cost two rounds of
+// that -- once in phyre/atlas_fix.cpp, once in phyre/phyre.cpp -- and a per-file
+// `using` fixes only the file someone remembered.
+//
+// This declaration makes the name a member of dusk itself, so lookup stops here
+// and never reaches the ambiguous scope. Every engine file is covered, because a
+// file that calls log() includes this header to get it.
+using atfix::log;
+
+}  // namespace dusk

@@ -130,7 +130,6 @@ struct Capabilities {
   bool supersampling;   // [Rendering] Supersampling
   bool ssaaScalesGameIni;  // ...by multiplying the game's own resolution?
   bool smaa;            // [Rendering] SMAA
-  bool smaaPreUi;       // ...and does it run before the interface is drawn?
   bool skipLogos;       // [Startup] SkipLogos
   bool skipMovie;       // [Startup] SkipIntroMovie
   // Whether skipping the logos actually saves time, which differs by engine and
@@ -156,20 +155,21 @@ struct Capabilities {
 // chain back down to. Same two controls on screen, same key names as the Arland
 // launcher, opposite plumbing underneath.
 
-// `smaaPreUi` is not a second setting. It is the same checkbox with a different
-// consequence, and the window has to say which.
+// SMAA RUNS BEFORE THE INTERFACE IN ALL THREE. Ayesha has always had a
+// scene-target test; the KTGL games got their own moment, the first draw into
+// the surface the interface is about to be drawn into. There was a `smaaPreUi`
+// column here for as long as that was untrue of two of them, and the window
+// said different things depending on it. It is gone: a column every row agrees
+// on is not a capability, and the branch it fed could never be reached.
 //
-// All three games run the pass before the interface now. Ayesha has always had
-// a scene-target test; the KTGL games got their own moment -- the
-// first draw into the surface the interface is about to be drawn into. The
-// column stays because the distinction is real and could return: a game whose
-// pre-UI moment cannot be identified falls back to Present over the finished
-// frame, and the window must not promise sharp menus there.
+// If a fourth game ever arrives whose pre-UI moment cannot be identified, SMAA
+// falls back to running at Present over the finished frame, and the note below
+// would have to say so again.
 const Capabilities kCapabilities[kGameCount] = {
-  //             Ssaa   ScalesIni  Smaa  PreUI  Logos  Movie  LogoTime
-  /* Ayesha  */ { true,  false,     true,  true,  true,  true,  false },
-  /* Escha   */ { true,  true,      true,  true,  true,  true,  true  },
-  /* Shallie */ { true,  true,      true,  true,  true,  true,  true  },
+  //             Ssaa   ScalesIni  Smaa  Logos  Movie  LogoTime
+  /* Ayesha  */ { true,  false,     true, true,  true,  false },
+  /* Escha   */ { true,  true,      true, true,  true,  true  },
+  /* Shallie */ { true,  true,      true, true,  true,  true  },
 };
 
 char g_iniPath[MAX_PATH] = {};       // dusk-fix.ini, in the game folder
@@ -181,7 +181,7 @@ int g_game = -1;                     // index into kGames, -1 when none found
 
 Capabilities capabilities() {
   if (g_game < 0 || g_game >= kGameCount)
-    return Capabilities{ false, false, false, false, false, false, false };
+    return Capabilities{ false, false, false, false, false, false };
   return kCapabilities[g_game];
 }
 
@@ -1196,11 +1196,9 @@ SaveOutcome saveToIni() {
   // on the other side of the ini.
   if (capabilities().smaa) {
     iniWriteBool(g_iniPath, "Rendering", "SMAA", isChecked(g_hSmaa));
-    if (g_hSharpen) {
-      char value[16] = {};
+    if (g_hSharpen)
       iniWrite("Rendering", "Sharpen",
         comboValue(g_hSharpen, kSharpenItems, kSharpenCount), g_iniPath);
-    }
   }
   if (capabilities().supersampling)
     iniWrite("Rendering", "Supersampling",
@@ -1937,27 +1935,25 @@ void createControls(HWND w) {
     g_hLang = mkCombo(w, 0, 0, 10, IDC_LANG);
     comboFill(g_hLang, kLangItems, kLangCount);
     page.row(L"Language:", g_hLang,
-      L"Written to the game's own settings, and decides which of the game's "
-      L"two executables starts.");
+      L"What language you would like to play the game in. "
+      L"Decides which executable is started.");
 
     g_hRes = mkCombo(w, 0, 0, 10, IDC_RES);
     page.row(L"Resolution:", g_hRes,
-      L"What reaches the screen. Written to the game's own settings, which is "
-      L"where this one lives.");
+      L"Output resolution. It's recommended to pick your screen resolution.");
 
     g_hWinMode = mkCombo(w, 0, 0, 10, IDC_WINMODE);
     comboFill(g_hWinMode, kWindowModeItems, kWindowModeCount);
     page.row(L"Window mode:", g_hWinMode,
-      L"Fullscreen takes over the display; windowed does not, so alt-tab is "
-      L"instant.");
+      L"Play the game in a window or in fullscreen mode.");
 
     // A statement of fact rather than a setting, so it spans the width.
     page.fullNote(runningUnderWine()
-      ? L"The game runs at your display's refresh rate, 120 Hz and 144 Hz "
-        L"included. The mod does not cap the frame rate, so a limit set by "
+      ? L"The game runs at your display's refresh rate. "
+        L"The mod does not cap the frame rate, so a limit set by "
         L"Steam or the compositor is respected."
-      : L"The game runs at your display's refresh rate, 120 Hz and 144 Hz "
-        L"included. The mod does not cap the frame rate.");
+      : L"The game runs at your display's refresh rate. "
+        L"The mod does not cap the frame rate.");
 
     // [Startup]. The two halves stay gated separately even though all three
     // games now support both: the gating is what keeps a game that loses one
@@ -2004,8 +2000,8 @@ void createControls(HWND w) {
     if (caps.supersampling) {
       g_hSsaa = mkCombo(w, 0, 0, 10, IDC_SSAA);
       page.row(L"Supersampling:", g_hSsaa,
-        L"Renders higher, then scales down. The sharpest, and the costliest. "
-        L"Limited to 8K.");
+        L"Increases the render resolution despite the chosen screen resolution. "
+        L"Limited to 8K, but gives you better image quality and less aliasing.");
 
       // The live readout under the supersampling row. Registered as a note so
       // it draws in the secondary colour, but it is not created by note(): its
@@ -2019,13 +2015,9 @@ void createControls(HWND w) {
 
     if (caps.smaa) {
       g_hSmaa = mkCheck(w, L"Edge smoothing", 0, 0, 10, IDC_SMAA);
-      page.checkRow(g_hSmaa, caps.smaaPreUi
-        ? L"Cheap, and smooths edges inside textures as well as along the "
-          L"edges of models. Runs before the interface is drawn, so menus and "
-          L"text are left sharp."
-        : L"Cheap, and smooths edges inside textures as well as along the "
-          L"edges of models. In this game it runs over the finished picture, "
-          L"so menu text is softened too.");
+      page.checkRow(g_hSmaa,
+        L"Basic anti-aliasing. Use this if supersampling is too hard to run. "
+        L"Runs before the interface is drawn, so menus and text stay sharp.");
 
       // Under edge smoothing because that is what it pairs with, not because
       // it depends on it: the two run at the same moment and either works
@@ -2033,15 +2025,13 @@ void createControls(HWND w) {
       g_hSharpen = mkCombo(w, 0, 0, 10, IDC_SHARPEN);
       comboFill(g_hSharpen, kSharpenItems, kSharpenCount);
       page.row(L"Sharpening:", g_hSharpen,
-        L"Sharpens the scene, which edge smoothing softens a little. Works on "
-        L"its own too. Runs before the interface, so menus and text are left "
-        L"alone.");
+        L"Sharpens the scene. Good with edge smoothing and supersampling.");
     }
 
     // The game's own, and present in all three titles' Setting.ini.
     g_hOutline = mkCheck(w, L"Character outlines", 0, 0, 10, IDC_OUTLINE);
     page.checkRow(g_hOutline,
-      L"The game's own outline rendering. On as it shipped.");
+      L"The game's own outline rendering. Turn it off at higher resolutions.");
 
     // Said plainly rather than left as a gap. Supersampling needs the engine to
     // render the scene larger than it displays it, and on this renderer nothing

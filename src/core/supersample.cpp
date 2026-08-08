@@ -194,6 +194,8 @@ std::atomic<uint64_t> g_downscales{0};
 std::atomic<uint64_t> g_passFailures{0};
 std::atomic<uint64_t> g_backBufferRetags{0};
 std::atomic<bool> g_backBufferKnown{false};
+std::atomic<UINT> g_backWidth{0};
+std::atomic<UINT> g_backHeight{0};
 
 // The pass's own re-entry guard.
 //
@@ -559,7 +561,17 @@ bool ensureSmall(ID3D11Device* device, UINT width, UINT height,
   td.SampleDesc.Count = 1;
   td.Usage = D3D11_USAGE_DEFAULT;
   td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-  if (FAILED(device->CreateTexture2D(&td, nullptr, &g_small)) ||
+  // THROUGH THE ORIGINAL, never the hooked device. The high-resolution fix
+  // rewrites any 1920x1080 target it sees into the scene size, because that is
+  // the size the engine hard-codes its auxiliary targets at. This texture is the
+  // mod's own, and at a display resolution of exactly 1920x1080 it is
+  // indistinguishable from one of those -- so routing it through the hook had it
+  // silently allocated at the scene size, and the downscale then wrote a
+  // 1920x1080 image into the corner of a 2880x1620 texture the composite sampled
+  // whole. That is the same rule the project already applies to context calls:
+  // the mod's own D3D11 work must not travel through the mod's own hooks.
+  if (FAILED(d3d11DeviceOriginals().createTexture2D(
+          device, &td, nullptr, &g_small)) ||
       FAILED(device->CreateRenderTargetView(g_small, nullptr, &g_smallRTV)) ||
       FAILED(device->CreateShaderResourceView(g_small, nullptr, &g_smallSRV))) {
     release(g_smallSRV); release(g_smallRTV); release(g_small);
@@ -780,11 +792,18 @@ void ssaaNoteBackBuffer(IDXGISwapChain* swapChain) {
     return;
   }
   setMarker(back, IID_DuskBackBuffer);
-  if (!g_backBufferKnown.exchange(true, std::memory_order_relaxed)) {
+  {
+    // Kept, not just logged. This is the only place the mod learns the size of
+    // the thing it is ultimately drawing into, as opposed to the size the game
+    // believes it is rendering at, and windowed mode is where those two come
+    // apart. The Arland project reads the same descriptor for the same reason.
     D3D11_TEXTURE2D_DESC desc = {};
     back->GetDesc(&desc);
-    log("SSAA: back buffer identified ", std::dec, desc.Width, "x", desc.Height,
-        " format=", uint32_t(desc.Format));
+    g_backWidth.store(desc.Width, std::memory_order_relaxed);
+    g_backHeight.store(desc.Height, std::memory_order_relaxed);
+    if (!g_backBufferKnown.exchange(true, std::memory_order_relaxed))
+      log("SSAA: back buffer identified ", std::dec, desc.Width, "x",
+          desc.Height, " format=", uint32_t(desc.Format));
   }
   back->Release();
 }
@@ -1064,20 +1083,84 @@ void ssaaCorrectCompositeViewport(ID3D11DeviceContext* context) {
   // viewport instead would be wrong in the obvious way: the scene genuinely is
   // 3840x2160 and its own passes need a viewport that size. This fires only
   // while the swap chain's back buffer is the bound colour target.
-  if (!ssaaPresentClampEnabled() || !context)
+  if (!ssaaActive() || !context)
     return;
   if (!hasMarker(context, IID_DuskSsaaComposite))
     return;
+
+  // WHERE THE DESTINATION SIZE COMES FROM, and the two routes disagree for a
+  // reason. On the clamp route the back buffer has been resized behind the
+  // engine's back, so the ini's display size is the authority. Elsewhere the
+  // authority is the back buffer itself, read from its own descriptor when it
+  // was identified -- because the size the game believes it is rendering at is
+  // exactly what is wrong in windowed mode.
   unsigned int destWidth = 0, destHeight = 0;
-  if (!displaySize(&destWidth, &destHeight))
-    return;
+  if (ssaaPresentClampEnabled()) {
+    // The clamp route resized the back buffer behind the engine's back, so the
+    // ini's display size is the authority and the target's own size is not.
+    if (!displaySize(&destWidth, &destHeight))
+      return;
+  } else {
+    // ASK THE TARGET THAT IS ACTUALLY BOUND, every time. A size cached when the
+    // swap chain was created is wrong the moment anything resizes the buffers,
+    // and reading it once is what put Ayesha's gameplay in the top-left corner
+    // of its own window: the composite was clamped to the size the back buffer
+    // had at startup while the buffer itself had since grown.
+    ID3D11RenderTargetView* rtv = nullptr;
+    context->OMGetRenderTargets(1, &rtv, nullptr);
+    if (!rtv) {
+      static std::atomic<bool> warned{false};
+      if (!warned.exchange(true, std::memory_order_relaxed))
+        log("SSAA: the composite draw has no colour target bound, so the"
+            " viewport cannot be checked against it");
+      return;
+    }
+    ID3D11Resource* resource = nullptr;
+    rtv->GetResource(&resource);
+    rtv->Release();
+    if (!resource)
+      return;
+    ID3D11Texture2D* texture = nullptr;
+    if (SUCCEEDED(resource->QueryInterface(IID_ID3D11Texture2D,
+                                           reinterpret_cast<void**>(&texture)))
+        && texture) {
+      D3D11_TEXTURE2D_DESC desc = {};
+      texture->GetDesc(&desc);
+      destWidth = desc.Width;
+      destHeight = desc.Height;
+      texture->Release();
+    }
+    resource->Release();
+    if (!destWidth || !destHeight)
+      return;
+  }
 
   UINT count = 1;
   D3D11_VIEWPORT viewport = {};
   context->RSGetViewports(&count, &viewport);
   if (!count)
     return;
-  if (viewport.Width <= float(destWidth) && viewport.Height <= float(destHeight))
+  // Exact match rather than "not too big". The clamp route only ever sees a
+  // viewport that is too LARGE, and a `<=` test was right for it. Ayesha
+  // windowed shows the opposite: the composite is handed a viewport smaller
+  // than the back buffer and the rest of the window is never painted. One test
+  // covers both, and a viewport that is already correct still costs nothing.
+  const float observedWidth = viewport.Width;
+  const float observedHeight = viewport.Height;
+  // Printed on the first composite draw whatever happens next, including when
+  // nothing needs correcting. Two builds in a row have now turned on a guess
+  // about what these three numbers are, so they get stated instead.
+  {
+    static std::atomic<bool> stated{false};
+    if (!stated.exchange(true, std::memory_order_relaxed))
+      log("SSAA: first composite draw -- target ", std::dec, destWidth, "x",
+          destHeight, ", viewport ", unsigned(observedWidth), "x",
+          unsigned(observedHeight), " at ", int(viewport.TopLeftX), ",",
+          int(viewport.TopLeftY));
+  }
+  if (viewport.Width == float(destWidth) &&
+      viewport.Height == float(destHeight) &&
+      viewport.TopLeftX == 0.0f && viewport.TopLeftY == 0.0f)
     return;
 
   viewport.Width = float(destWidth);
@@ -1092,9 +1175,69 @@ void ssaaCorrectCompositeViewport(ID3D11DeviceContext* context) {
 
   static std::atomic<bool> announced{false};
   if (!announced.exchange(true, std::memory_order_relaxed))
-    log("SSAA: composite viewport corrected to ", std::dec, destWidth, "x",
-        destHeight, " (the engine had it at the render size, which drew the"
-        " scene cropped rather than scaled)");
+    log("SSAA: composite viewport corrected from ", std::dec,
+        unsigned(observedWidth), "x", unsigned(observedHeight), " to ",
+        destWidth, "x", destHeight,
+        observedWidth > float(destWidth) || observedHeight > float(destHeight)
+          ? " (the engine had it at the render size, which drew the scene"
+            " cropped rather than scaled)"
+          : " (the engine had it smaller than the back buffer, which left part"
+            " of the window unpainted)");
+}
+
+void ssaaFitOutputWindow(const DXGI_SWAP_CHAIN_DESC* desc) {
+  if (!ssaaActive() || !desc || !desc->OutputWindow)
+    return;
+
+  // Reported on BOTH routes and before anything is decided, because "the window
+  // is not the size of the back buffer" is the one fact that separates a
+  // composite drawn wrongly from a window that was never the right size, and
+  // guessing between those two has already cost a round trip.
+  RECT observed = {};
+  if (GetClientRect(desc->OutputWindow, &observed)) {
+    static std::atomic<bool> reported{false};
+    if (!reported.exchange(true, std::memory_order_relaxed))
+      log("SSAA: output window client area ", std::dec,
+          observed.right - observed.left, "x", observed.bottom - observed.top,
+          ", back buffer ", desc->BufferDesc.Width, "x",
+          desc->BufferDesc.Height,
+          desc->Windowed ? " (windowed)" : " (fullscreen)");
+  }
+
+  if (!ssaaPresentClampEnabled() || !desc->Windowed)
+    return;
+  const UINT clientWidth = desc->BufferDesc.Width;
+  const UINT clientHeight = desc->BufferDesc.Height;
+  if (!clientWidth || !clientHeight)
+    return;
+
+  RECT client = {};
+  if (GetClientRect(desc->OutputWindow, &client) &&
+      client.right - client.left == LONG(clientWidth) &&
+      client.bottom - client.top == LONG(clientHeight))
+    return;
+
+  // The window has to end up with this CLIENT area, so the frame is measured
+  // rather than assumed: a border and caption are not the same width on every
+  // theme, and getting it wrong here would trade one wrong window size for
+  // another.
+  RECT want = { 0, 0, LONG(clientWidth), LONG(clientHeight) };
+  const LONG style = GetWindowLongA(desc->OutputWindow, GWL_STYLE);
+  const LONG exStyle = GetWindowLongA(desc->OutputWindow, GWL_EXSTYLE);
+  if (!AdjustWindowRectEx(&want, DWORD(style), FALSE, DWORD(exStyle)))
+    return;
+
+  // Size only. The game placed the window where it wanted it, and moving it is
+  // not this fix's business.
+  SetWindowPos(desc->OutputWindow, nullptr, 0, 0, want.right - want.left,
+               want.bottom - want.top,
+               SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+
+  static std::atomic<bool> logged{false};
+  if (!logged.exchange(true, std::memory_order_relaxed))
+    log("SSAA present clamp: output window resized to a ", std::dec,
+        clientWidth, "x", clientHeight, " client area (the engine had sized it"
+        " from the render resolution in its own ini)");
 }
 
 void ssaaClampPresentSize(UINT* width, UINT* height, const char* where) {

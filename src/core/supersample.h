@@ -229,6 +229,20 @@ bool ssaaActive();
 // site for the log, which reports each distinct clamp once.
 void ssaaClampPresentSize(UINT* width, UINT* height, const char* where);
 
+// Resize a windowed swap chain's output window so its client area matches the
+// clamped back buffer.
+//
+// Only the KTGL route needs this, and only windowed. Supersampling there works
+// by writing the game's own ini at base x factor so the engine renders
+// everything larger, then clamping the swap chain back down. The engine also
+// sizes its WINDOW from that ini, so at 150% the player gets a 2880x1620 window
+// containing a 1920x1080 image. Fullscreen hides it because the display mode
+// decides the size instead; windowed does not.
+//
+// Does nothing when the description is fullscreen, when the clamp route is off,
+// or when the window already has the right client area.
+void ssaaFitOutputWindow(const DXGI_SWAP_CHAIN_DESC* desc);
+
 // Called at Present. Counters, the periodic line, and the one-shot lines that
 // name the states in which this feature is configured and doing nothing.
 //

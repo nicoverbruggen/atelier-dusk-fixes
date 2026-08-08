@@ -232,6 +232,10 @@ HRESULT STDMETHODCALLTYPE hookedCreateSwapChain(
     noteSwapChainSize(desc->BufferDesc.Width, desc->BufferDesc.Height,
       desc->BufferDesc.Format, desc->BufferDesc.RefreshRate.Numerator,
       desc->BufferDesc.RefreshRate.Denominator, desc->Windowed != FALSE);
+  // After the call: the engine has created its window by now, and the desc
+  // carries the clamped size the window should match.
+  if (SUCCEEDED(result))
+    ssaaFitOutputWindow(desc);
   if (SUCCEEDED(result) && swapChain && *swapChain) {
     // Tag the back buffer. This is supersampling's identity anchor: the bind
     // whose colour target carries this tag is the composite, which is the one

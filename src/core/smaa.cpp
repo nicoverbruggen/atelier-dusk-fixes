@@ -462,7 +462,11 @@ bool initSized(ID3D11Device* dev, UINT w, UINT h, DXGI_FORMAT fmt) {
     td.Width = w; td.Height = h; td.MipLevels = 1; td.ArraySize = 1;
     td.Format = format; td.SampleDesc.Count = 1;
     td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = bind;
-    if (FAILED(dev->CreateTexture2D(&td, nullptr, tex))) return false;
+    // Through the original: see the same call in supersample.cpp. A pass
+    // target that happens to be 1920x1080 would otherwise be rewritten to
+    // the scene size by the high-resolution fix.
+    if (FAILED(d3d11DeviceOriginals().createTexture2D(dev, &td, nullptr, tex)))
+      return false;
     if (srv && FAILED(dev->CreateShaderResourceView(*tex, nullptr, srv)))
       return false;
     if (rtv && FAILED(dev->CreateRenderTargetView(*tex, nullptr, rtv)))

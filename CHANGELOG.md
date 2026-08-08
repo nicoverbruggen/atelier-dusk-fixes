@@ -13,7 +13,7 @@ The first release. This is what the mod does, rather than a list of changes: the
 - **Synthesis animation speed in Escha & Logy and Shallie.** The product-card animation advances once per drawn frame, so above 60 fps it runs fast: about 3.3 times too fast at 200 Hz. It now advances at the rate it was authored for.
 - **Save data protection in Escha & Logy and Shallie.** A failed load of the system save reports success, installs blank data over the live settings, and the next settings change writes that back over the file. The mod refuses to save system data until a load genuinely succeeds.
 - **"Loadning system data." in Escha & Logy and Shallie.** The English status line on the games' first screen misspells "Loading".
-- **A black startup screen in Ayesha.** The window is filled with mid-grey for about a second before the first frame arrives. Black is what the game fades up from.
+- **A black startup screen, in all three games.** The window is filled with a flat colour for about a second before the first frame arrives — mid-grey in Ayesha, white in Escha & Logy and Shallie. Black is what the games fade up from.
 
 ### Graphics options
 

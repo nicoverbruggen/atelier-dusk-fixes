@@ -38,6 +38,8 @@ Escha & Logy and Shallie do not have this defect. Both size the swap chain and e
 
 Shallie is not corrected, and that is the evidence rather than an omission: the same function there takes the frame delta as a parameter and multiplies by it, while Escha's takes no float parameter at all. Reading both executables is what established the defect. `DUSK_WORLDMAP=0` stands the correction down; `DUSK_WORLDMAP_PROBE=1` logs measured units per second, which should scale with refresh rate before the correction and not after it.
 
+**The startup screen** is a flat fill for about a second before the first frame arrives, and the mod replaces the brush at the moment the game registers its window class. Two rows cover the trilogy: Ayesha registers `KTGL.A11` with the grey stock brush, and Escha & Logy and Shallie register `ElixirFramework` with the white one. A class is rewritten only when both its name and its brush match a row, so the correction stands down by itself if a build ever stops doing it. `DUSK_WINDOW_CLASS_TRACE=1` names what a build actually registers.
+
 ## Antialiasing
 
 **Supersampling** is available in all three games and confirmed in game in each. It renders the scene above the display size and resamples it down with a box filter sized to the ratio, with sharpening folded into the same pass. Because the resample is the mod's own, fractional multipliers are usable; the ladder is 125%, 150%, 200%, 300%, and 400%. It is opt-in everywhere: 200% is four times the shaded pixels.

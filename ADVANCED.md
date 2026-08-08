@@ -44,6 +44,7 @@ These are environment variables, not ini keys. They are for comparison and bug r
 | `DUSK_LOADING_TEXT=0` | Leaves the "Loadning system data." misspelling on Escha & Logy's and Shallie's first screen uncorrected. |
 | `DUSK_WORLDMAP=0` | Disables the travel-map cursor correction in Ayesha and Escha & Logy. |
 | `DUSK_WORLDMAP_PROBE=1` | Logs the travel-map cursor's measured units per second, before and after correction. Raw should scale with refresh rate; applied should not. |
+| `DUSK_WINDOW_CLASS_TRACE=1` | Names every window class the game registers, with its background brush. For finding why the startup-screen correction declines on a build. |
 | `DUSK_SKIP_LOGOS=1` | Skips the startup logos for one session, without setting the ini key. |
 | `DUSK_SKIP_INTRO_MOVIE=1` | Skips the opening movie for one session, without setting the ini key. |
 | `DUSK_SMAA=0` / `=1` | The SMAA pass. |

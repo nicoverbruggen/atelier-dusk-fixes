@@ -88,6 +88,21 @@ struct KtglGame {
   // -- the -1 is what crashed the first attempt. Escha keeps it at 0xc0 and
   // Shallie at 0x40.
   uint32_t ipuHideOffset;
+
+  // WinParts::update, the shared update for the six WinParts* UI classes, and
+  // the two offsets the trace reads through it: the node at `this+0x10`, and
+  // that node's translation in the 1920x1080 interface canvas.
+  //
+  // The translate offset differs between the games and is not a guess: it is the
+  // field each game's own transform composer reads back. Escha keeps it at 0xd8
+  // and Shallie at 0xe0.
+  //
+  // Zero on both multilingual builds -- the addresses were derived on the
+  // English executables only and nobody has run the homolog for the others.
+  uintptr_t winPartsUpdateRva;
+  uint32_t winPartsNodeOffset;
+  uint32_t winPartsTranslateOffset;
+
   uint8_t exeBuild;
 };
 

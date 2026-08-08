@@ -17,6 +17,7 @@
 #include "logo_skip.h"
 #include "movie_skip.h"
 #include "system_save_fix.h"
+#include "win_parts_trace.h"
 #include "window_size.h"
 #include "../../core/game.h"
 #include "../../core/mix_card.h"
@@ -60,6 +61,7 @@ constexpr KtglGame kGames[] = {
     0x32bca0, 0x50cc90, 0x32c2c0,
     0x299e90, 0x8f3d00, 0xff,
     0x167130, 0x330, 0x358, 0x299e60, 0xc0,
+    0x370130, 0x10, 0xd8,
     BuildEnglish },
   { "Atelier_Escha_and_Logy.exe",    0x73739c, 0x85e978,
     0x13fa60, 0x13f6e0, 0, 0, 0x5f1b70,
@@ -68,6 +70,7 @@ constexpr KtglGame kGames[] = {
     0x34bcf0, 0x52e1c0, 0x34c380,
     0x2b7430, 0xabd690, 0xff,
     0x16ed00, 0x330, 0x358, 0x2b7400, 0xc0,
+    0, 0, 0,
     BuildMultilingual },
   { "Atelier_Shallie_EN.exe",        0x6bca4c, 0x76f320,
     0x0c2670, 0x0c28d0, 0x48da0, 0x49550, 0x5d5170,
@@ -76,6 +79,7 @@ constexpr KtglGame kGames[] = {
     0x341b60, 0x58b6c0, 0x228ed0,
     0x1d2440, 0x85b060, 0xb4,
     0x2915a0, 0x7c0, 0x7c8, 0x1d2410, 0x40,
+    0x298eb0, 0x10, 0xe0,
     BuildEnglish },
   { "Atelier_Shallie.exe",           0x6ff53c, 0x7c89c0,
     0x0c3ec0, 0x0c4120, 0x48b80, 0x49330, 0x617b60,
@@ -84,6 +88,7 @@ constexpr KtglGame kGames[] = {
     0x383220, 0x5ce060, 0x265bc0,
     0x20cd70, 0x920650, 0xb4,
     0x2cffa0, 0x7c0, 0x7c8, 0x20cd40, 0x40,
+    0, 0, 0,
     BuildMultilingual },
 };
 
@@ -155,6 +160,7 @@ bool initializeKtglFixes() {
     // Diagnostic, off unless DUSK_IPU_TRACE is set. Last, because it
     // observes and the fixes above act.
     installIpuTrace(id.base, *game);
+    installWinPartsTrace(id.base, *game);
     // The pad rescan is engine-agnostic machinery with a per-executable address,
     // so core owns the mechanism and this module supplies the row. See
     // core/pad_rescan.h; the prologue is displacement-free for twelve bytes and

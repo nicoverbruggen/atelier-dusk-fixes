@@ -26,6 +26,7 @@
 #include "highres.h"
 #include "sampler.h"
 #include "smaa.h"
+#include "frame_capture.h"
 #include "supersample.h"
 #include "supersample_policy.h"
 #include "util.h"
@@ -129,6 +130,7 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* swapChain,
   // absence of one here is this design's safety argument rather than an
   // optimisation. See supersample.h.
   ssaaFrameTick(swapChain);
+  frameCaptureTick(swapChain);
   samplerReport();
   // Last thing before the frame is handed over: SMAA runs over the finished
   // image, so everything the game drew this frame has to be in it already.

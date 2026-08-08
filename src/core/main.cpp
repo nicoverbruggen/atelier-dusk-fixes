@@ -25,8 +25,13 @@
 #include "d3d11_hooks.h"
 #include "highres.h"
 #include "sampler.h"
+#include "frame_map.h"
+#include "../engines/ktgl/scene_target.h"
+#include "scene_pass.h"
+#include "sharpen.h"
 #include "smaa.h"
 #include "frame_capture.h"
+#include "../engines/ktgl/glow_anchor.h"
 #include "supersample.h"
 #include "supersample_policy.h"
 #include "util.h"
@@ -131,6 +136,11 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* swapChain,
   // optimisation. See supersample.h.
   ssaaFrameTick(swapChain);
   frameCaptureTick(swapChain);
+  glowTraceFrameTick();
+  scenePassFrameTick();
+  frameMapFrameTick();
+  ktglPreUiFrameTick();
+  sharpenPreload();
   samplerReport();
   // Last thing before the frame is handed over: SMAA runs over the finished
   // image, so everything the game drew this frame has to be in it already.

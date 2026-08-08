@@ -36,18 +36,46 @@ extern Log log;   // main.cpp
 namespace {
 
 std::atomic<uint64_t> frame{0};
-std::atomic<bool> done{false};
 
-// Which frame to write, from the switch. Zero means the feature is off.
-uint64_t captureFrame() {
-  static const uint64_t n = [] () -> uint64_t {
-    const char* env = std::getenv("DUSK_FRAME_CAPTURE");
-    if (!env || !env[0])
-      return 0;
-    const long long value = std::atoll(env);
-    return value > 0 ? uint64_t(value) : 0;
-  }();
-  return n;
+// `DUSK_FRAME_CAPTURE` takes a comma-separated list, not just one frame, so a
+// scripted run can photograph itself at each step of an input sequence instead
+// of only at the end. Driving this game to gameplay unattended took several
+// tries precisely because a single shot at the end could not say WHERE the
+// sequence stalled.
+constexpr int kMaxFrames = 12;
+uint64_t g_frames[kMaxFrames] = {};
+int g_frameCount = 0;
+
+void parseFrames() {
+  static bool parsed = false;
+  if (parsed)
+    return;
+  parsed = true;
+  const char* env = std::getenv("DUSK_FRAME_CAPTURE");
+  if (!env || !env[0])
+    return;
+  const char* p = env;
+  while (*p && g_frameCount < kMaxFrames) {
+    const long long v = std::atoll(p);
+    if (v > 0)
+      g_frames[g_frameCount++] = uint64_t(v);
+    while (*p && *p != ',') ++p;
+    if (*p == ',') ++p;
+  }
+}
+
+// Which of the requested frames this is, or -1.
+int wantedIndex(uint64_t now) {
+  parseFrames();
+  for (int i = 0; i < g_frameCount; ++i)
+    if (g_frames[i] == now)
+      return i;
+  return -1;
+}
+
+bool anyFramesWanted() {
+  parseFrames();
+  return g_frameCount > 0;
 }
 
 uint32_t crcTable(uint32_t index) {
@@ -146,13 +174,75 @@ bool writePng(const std::string& path, unsigned int width, unsigned int height,
 
 }  // namespace
 
+// Dump one texture to `<name>.png`, staging and mapping on the IMMEDIATE
+// context whatever context asked.
+//
+// THE IMMEDIATE CONTEXT IS NOT A DETAIL. This engine records its frame on
+// deferred contexts, and D3D11_MAP_READ is illegal on one -- a trace that read
+// through the recording context earlier today failed 3499 times out of 3499 and
+// looked exactly like a hook that was never called.
+bool frameCaptureDumpTexture(ID3D11Texture2D* texture, const char* name) {
+  if (!texture || !name)
+    return false;
+  D3D11_TEXTURE2D_DESC desc = {};
+  texture->GetDesc(&desc);
+  if (!desc.Width || !desc.Height || desc.SampleDesc.Count != 1)
+    return false;
+
+  ID3D11Device* device = nullptr;
+  texture->GetDevice(&device);
+  ID3D11DeviceContext* immediate = nullptr;
+  if (device)
+    device->GetImmediateContext(&immediate);
+
+  D3D11_TEXTURE2D_DESC staged = desc;
+  staged.Usage = D3D11_USAGE_STAGING;
+  staged.BindFlags = 0;
+  staged.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+  staged.MiscFlags = 0;
+  ID3D11Texture2D* copy = nullptr;
+  bool ok = device && immediate &&
+            SUCCEEDED(createTexture2DUnhooked(device, &staged, nullptr, &copy)) &&
+            copy;
+
+  D3D11_MAPPED_SUBRESOURCE mapped = {};
+  if (ok) {
+    immediate->CopyResource(copy, texture);
+    ok = SUCCEEDED(immediate->Map(copy, 0, D3D11_MAP_READ, 0, &mapped));
+  }
+  if (ok) {
+    const bool bgr = desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM ||
+                     desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+    std::vector<uint8_t> rgb(size_t(desc.Width) * desc.Height * 3);
+    for (unsigned int y = 0; y < desc.Height; ++y) {
+      const uint8_t* src =
+        static_cast<const uint8_t*>(mapped.pData) + size_t(y) * mapped.RowPitch;
+      uint8_t* dst = rgb.data() + size_t(y) * desc.Width * 3;
+      for (unsigned int x = 0; x < desc.Width; ++x) {
+        dst[x * 3 + 0] = src[x * 4 + (bgr ? 2 : 0)];
+        dst[x * 3 + 1] = src[x * 4 + 1];
+        dst[x * 3 + 2] = src[x * 4 + (bgr ? 0 : 2)];
+      }
+    }
+    immediate->Unmap(copy, 0);
+    std::string path = std::string(name) + ".png";
+    ok = writePng(path, desc.Width, desc.Height, rgb);
+    log("CAPTURE: ", path.c_str(), " ", std::dec, desc.Width, "x", desc.Height,
+        " format=", unsigned(desc.Format), ok ? " written" : " FAILED");
+  }
+  if (copy) copy->Release();
+  if (immediate) immediate->Release();
+  if (device) device->Release();
+  return ok;
+}
+
 void frameCaptureTick(IDXGISwapChain* swapChain) {
-  const uint64_t want = captureFrame();
-  if (!want || !swapChain || done.load(std::memory_order_relaxed))
+  if (!anyFramesWanted() || !swapChain)
     return;
-  if (frame.fetch_add(1, std::memory_order_relaxed) + 1 != want)
+  const uint64_t now = frame.fetch_add(1, std::memory_order_relaxed) + 1;
+  if (wantedIndex(now) < 0)
     return;
-  done.store(true, std::memory_order_relaxed);
+  const uint64_t want = now;
 
   ID3D11Texture2D* back = nullptr;
   if (FAILED(swapChain->GetBuffer(0, IID_ID3D11Texture2D,

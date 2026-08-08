@@ -44,10 +44,15 @@ These are environment variables, not ini keys. They are for comparison and bug r
 | `DUSK_LOADING_TEXT=0` | Leaves the "Loadning system data." misspelling on Escha & Logy's and Shallie's first screen uncorrected. |
 | `DUSK_SKIP_LOGOS=1` | Skips the startup logos for one session, without setting the ini key. |
 | `DUSK_SKIP_INTRO_MOVIE=1` | Skips the opening movie for one session, without setting the ini key. |
-| `DUSK_SMAA=0` / `=1` | Ayesha's SMAA pass. |
+| `DUSK_SMAA=0` / `=1` | The SMAA pass. |
+| `DUSK_SHARPEN=<percent>` | Sharpening strength, 0 for off. Runs after edge smoothing, and on its own when that is off. |
 | `DUSK_SSAA=<percent>` | Ayesha's supersampling factor, 100 for off. |
 | `DUSK_ANISO=<level>` | Anisotropic filtering level: 2, 4, 8 or 16, anything else for off. |
-| `DUSK_IPU_TRACE=1` | Logs each distinct 2D image Escha & Logy or Shallie loads, with its file name and the address that asked for it. Changes nothing the game does. |
+| `DUSK_IPU_TRACE=1` | Logs each distinct 2D image Escha & Logy or Shallie loads, with its file name, its authored size, and the address that asked for it. Changes nothing the game does. |
+| `DUSK_FRAME_CAPTURE=<frames>` | Writes the back buffer to `dusk-frame-<n>.png` beside the log on each listed frame, with a checksum of the pixels. A comma-separated list is accepted. |
+| `DUSK_FRAME_MAP=<frame>` | Records one frame's whole structure — every render-target bind, shader bind and draw, in order — and writes a PNG of each full-screen colour surface it touched. |
+| `DUSK_FRAME_MAP_AT=<surface>:<draw>` | With the above, also copies that surface as it stood after the Nth draw of its bind. The copy is recorded in stream order, which is the only way to see a surface mid-frame on an engine that records on deferred contexts. |
+| `DUSK_GLOW_TRACE=1` | Identifies Escha & Logy's or Shallie's bloom composite by shader checksum and reports where it sits in the frame. Changes nothing. |
 
 Environment values are read before the ini layer. A wrapper that exports one of these variables, even with a default value, overrides the file and can make a validation run test the wrong configuration.
 

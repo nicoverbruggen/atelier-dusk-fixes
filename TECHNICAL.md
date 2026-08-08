@@ -6,7 +6,7 @@ This document records finalized, measured behavior for the first planned Dusk re
 
 One 64-bit `d3d11.dll` recognizes all six Dusk game executables. Ayesha is the PhyreEngine-derived target and uses the atlas, field, and scene modules under `src/engines/phyre`. Escha & Logy and Shallie use LTGL/KTGL and are served by `src/engines/ktgl`.
 
-The capability matrix in `src/core/game.cpp` is the source of truth. Every engine-specific feature is hard-off for an unsupported title, and an unrecognized build receives only normal D3D11 forwarding. Ayesha has the atlas cache, high-resolution correction, field correction, antialiasing, and travel-map correction enabled by default. Escha & Logy and Shallie have the loading-text correction, the system-save guard, and the synthesis-animation correction enabled by default, and can additionally be given SMAA. Target census is available as a diagnostic for all three games.
+The capability matrix in `src/core/game.cpp` is the source of truth. Every engine-specific feature is hard-off for an unsupported title, and an unrecognized build receives only normal D3D11 forwarding. Ayesha has the atlas cache, high-resolution correction, field correction, antialiasing, and travel-map correction enabled by default. Escha & Logy and Shallie have the loading-text correction, the system-save guard, and the synthesis-animation correction enabled by default, and can additionally be given SMAA, supersampling and sharpening. Target census is available as a diagnostic for all three games.
 
 ## Font-atlas cache
 
@@ -48,9 +48,15 @@ On the KTGL games the whole frame is supersampled rather than the scene alone, b
 
 On Ayesha it runs pre-UI, inside the downscale pass, so it smooths the rendered scene without softening menu text. That is what makes it defensible on by default.
 
-On Escha & Logy and Shallie it runs at Present over the finished frame, because no scene-target rule exists for their renderer and so the pre-UI pass never claims a frame. The interface and its text are antialiased along with the scene. Confirmed working in game, and that softening is the reason it is opt-in and off unless asked for: it is the only antialiasing these two games currently have, not the one they should end up with. Nothing engine-specific is involved in that path: it takes the swap chain's back buffer and runs the same passes.
+On Escha & Logy and Shallie it also runs pre-UI, on a moment found by mapping a frame: the first draw into the screen-sized typeless colour surface that is bound after the frame's main geometry run. A copy of that surface taken after that one draw is the finished scene with no interface in it; the fourteen draws that follow are the interface. So the order is scene, antialiasing, interface, post-processing, and menu text is never touched. The rule is structural rather than an address — a run of hundreds of draws, then the next `RENDER_TARGET|SHADER_RESOURCE` typeless bind at render size — so it carries across both games and both builds.
 
-The log distinguishes the two. `SMAA: pre-UI injection on the scene target` is the first; `SMAA: running at Present over the finished frame` is the second.
+The bloom composite in `PostEffectGlow.kps` is **not** that moment, and it is the obvious wrong answer: it is easy to identify by shader checksum, it binds once per frame in gameplay, and its own render target already contains the interface. Antialiasing there does what the Present-time pass does.
+
+Where no pre-UI moment is claimed, SMAA falls back to Present over the finished frame and the interface is antialiased with the scene. The log distinguishes them: `KTGL pre-UI: active` and `SMAA: pre-UI active` for the first, `SMAA: running at Present over the finished frame` for the second.
+
+**Sharpening** is contrast-adaptive (AMD's CAS) and runs on the same surface immediately after the antialiasing, so it is also before the interface. It is independent of edge smoothing in every direction except order: it works with that pass off, it never runs before it, and turning edge smoothing off does not take it with it. The strength is a preset — off, light, medium, strong — because the useful range on a morphological filter's output is narrow and the values between presets are indistinguishable.
+
+CAS rather than an unsharp mask because it takes its weight from the local minimum and maximum: flat regions are left alone and already-hard edges are sharpened *less* than mid-contrast ones, which is what makes it safe to leave on over 2013-era art being magnified.
 
 Multisampling is deliberately not offered, and was removed rather than left switched off. It cannot reach what actually aliases in these games, which is detail inside textures and along alpha-tested edges; only supersampling resolves that. The engine's own multisampled targets are never rendered into, so there is no engine setting to turn up either.
 
@@ -138,7 +144,7 @@ Ayesha registers the same class name as the Arland games and with the same brush
 
 The custom launcher is a 64-bit Win32 settings program. It edits the game's `Setting.ini` for resolution, fullscreen mode, language, and outlines, and `dusk-fix.ini` for launcher and rendering state. Auto is represented in `dusk-fix.ini` and resolved to a literal desktop resolution in `Setting.ini` when saved.
 
-It carries three tabs — General, Graphics, and About — laid out to match the Arland mod's launcher row for row, so someone who has used one does not have to learn the other. A setting the running game does not have is not shown: the window reads the same per-game capability list the DLL does, and Escha & Logy and Shallie show neither supersampling nor edge smoothing, with a line on the Graphics tab saying why. Saving never writes a key for a feature the running game would ignore.
+It carries three tabs — General, Graphics, and About — laid out to match the Arland mod's launcher row for row, so someone who has used one does not have to learn the other. A setting the running game does not have is not shown: the window reads the same per-game capability list the DLL does, and a game without a given feature gets no control for it. Saving never writes a key for a feature the running game would ignore.
 
 Every write to either file is checked. A failure is verified against the file before it is reported, because the flush call reports failure under Wine even when the values reached disk, and warning about a save that did in fact happen is worse than the failure. Real failures name the Win32 reason and are written to `dusk-fix.log`; misreported ones are logged as such and no warning is shown.
 

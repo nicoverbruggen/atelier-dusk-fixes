@@ -64,6 +64,7 @@ enum : int {
   IDC_SSAA,
   IDC_RENDLBL,        // read-only note under the supersampling row
   IDC_SMAA,
+  IDC_SHARPEN,        // the sharpening presets under edge smoothing
   IDC_OUTLINE,
   IDC_SKIPLOGOS,      // skip the boot logos
   IDC_SKIPMOVIE,      // skip the movies before the title screen
@@ -216,6 +217,21 @@ const ComboItem kSsaaItems[] = {
 };
 const int kSsaaCount = 6;
 
+// Sharpening presets rather than a slider.
+//
+// A percentage box invites fiddling and every value between two presets looks
+// the same; the useful range on a morphological filter's output is narrow. The
+// numbers are the `[Rendering] Sharpen` percentages the DLL reads. "Medium" is
+// roughly what edge smoothing softens away, so it is the setting that returns
+// the picture to where it started rather than pushing past it.
+const ComboItem kSharpenItems[] = {
+  { L"Off",     "0"  },
+  { L"Light",   "25" },
+  { L"Medium",  "50" },
+  { L"Strong",  "75" },
+};
+const int kSharpenCount = 4;
+
 // The ceiling the DLL clamps to, repeated here so the list never offers a
 // multiplier that would silently be reduced. See supersample.cpp.
 const unsigned kMaxRenderWidth = 7680;
@@ -255,6 +271,7 @@ HWND g_hTabs = nullptr;
 HWND g_hGameLabel = nullptr;   // sits on the tab strip; painted transparent
 HWND g_hRes = nullptr, g_hWinMode = nullptr, g_hLang = nullptr;
 HWND g_hSsaa = nullptr, g_hRendLbl = nullptr, g_hSmaa = nullptr;
+HWND g_hSharpen = nullptr;
 HWND g_hOutline = nullptr;
 HWND g_hSkipLogos = nullptr, g_hSkipMovie = nullptr;
 HWND g_hSkipLauncher = nullptr;
@@ -938,6 +955,7 @@ struct UiState {
   int  language;
   int  ssaa;
   bool smaa;
+  int  sharpen;
   bool outline;
   bool skipLogos;
   bool skipMovie;
@@ -946,6 +964,7 @@ struct UiState {
   bool operator == (const UiState& o) const {
     return resolution == o.resolution && windowMode == o.windowMode &&
            language == o.language && ssaa == o.ssaa && smaa == o.smaa &&
+           sharpen == o.sharpen &&
            outline == o.outline && skipLogos == o.skipLogos &&
            skipMovie == o.skipMovie && skipLauncher == o.skipLauncher;
   }
@@ -958,6 +977,8 @@ UiState currentState() {
   state.language = int(SendMessageW(g_hLang, CB_GETCURSEL, 0, 0));
   state.ssaa = ssaaSelectedIndex();
   state.smaa = isChecked(g_hSmaa);
+  state.sharpen = g_hSharpen
+    ? int(SendMessageW(g_hSharpen, CB_GETCURSEL, 0, 0)) : 0;
   state.outline = isChecked(g_hOutline);
   state.skipLogos = isChecked(g_hSkipLogos);
   state.skipMovie = isChecked(g_hSkipMovie);
@@ -1059,8 +1080,22 @@ void loadFromIni() {
   //
   // What is left is the two antialiasing settings, and both exist only where
   // the capability matrix says the game has them.
-  if (capabilities().smaa)
+  if (capabilities().smaa) {
     setChecked(g_hSmaa, iniBool(g_iniPath, "Rendering", "SMAA", false));
+    if (g_hSharpen) {
+      SendMessageW(g_hSharpen, CB_RESETCONTENT, 0, 0);
+      for (int i = 0; i < kSharpenCount; ++i)
+        SendMessageW(g_hSharpen, CB_ADDSTRING, 0,
+                     LPARAM(kSharpenItems[i].label));
+      char value[16] = {};
+      iniString(g_iniPath, "Rendering", "Sharpen", value, sizeof(value), "0");
+      int index = 0;
+      for (int i = 0; i < kSharpenCount; ++i)
+        if (lstrcmpA(kSharpenItems[i].value, value) == 0)
+          index = i;
+      SendMessageW(g_hSharpen, CB_SETCURSEL, index, 0);
+    }
+  }
   if (capabilities().supersampling) {
     iniString(g_iniPath, "Rendering", "Supersampling", value, sizeof(value),
       "100");
@@ -1146,8 +1181,15 @@ SaveOutcome saveToIni() {
   // Written only where the game has the feature, so a game the DLL would refuse
   // it for never grows the key. That is the same rule featureEnabled() follows
   // on the other side of the ini.
-  if (capabilities().smaa)
+  if (capabilities().smaa) {
     iniWriteBool(g_iniPath, "Rendering", "SMAA", isChecked(g_hSmaa));
+    if (g_hSharpen) {
+      const int index = int(SendMessageW(g_hSharpen, CB_GETCURSEL, 0, 0));
+      iniWrite("Rendering", "Sharpen",
+               kSharpenItems[(index >= 0 && index < kSharpenCount) ? index : 0]
+                 .value, g_iniPath);
+    }
+  }
   if (capabilities().supersampling)
     iniWrite("Rendering", "Supersampling",
       kSsaaItems[ssaaSelectedIndex()].value, g_iniPath);
@@ -1208,6 +1250,7 @@ void resetToDefaults() {
   // frame rate that nobody asked to spend -- on the weakest machine running
   // this, which is where reset is most likely to be reached for.
   setChecked(g_hSmaa, false);
+  if (g_hSharpen) SendMessageW(g_hSharpen, CB_SETCURSEL, 0, 0);
   setSsaaIndex(0);
   setChecked(g_hSkipLogos, false);
   setChecked(g_hSkipMovie, false);
@@ -1951,6 +1994,15 @@ void createControls(HWND w) {
         : L"Cheap, and smooths edges inside textures as well as along the "
           L"edges of models. In this game it runs over the finished picture, "
           L"so menu text is softened too.");
+
+      // Under edge smoothing because that is what it pairs with, not because
+      // it depends on it: the two run at the same moment and either works
+      // alone.
+      g_hSharpen = mkCombo(w, 0, 0, 10, IDC_SHARPEN);
+      page.row(L"Sharpening:", g_hSharpen,
+        L"Sharpens the scene, which edge smoothing softens a little. Works on "
+        L"its own too. Runs before the interface, so menus and text are left "
+        L"alone.");
     }
 
     // The game's own, and present in all three titles' Setting.ini.

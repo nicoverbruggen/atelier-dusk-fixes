@@ -7,10 +7,14 @@
 #include <d3d11.h>
 
 #include <atomic>
+#include <cstdlib>
 
 #include "log.h"
 #include "d3d11_hooks.h"
+#include "frame_map.h"
+#include "../engines/ktgl/scene_target.h"
 #include "scene_pass.h"
+#include "sharpen.h"
 #include "smaa.h"
 #include "supersample.h"
 
@@ -19,6 +23,38 @@ namespace atfix {
 extern Log log;   // main.cpp
 
 namespace {
+
+std::atomic<uint32_t> g_leavesThisFrame{0};
+
+// HOW MANY DISTINCT SURFACES THE TEST ACCEPTS, which is the question the leave
+// count just redirected us to. One leave per frame means the trigger fires at
+// the end of scene rendering, so timing is not the fault -- but if several
+// targets satisfy the test, the pass antialiases one and the composite reads
+// another, and the result is exactly what was seen: the debug edge map showing
+// through in some regions and only some ground textures sharpened.
+//
+// The private record warns that Escha has a ping-pong pool of screen-sized
+// 0x28 colour targets that Shallie lacks. This counts them rather than assuming
+// the warning applies.
+constexpr int kMaxAccepted = 16;
+void* g_accepted[kMaxAccepted] = {};
+std::atomic<int> g_acceptedCount{0};
+
+void noteAccepted(ID3D11Texture2D* colour) {
+  const int n = g_acceptedCount.load(std::memory_order_relaxed);
+  for (int i = 0; i < n && i < kMaxAccepted; ++i)
+    if (g_accepted[i] == colour)
+      return;
+  if (n >= kMaxAccepted)
+    return;
+  g_accepted[n] = colour;
+  g_acceptedCount.store(n + 1, std::memory_order_relaxed);
+  log("SCENEPASS: distinct scene colour surface #", std::dec, n + 1,
+      " accepted -- more than one means the pass and the composite can be"
+      " looking at different surfaces");
+}
+std::atomic<uint32_t> g_leavesMin{0xffffffff}, g_leavesMax{0};
+std::atomic<uint64_t> g_leavesSum{0}, g_leavesFrames{0};
 
 // The scene colour last bound on this context. Per-context, because Ayesha
 // records its scene on a deferred context and replays it on the immediate one,
@@ -116,10 +152,46 @@ void scenePassNoteBoundary(ID3D11DeviceContext* context, unsigned int numViews,
   // harmless: for the first frames before SSAA engages, SMAA runs here at scene
   // resolution; afterwards the in-pass call at display resolution claims the
   // frame first.
-  if (previous && !arrivingIsScene && !ssaaEngaged())
+  // HOW MANY TIMES THE SCENE IS LEFT PER FRAME, and whether that count is
+  // stable enough to fire on the last one instead of the first.
+  //
+  // The first is measurably wrong on this engine. An edge-map run on 2026-08-10
+  // showed the antialiased output drawn over by later scene content: sky and
+  // distant background carried edges, the ground, character and sprites did
+  // not. The comment above this line has warned since it was written that
+  // "largely complete" was doing the work and had never been checked; it is
+  // checked now and it is false here. Ayesha survives the same trigger because
+  // its first transition happens to be late.
+  if (previous && !arrivingIsScene)
+    g_leavesThisFrame.fetch_add(1, std::memory_order_relaxed);
+
+  // The Glow-anchored variant claims the frame itself, and the latch inside
+  // smaaApplySceneColor means whichever fires first wins -- so this one has to
+  // stand down entirely when that is on, or it would keep antialiasing the
+  // surface nothing reads.
+  static const bool atGlow = [] {
+    const char* env = std::getenv("DUSK_SMAA_AT_GLOW");
+    return env && env[0] != '0';
+  }();
+  // Nor when this engine has a pre-UI anchor of its own. That anchor fires
+  // later in the frame, on the surface the interface is about to be drawn into,
+  // and this call would claim the frame's one SMAA pass before it got there --
+  // which is exactly what happened: the anchor was called every frame and
+  // refused every frame, and the only symptom was that nothing changed.
+  if (previous && !arrivingIsScene && !ssaaEngaged() && !atGlow &&
+      !ktglPreUiActive())
+    // Sharpening runs on the same surface immediately after, while the
+    // interface is still not in it -- the same order the KTGL anchor uses, so
+    // the setting means one thing across all three games.
+  {
     smaaApplySceneColor(context, previous);
+    // Independent of the smoothing above: with edge smoothing off this is a
+    // sharpening filter on the finished scene, still before the interface.
+    sharpenApply(context, previous);
+  }
 
   if (arrivingIsScene) {
+    noteAccepted(arrivingColor);
     context->SetPrivateDataInterface(IID_DuskSceneColor, arrivingColor);
     // Tag it for supersampling. This module owns the verdict "that surface is
     // the scene"; supersample.cpp owns storing it, so there is still exactly
@@ -149,6 +221,8 @@ void scenePassNoteBoundary(ID3D11DeviceContext* context, unsigned int numViews,
 void STDMETHODCALLTYPE hookedOMSetRenderTargets(
     ID3D11DeviceContext* self, UINT numViews,
     ID3D11RenderTargetView* const* views, ID3D11DepthStencilView* depth) {
+  frameMapNoteTargets(self, numViews, views);
+  ktglPreUiNoteTargets(numViews, views);
   scenePassNoteBoundary(self, numViews, views, depth);
 
   // Is the swap chain's back buffer among the targets arriving? On this engine
@@ -200,12 +274,51 @@ void STDMETHODCALLTYPE hookedOMSetRenderTargetsAndUnorderedAccessViews(
   // as a count would be a wild read, and clearing the marker on it would drop
   // the composite half way through.
   if (numViews != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) {
-    scenePassNoteBoundary(self, numViews, views, depth);
+    frameMapNoteTargets(self, numViews, views);
+  scenePassNoteBoundary(self, numViews, views, depth);
     ssaaNoteTargetsBound(self, numViews, views);
   }
 
   d3d11OriginalsFor(self).omSetRenderTargetsAndUnorderedAccessViews(
     self, numViews, views, depth, uavStart, numUavs, uavs, uavInitialCounts);
+}
+
+}  // namespace atfix
+
+namespace atfix {
+
+// Called from the hooked Present. Reports how many times a frame leaves the
+// scene target, which decides whether "fire on the last one" is implementable.
+// The surface the test accepted, for whoever needs to check that it is the same
+// one the engine reads downstream. Raw and compared only, never dereferenced.
+void* scenePassAcceptedSurface() {
+  return g_acceptedCount.load(std::memory_order_relaxed) ? g_accepted[0]
+                                                         : nullptr;
+}
+
+void scenePassFrameTick() {
+  const uint32_t leaves = g_leavesThisFrame.exchange(0, std::memory_order_relaxed);
+  if (!leaves)
+    return;
+  uint32_t prev = g_leavesMin.load(std::memory_order_relaxed);
+  while (leaves < prev &&
+         !g_leavesMin.compare_exchange_weak(prev, leaves,
+                                            std::memory_order_relaxed)) {}
+  prev = g_leavesMax.load(std::memory_order_relaxed);
+  while (leaves > prev &&
+         !g_leavesMax.compare_exchange_weak(prev, leaves,
+                                            std::memory_order_relaxed)) {}
+  g_leavesSum.fetch_add(leaves, std::memory_order_relaxed);
+  const uint64_t frames = g_leavesFrames.fetch_add(1, std::memory_order_relaxed) + 1;
+  if (frames % 600)
+    return;
+  log("SCENEPASS leaves-per-frame min=", std::dec,
+      g_leavesMin.load(std::memory_order_relaxed),
+      " max=", g_leavesMax.load(std::memory_order_relaxed),
+      " mean=", g_leavesSum.load(std::memory_order_relaxed) / frames,
+      " over ", frames, " compositing frames"
+      " (a stable count means the last leave can be fired on instead of the"
+      " first)");
 }
 
 }  // namespace atfix

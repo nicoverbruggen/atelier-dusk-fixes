@@ -52,6 +52,14 @@ void scenePassSetTest(SceneTargetTest test);
 // this is the only place that knows which colour target the engine's scene test
 // accepted. Gating it on the SMAA switch alone once made supersampling depend
 // on an unrelated checkbox, silently.
+void scenePassFrameTick();
+
+// The scene colour surface this engine's test accepted, or null. Exposed so the
+// Glow anchor can check it against the texture the composite actually samples:
+// SMAA reports firing on the right surface and has no visible effect, and a
+// mismatch here would explain that in one line.
+void* scenePassAcceptedSurface();
+
 void scenePassNoteBoundary(ID3D11DeviceContext* context, unsigned int numViews,
                            ID3D11RenderTargetView* const* views,
                            ID3D11DepthStencilView* depth);

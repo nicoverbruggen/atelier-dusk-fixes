@@ -27,6 +27,7 @@ These things were not part of the original games, but were added with the mod. T
 | Feature | Ayesha | Escha & Logy | Shallie |
 |---|:---:|:---:|:---:|
 | Edge smoothing (SMAA) | ✓ | ✓ | ✓ |
+| Sharpening | ✓ | ✓ | ✓ |
 | Supersampling | ✓ | ✓ | ✓ |
 | Skip the startup logos | ✓ | ✓ | ✓ |
 | Skip the opening movie | ✓ | ✓ | ✓ |

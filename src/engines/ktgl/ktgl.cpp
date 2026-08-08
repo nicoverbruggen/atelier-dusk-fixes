@@ -12,6 +12,8 @@
 #include "ktgl.h"
 
 #include "control_prompt_fix.h"
+#include "glow_anchor.h"
+#include "scene_target.h"
 #include "ipu_trace.h"
 #include "loading_text_fix.h"
 #include "logo_skip.h"
@@ -160,6 +162,8 @@ bool initializeKtglFixes() {
     // Diagnostic, off unless DUSK_IPU_TRACE is set. Last, because it
     // observes and the fixes above act.
     installIpuTrace(id.base, *game);
+    installGlowTrace(*game);
+    atfix::installKtglSceneTarget();
     installWinPartsTrace(id.base, *game);
     // The pad rescan is engine-agnostic machinery with a per-executable address,
     // so core owns the mechanism and this module supplies the row. See

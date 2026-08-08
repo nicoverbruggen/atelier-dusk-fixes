@@ -30,6 +30,7 @@
 #include "config.h"
 #include "game.h"
 #include "highres.h"
+#include "scene_policy.h"
 #include "log.h"
 #include "supersample.h"
 #include "util.h"
@@ -571,6 +572,10 @@ void STDMETHODCALLTYPE hookedDraw(
   // supersample.cpp clamped. Exactly one of the two ever does anything.
   ssaaCorrectCompositeViewport(self);
   d3d11OriginalsFor(self).draw(self, vertexCount, startVertex);
+  // The pre-UI anchor, when this engine has one that fires from draws.
+  // Empty otherwise. See core/scene_policy.h for why it is reached from
+  // here rather than from detours of its own.
+  scenePolicy().afterDraw(self);
 }
 
 void STDMETHODCALLTYPE hookedDrawIndexed(
@@ -584,6 +589,10 @@ void STDMETHODCALLTYPE hookedDrawIndexed(
   // supersample.cpp clamped. Exactly one of the two ever does anything.
   ssaaCorrectCompositeViewport(self);
   d3d11OriginalsFor(self).drawIndexed(self, indexCount, startIndex, baseVertex);
+  // The pre-UI anchor, when this engine has one that fires from draws.
+  // Empty otherwise. See core/scene_policy.h for why it is reached from
+  // here rather than from detours of its own.
+  scenePolicy().afterDraw(self);
 }
 
 void STDMETHODCALLTYPE hookedDrawInstanced(
@@ -598,6 +607,10 @@ void STDMETHODCALLTYPE hookedDrawInstanced(
   ssaaCorrectCompositeViewport(self);
   d3d11OriginalsFor(self).drawInstanced(self, vertexCountPerInstance, instanceCount,
                                    startVertex, startInstance);
+  // The pre-UI anchor, when this engine has one that fires from draws.
+  // Empty otherwise. See core/scene_policy.h for why it is reached from
+  // here rather than from detours of its own.
+  scenePolicy().afterDraw(self);
 }
 
 void STDMETHODCALLTYPE hookedDrawIndexedInstanced(
@@ -613,6 +626,10 @@ void STDMETHODCALLTYPE hookedDrawIndexedInstanced(
   d3d11OriginalsFor(self).drawIndexedInstanced(self, indexCountPerInstance,
                                           instanceCount, startIndex,
                                           baseVertex, startInstance);
+  // The pre-UI anchor, when this engine has one that fires from draws.
+  // Empty otherwise. See core/scene_policy.h for why it is reached from
+  // here rather than from detours of its own.
+  scenePolicy().afterDraw(self);
 }
 
 HighResWants highResResolveWants() {

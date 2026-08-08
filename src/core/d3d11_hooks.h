@@ -47,10 +47,6 @@ using PFN_CreateTexture2D = HRESULT (STDMETHODCALLTYPE *) (
   ID3D11Texture2D**);
 using PFN_CreateSamplerState = HRESULT (STDMETHODCALLTYPE *) (
   ID3D11Device*, const D3D11_SAMPLER_DESC*, ID3D11SamplerState**);
-using PFN_CreatePixelShader = HRESULT (STDMETHODCALLTYPE *) (
-  ID3D11Device*, const void*, SIZE_T, ID3D11ClassLinkage*,
-  ID3D11PixelShader**);
-
 // The trampolines for whichever device methods were hooked. A member is null
 // when that hook was not requested or could not be installed, so a detour must
 // never be reachable without its own original being set -- which it cannot be,
@@ -58,9 +54,6 @@ using PFN_CreatePixelShader = HRESULT (STDMETHODCALLTYPE *) (
 struct DeviceOriginals {
   PFN_CreateTexture2D createTexture2D = nullptr;
   PFN_CreateSamplerState createSamplerState = nullptr;
-  // Only hooked by the Glow anchor, which recognises one shader by the checksum
-  // of the bytecode it is created from.
-  PFN_CreatePixelShader createPixelShader = nullptr;
 };
 
 const DeviceOriginals& d3d11DeviceOriginals();
@@ -99,8 +92,6 @@ using PFN_DrawIndexedInstanced = void (STDMETHODCALLTYPE *) (
 using PFN_OMSetRenderTargets = void (STDMETHODCALLTYPE *) (
   ID3D11DeviceContext*, UINT, ID3D11RenderTargetView* const*,
   ID3D11DepthStencilView*);
-using PFN_PSSetShader = void (STDMETHODCALLTYPE *) (
-  ID3D11DeviceContext*, ID3D11PixelShader*, ID3D11ClassInstance* const*, UINT);
 using PFN_PSSetShaderResources = void (STDMETHODCALLTYPE *) (
   ID3D11DeviceContext*, UINT, UINT, ID3D11ShaderResourceView* const*);
 using PFN_FinishCommandList = HRESULT (STDMETHODCALLTYPE *) (
@@ -132,7 +123,6 @@ struct ContextOriginals {
   PFN_DrawIndexedInstanced drawIndexedInstanced = nullptr;
   PFN_OMSetRenderTargets omSetRenderTargets = nullptr;
   PFN_PSSetShaderResources psSetShaderResources = nullptr;
-  PFN_PSSetShader psSetShader = nullptr;
   PFN_FinishCommandList finishCommandList = nullptr;
   PFN_OMSetRenderTargetsAndUnorderedAccessViews
     omSetRenderTargetsAndUnorderedAccessViews = nullptr;

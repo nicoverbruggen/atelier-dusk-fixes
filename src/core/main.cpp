@@ -26,17 +26,15 @@
 #include "highres.h"
 #include "sampler.h"
 #include "frame_map.h"
-#include "../engines/ktgl/scene_target.h"
+#include "scene_policy.h"
 #include "scene_pass.h"
 #include "sharpen.h"
 #include "smaa.h"
 #include "frame_capture.h"
-#include "../engines/ktgl/glow_anchor.h"
 #include "supersample.h"
 #include "supersample_policy.h"
 #include "util.h"
 #include "window_background.h"
-#include "../engines/ktgl/window_size.h"
 #include "version.h"
 #include "../../vendor/minhook/include/MinHook.h"
 
@@ -136,10 +134,9 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* swapChain,
   // optimisation. See supersample.h.
   ssaaFrameTick(swapChain);
   frameCaptureTick(swapChain);
-  glowTraceFrameTick();
   scenePassFrameTick();
   frameMapFrameTick();
-  ktglPreUiFrameTick();
+  scenePolicy().frameTick();
   sharpenPreload();
   samplerReport();
   // Last thing before the frame is handed over: SMAA runs over the finished
@@ -440,9 +437,9 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
         atfix::installWindowBackgroundFix();
         // Same reason as the line above: the window is created before the game
         // reaches D3D11, so a hook installed when the proxy is first used is
-        // already too late. Declines on its own unless the present clamp is
-        // active, which is only the KTGL games with supersampling on.
-        atfix::installKtglWindowSize();
+        // already too late. Which engine's, and whether any, is engine.cpp's
+        // question -- this file does not know the modules exist.
+        dusk::installEngineEarlyFixes();
       }
       break;
     }

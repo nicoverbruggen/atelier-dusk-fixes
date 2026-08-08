@@ -34,6 +34,7 @@
 #include "log.h"
 #include "d3d11_hooks.h"
 #include "highres.h"
+#include "sharpen.h"
 #include "smaa.h"
 #include "supersample.h"
 #include "supersample_policy.h"
@@ -783,6 +784,12 @@ bool runDownscale(ID3D11DeviceContext* context, ID3D11Texture2D* host,
     // and the one at the boundary is the one keyed on a transition that fires
     // 5 to 22 times a frame.
     smaaApplySceneColor(context, g_small);
+    // And sharpening, for all three of the same reasons plus the order rule in
+    // sharpen.h: after the antialiasing, never before. This is a SECOND sharpen
+    // on the frame -- the resample above already folds one in -- and that is
+    // deliberate: the two are different settings and the slider is meant to add
+    // to what supersampling does rather than be absorbed by it.
+    sharpenApply(context, g_small);
   }
 
   release(source);
@@ -828,6 +835,14 @@ void ssaaTagSceneHost(ID3D11Texture2D* sceneColor) {
   if (!ssaaConfigured() || !sceneColor)
     return;
   setMarker(sceneColor, IID_DuskSceneHost);
+}
+
+bool ssaaIsSceneHost(ID3D11Texture2D* texture) {
+  return texture && hasMarker(texture, IID_DuskSceneHost);
+}
+
+bool ssaaIsBackBuffer(ID3D11Texture2D* texture) {
+  return texture && hasMarker(texture, IID_DuskBackBuffer);
 }
 
 void ssaaNoteTargetsBound(ID3D11DeviceContext* context, unsigned int numViews,

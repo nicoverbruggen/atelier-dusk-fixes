@@ -18,6 +18,15 @@
 
 namespace dusk {
 
+// The fixes that must be installed from DllMain, before the game reaches D3D11.
+// A window is created earlier than that, so a hook placed when the proxy is
+// first used is already too late for anything window-shaped.
+//
+// Separate from initializeEngineFixes() because it runs under the loader lock,
+// where almost nothing is safe: each module keeps this to placing hooks and
+// does its deciding later. Both modules may leave it empty.
+void installEngineEarlyFixes();
+
 // Resolves the engine for this process and initializes that module's fixes.
 // Idempotent, and safe to call from every D3D11 entry point -- which it is,
 // because the point at which the game reaches D3D11 is the earliest we can be

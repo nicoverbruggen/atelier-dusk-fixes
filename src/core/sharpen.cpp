@@ -32,6 +32,16 @@ using PFN_D3DCompile = HRESULT (WINAPI*)(LPCVOID, SIZE_T, LPCSTR,
 
 atfix::mutex g_mutex;
 HMODULE g_compiler = nullptr;
+
+// RE-ENTRY GUARD, and it is the general form of a bug that has now bitten
+// twice. This pass binds a render target and issues a draw; both go back
+// through the hooks that decide when to run it, so it can be asked to run
+// itself from inside itself -- and then it blocks on the lock it is holding.
+//
+// A mutex alone cannot express "not from this call stack", which is the actual
+// rule. Thread-local, because a second thread arriving here has every right to
+// be served: this engine records on several deferred contexts.
+thread_local bool t_inSharpen = false;
 bool g_ready = false;
 bool g_broken = false;
 ID3D11VertexShader* g_vs = nullptr;
@@ -49,7 +59,23 @@ ID3D11ShaderResourceView* g_scratchSRV = nullptr;
 UINT g_scratchWidth = 0, g_scratchHeight = 0;
 DXGI_FORMAT g_scratchFormat = DXGI_FORMAT_UNKNOWN;
 
-struct Params { float amount; float pad[3]; };
+struct Params { float peak; float pad[3]; };
+
+// HOW HARD 100% IS ALLOWED TO BE. The shader multiplies its headroom weight by
+// this, so it is the strongest the filter can ever pull a neighbour.
+//
+// AMD's own CAS derives the same number as -1/lerp(8, 5, sharpness), which puts
+// their range at 0.125 to 0.2 -- their MINIMUM is already a real sharpen and
+// their maximum is the point they stop at. The ceiling here sits between the
+// two, at roughly their halfway sharpness. The reason not to go to their top:
+// on Ayesha this pass runs at the supersampled size and the downscale that
+// follows folds in a sharpen of its own, so the slider at 100% is not the only
+// sharpening in the frame.
+//
+// The floor is well under AMD's, because a slider that starts at 1% should
+// start at barely anything rather than at their minimum.
+constexpr float kPeakFloor = 0.02f;
+constexpr float kPeakCeiling = 0.15f;
 
 // AMD FidelityFX CAS, the sharpening half. The kernel is the four cardinal
 // neighbours and the centre: CAS deliberately does not use the diagonals, which
@@ -62,7 +88,7 @@ struct Params { float amount; float pad[3]; };
 const char* kHlsl = R"HLSL(
 Texture2D    src  : register(t0);
 SamplerState samp : register(s0);
-cbuffer Params : register(b0) { float amount; float3 pad; };
+cbuffer Params : register(b0) { float peak; float3 pad; };
 struct VSOut { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; };
 VSOut VSMain(uint id : SV_VertexID) {
   VSOut o;
@@ -91,7 +117,7 @@ float4 PSMain(VSOut i) : SV_TARGET {
   // clips. Sharpening is scaled by whichever side has less room.
   float3 room = min(mn, 1.0 - mx);
   float3 weight = sqrt(max(room / max(mx, 1e-4), 0.0));
-  weight = -weight * (amount * 0.2 + 0.02);
+  weight = -weight * peak;
 
   float3 sum = (n + s + w + e) * weight + c;
   float3 norm = 1.0 + 4.0 * weight;
@@ -264,7 +290,8 @@ struct StateGuard {
     c->RSGetState(&raster);
   }
   ~StateGuard() {
-    c->OMSetRenderTargets(1, &rtv, dsv);
+    // THROUGH THE ORIGINAL, never through the vtable. See the bind below.
+    d3d11SetRenderTargets(c, 1, &rtv, dsv);
     if (vpCount) c->RSSetViewports(vpCount, vp);
     c->VSSetShader(vs, nullptr, 0);
     c->PSSetShader(ps, nullptr, 0);
@@ -313,7 +340,7 @@ bool sharpenEnabled() {
 
 bool sharpenApply(ID3D11DeviceContext* ctx, ID3D11Texture2D* target) {
   const float amount = sharpenAmount();
-  if (amount <= 0.0f || !ctx || !target)
+  if (amount <= 0.0f || !ctx || !target || t_inSharpen)
     return false;
 
   D3D11_TEXTURE2D_DESC td = {};
@@ -327,6 +354,7 @@ bool sharpenApply(ID3D11DeviceContext* ctx, ID3D11Texture2D* target) {
     return false;
 
   std::lock_guard<atfix::mutex> guard(g_mutex);
+  t_inSharpen = true;
   bool ran = false;
   if (init(device) && ensureScratch(device, td)) {
     D3D11_RENDER_TARGET_VIEW_DESC rd = {};
@@ -339,13 +367,24 @@ bool sharpenApply(ID3D11DeviceContext* ctx, ID3D11Texture2D* target) {
       D3D11_MAPPED_SUBRESOURCE mapped = {};
       if (SUCCEEDED(ctx->Map(g_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
         Params p = {};
-        p.amount = amount;
+        p.peak = kPeakFloor + amount * (kPeakCeiling - kPeakFloor);
         std::memcpy(mapped.pData, &p, sizeof(p));
         ctx->Unmap(g_cb, 0);
       }
 
       StateGuard restore(ctx);
-      ctx->OMSetRenderTargets(1, &rtv, nullptr);
+      // BOUND THROUGH THE UNHOOKED ORIGINAL, which is what SMAA does and for a
+      // reason this pass learned the hard way.
+      //
+      // ctx->OMSetRenderTargets goes through the mod's own detour, and that
+      // detour tells supersampling which target is bound. Binding a scratch
+      // here therefore told it the composite was no longer bound, so the
+      // composite's viewport correction did not fire on the draw that followed
+      // and the engine drew its 3840x2160 scene 1:1 into a 2560x1440 target --
+      // a cropped picture, in an Escha run on 2026-08-08. The pass has always
+      // done this; it only became visible once sharpening started running
+      // inside the downscale, where the composite marker is live.
+      d3d11SetRenderTargets(ctx, 1, &rtv, nullptr);
       D3D11_VIEWPORT vp = {};
       vp.Width = float(td.Width);
       vp.Height = float(td.Height);
@@ -367,6 +406,7 @@ bool sharpenApply(ID3D11DeviceContext* ctx, ID3D11Texture2D* target) {
     }
     release(rtv);
   }
+  t_inSharpen = false;
   release(device);
 
   static std::atomic<bool> announced{false};

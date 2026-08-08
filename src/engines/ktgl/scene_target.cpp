@@ -57,9 +57,9 @@
 #include "../../core/scene_pass.h"
 #include "../../core/sharpen.h"
 #include "../../core/smaa.h"
+#include "../../core/supersample.h"
 #include "../../core/d3d11_hooks.h"
 #include "../../core/frame_map.h"
-#include "glow_anchor.h"
 
 namespace atfix {
 
@@ -200,6 +200,13 @@ bool ktglPreUiActive() {
 
 void ktglPreUiNoteTargets(unsigned int numViews,
                           ID3D11RenderTargetView* const* views) {
+  // INERT UNLESS THIS ENGINE INSTALLED IT. These two are called from the shared
+  // bind and draw detours, so without this check the anchor arms and fires on
+  // Ayesha as well -- where the pre-UI pass is driven from scene_pass.cpp
+  // instead. It did: Ayesha hung, because scene_pass's call was already inside
+  // the sharpening pass when the anchor fired it a second time.
+  if (!g_installed.load(std::memory_order_relaxed))
+    return;
   if (t_inPass || !numViews || !views || !views[0])
     return;
   // Close the previous bind's run.
@@ -232,13 +239,36 @@ void ktglPreUiNoteTargets(unsigned int numViews,
       d.Width >= swapWidth && d.Height >= swapHeight) {
     g_armed.store(true, std::memory_order_relaxed);
     g_preUiSurface.store(texture, std::memory_order_relaxed);
+
+    // WHICH SURFACE THIS ACTUALLY IS, reported once per distinct size.
+    //
+    // The rule above is a size-and-format rule, and with supersampling on it
+    // matches more than one surface: an Escha run on 2026-08-08 alternated
+    // between 3840x2160 and 2560x1440 several times a minute, reinitialising
+    // the SMAA targets at every switch. A size rule cannot say which of the two
+    // is the scene. The tags can -- one is set by the engine's own scene test,
+    // the other by the swap chain -- so they are printed here rather than
+    // guessed at, and whichever they name is what the rule should be keyed on.
+    static std::atomic<uint32_t> lastWidth{0};
+    static std::atomic<uint32_t> lastHeight{0};
+    const uint32_t previousWidth =
+      lastWidth.exchange(d.Width, std::memory_order_relaxed);
+    const uint32_t previousHeight =
+      lastHeight.exchange(d.Height, std::memory_order_relaxed);
+    if (previousWidth != d.Width || previousHeight != d.Height)
+      log("KTGL pre-UI: armed on ", std::dec, d.Width, "x", d.Height,
+          " format=", uint32_t(d.Format), " bind=0x", std::hex, d.BindFlags,
+          std::dec, " after a run of ",
+          g_largestRun.load(std::memory_order_relaxed), " draws",
+          " -- sceneHostTag=", ssaaIsSceneHost(texture) ? "yes" : "no",
+          " backBufferTag=", ssaaIsBackBuffer(texture) ? "yes" : "no");
   }
   texture->Release();
 }
 
 // Returns the surface to antialias once, on the first draw after arming.
 ID3D11Texture2D* ktglPreUiNoteDraw() {
-  if (t_inPass)
+  if (!g_installed.load(std::memory_order_relaxed) || t_inPass)
     return nullptr;
   const uint32_t n = g_drawsThisBind.fetch_add(1, std::memory_order_relaxed) + 1;
   if (n != 1 || !g_armed.exchange(false, std::memory_order_relaxed))
@@ -254,9 +284,33 @@ ID3D11Texture2D* ktglPreUiNoteDraw() {
 //
 // The trace and the frame map are notified from here so there is still exactly
 // one set of draw detours on the vtable.
-namespace {
 
-void notePreUiDraw(ID3D11DeviceContext* self) {
+// REACHABLE FROM TWO PLACES, and it has to be.
+//
+// This feature owns the four draw slots when nothing else wants them. When
+// supersampling is on, the raster correction owns them instead -- one vtable
+// slot cannot hold two detours -- and d3d11_hooks.cpp declines this set. That
+// used to mean the pre-UI pass silently did nothing in every supersampled
+// session, so a Shallie shipping default of `Supersampling=150, Sharpen=75`
+// applied no sharpening at all and said so nowhere.
+//
+// So the anchor is a function rather than something buried in the detours, and
+// ScenePolicy::afterDraw points at it. Whichever family holds the slots calls
+// it; only one family is ever installed, so it cannot fire twice.
+void ktglPreUiAfterDraw(ID3D11DeviceContext* self) {
+  // NOT WHEN SUPERSAMPLING HAS ENGAGED. The downscale runs both passes itself,
+  // on the display-sized result and still before the interface -- see the
+  // comment at the smaaApplySceneColor call in supersample.cpp, which gives the
+  // three reasons that placement is better. Running here as well does not
+  // double the antialiasing, it ALTERNATES with it: both claim the same
+  // once-per-frame latch, so whichever reaches it first wins that frame. An
+  // Escha run on 2026-08-08 flipped between 3840x2160 and 2560x1440 several
+  // times a minute, reinitialising SMAA's targets at every switch.
+  //
+  // Engaged, not configured: supersampling that is switched on but never
+  // attaches must not take this pass down with it.
+  if (ssaaEngaged())
+    return;
   if (ID3D11Texture2D* preUi = ktglPreUiNoteDraw()) {
     // Claimed BEFORE either pass runs, so their own binds and draws cannot come
     // back round and re-enter this.
@@ -290,43 +344,37 @@ void notePreUiDraw(ID3D11DeviceContext* self) {
   }
 }
 
-}  // namespace
-
 void STDMETHODCALLTYPE hookedPreUiDraw(ID3D11DeviceContext* self,
                                        UINT vertexCount, UINT startVertex) {
-  glowTraceNoteDraw(self);
   frameMapNoteDraw(self);
   d3d11OriginalsFor(self).draw(self, vertexCount, startVertex);
-  notePreUiDraw(self);
+  ktglPreUiAfterDraw(self);
 }
 
 void STDMETHODCALLTYPE hookedPreUiDrawIndexed(ID3D11DeviceContext* self,
                                               UINT indexCount, UINT startIndex,
                                               INT baseVertex) {
-  glowTraceNoteDraw(self);
   frameMapNoteDraw(self);
   d3d11OriginalsFor(self).drawIndexed(self, indexCount, startIndex, baseVertex);
-  notePreUiDraw(self);
+  ktglPreUiAfterDraw(self);
 }
 
 void STDMETHODCALLTYPE hookedPreUiDrawIndexedInstanced(
     ID3D11DeviceContext* self, UINT indexCountPerInstance, UINT instanceCount,
     UINT startIndex, INT baseVertex, UINT startInstance) {
-  glowTraceNoteDraw(self);
   frameMapNoteDraw(self);
   d3d11OriginalsFor(self).drawIndexedInstanced(self, indexCountPerInstance,
     instanceCount, startIndex, baseVertex, startInstance);
-  notePreUiDraw(self);
+  ktglPreUiAfterDraw(self);
 }
 
 void STDMETHODCALLTYPE hookedPreUiDrawInstanced(
     ID3D11DeviceContext* self, UINT vertexCountPerInstance, UINT instanceCount,
     UINT startVertex, UINT startInstance) {
-  glowTraceNoteDraw(self);
   frameMapNoteDraw(self);
   d3d11OriginalsFor(self).drawInstanced(self, vertexCountPerInstance,
     instanceCount, startVertex, startInstance);
-  notePreUiDraw(self);
+  ktglPreUiAfterDraw(self);
 }
 
 void ktglPreUiFrameTick() {

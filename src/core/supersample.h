@@ -136,6 +136,17 @@ void ssaaNoteBackBuffer(IDXGISwapChain* swapChain);
 // No-op when supersampling is off.
 void ssaaTagSceneHost(ID3D11Texture2D* sceneColor);
 
+// Does this surface carry the tag above, and is it the back buffer? Both false
+// when supersampling is off, because nothing is tagged then.
+//
+// For an anchor that has to pick one surface out of several that look alike.
+// The tags are positive identification -- one comes from the engine's own scene
+// test, the other from the swap chain itself -- where size and format are only
+// a resemblance, and with supersampling on there is more than one full-screen
+// typeless colour target for a size rule to match.
+bool ssaaIsSceneHost(ID3D11Texture2D* texture);
+bool ssaaIsBackBuffer(ID3D11Texture2D* texture);
+
 // Set or clear this context's composite marker from the render targets now
 // arriving. The marker is set exactly while a colour target carrying the back
 // buffer's tag is bound.

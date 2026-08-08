@@ -24,9 +24,9 @@ namespace atfix {
 // unless the switch is set, and nothing after its one frame has been written.
 void frameCaptureTick(IDXGISwapChain* swapChain);
 
-// Dump an arbitrary texture to `<name>.png` beside the log. Used by the Glow
-// anchor to settle, by looking, whether the interface is already drawn when the
-// bloom composite runs -- a question two different counts left ambiguous.
+// Dump an arbitrary texture to `<name>.png` beside the log. Used by the frame
+// map, which is how the pre-UI moment was found: a surface copied in stream
+// order after one draw showed the finished scene with no interface in it.
 bool frameCaptureDumpTexture(ID3D11Texture2D* texture, const char* name);
 
 }  // namespace atfix

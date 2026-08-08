@@ -157,16 +157,19 @@ struct Capabilities {
 // launcher, opposite plumbing underneath.
 
 // `smaaPreUi` is not a second setting. It is the same checkbox with a different
-// consequence, and the window has to say which: Ayesha has a scene-target test
-// so the pass runs before the interface is composited, while the KTGL games
-// have none, so it runs at Present over the finished frame and softens the
-// interface along with everything else. Offering the same one-line description
-// for both would be describing the wrong trade to two thirds of the users.
+// consequence, and the window has to say which.
+//
+// All three games run the pass before the interface now. Ayesha has always had
+// a scene-target test; the KTGL games got their own moment on 2026-08-10 -- the
+// first draw into the surface the interface is about to be drawn into. The
+// column stays because the distinction is real and could return: a game whose
+// pre-UI moment cannot be identified falls back to Present over the finished
+// frame, and the window must not promise sharp menus there.
 const Capabilities kCapabilities[kGameCount] = {
   //             Ssaa   ScalesIni  Smaa  PreUI  Logos  Movie  LogoTime
   /* Ayesha  */ { true,  false,     true,  true,  true,  true,  false },
-  /* Escha   */ { true,  true,      true,  false, true,  true,  true  },
-  /* Shallie */ { true,  true,      true,  false, true,  true,  true  },
+  /* Escha   */ { true,  true,      true,  true,  true,  true,  true  },
+  /* Shallie */ { true,  true,      true,  true,  true,  true,  true  },
 };
 
 char g_iniPath[MAX_PATH] = {};       // dusk-fix.ini, in the game folder
@@ -217,18 +220,19 @@ const ComboItem kSsaaItems[] = {
 };
 const int kSsaaCount = 6;
 
-// Sharpening presets rather than a slider.
+// Sharpening strength, written to the ini as the percentage.
 //
-// A percentage box invites fiddling and every value between two presets looks
-// the same; the useful range on a morphological filter's output is narrow. The
-// numbers are the `[Rendering] Sharpen` percentages the DLL reads. "Medium" is
-// roughly what edge smoothing softens away, so it is the setting that returns
-// the picture to where it started rather than pushing past it.
+// The whole range is already capped in the shader -- see kPeakCeiling in
+// sharpen.cpp -- so these four span everything the filter will do rather than
+// the low end of a wider scale.
+// The percentage is in the label because it is what lands in the ini and what
+// DUSK_SHARPEN takes, so a name on its own leaves the two halves of the same
+// setting looking unrelated. Off carries none: the word already says 0.
 const ComboItem kSharpenItems[] = {
-  { L"Off",     "0"  },
-  { L"Light",   "25" },
-  { L"Medium",  "50" },
-  { L"Strong",  "75" },
+  { L"Off",             "0"   },
+  { L"Low  (30%)",      "30"  },
+  { L"Medium  (60%)",   "60"  },
+  { L"High  (100%)",    "100" },
 };
 const int kSharpenCount = 4;
 
@@ -303,7 +307,11 @@ void repaintUnder(HWND ctrl);
 
 // The base layout, in logical pixels. Sized for 720p at 100% so chooseScale
 // always has an enlargement it can fall back from.
-const int kBaseWidth = 700;
+//
+// The width came down from 700 when the descriptions moved under their
+// controls: it was carrying a third column sized for the longest sentence on
+// any page. The height grows on its own.
+const int kBaseWidth = 480;
 const int kBaseHeight = 440;
 
 // Two scale factors, as in the Arland launcher. g_dpiScale is the display's,
@@ -1083,16 +1091,21 @@ void loadFromIni() {
   if (capabilities().smaa) {
     setChecked(g_hSmaa, iniBool(g_iniPath, "Rendering", "SMAA", false));
     if (g_hSharpen) {
-      SendMessageW(g_hSharpen, CB_RESETCONTENT, 0, 0);
-      for (int i = 0; i < kSharpenCount; ++i)
-        SendMessageW(g_hSharpen, CB_ADDSTRING, 0,
-                     LPARAM(kSharpenItems[i].label));
       char value[16] = {};
       iniString(g_iniPath, "Rendering", "Sharpen", value, sizeof(value), "0");
-      int index = 0;
-      for (int i = 0; i < kSharpenCount; ++i)
-        if (lstrcmpA(kSharpenItems[i].value, value) == 0)
+      // Matched by number and rounded to the nearest preset, not by string.
+      // The key is a percentage the DLL reads, so an ini can hold a value no
+      // preset names -- hand-edited, or written by DUSK_SHARPEN. Falling back
+      // to Off there would read as the setting having been lost.
+      const int percent = atoi(value);
+      int index = 0, best = -1;
+      for (int i = 0; i < kSharpenCount; ++i) {
+        const int distance = abs(atoi(kSharpenItems[i].value) - percent);
+        if (best < 0 || distance < best) {
+          best = distance;
           index = i;
+        }
+      }
       SendMessageW(g_hSharpen, CB_SETCURSEL, index, 0);
     }
   }
@@ -1184,10 +1197,9 @@ SaveOutcome saveToIni() {
   if (capabilities().smaa) {
     iniWriteBool(g_iniPath, "Rendering", "SMAA", isChecked(g_hSmaa));
     if (g_hSharpen) {
-      const int index = int(SendMessageW(g_hSharpen, CB_GETCURSEL, 0, 0));
+      char value[16] = {};
       iniWrite("Rendering", "Sharpen",
-               kSharpenItems[(index >= 0 && index < kSharpenCount) ? index : 0]
-                 .value, g_iniPath);
+        comboValue(g_hSharpen, kSharpenItems, kSharpenCount), g_iniPath);
     }
   }
   if (capabilities().supersampling)
@@ -1250,7 +1262,8 @@ void resetToDefaults() {
   // frame rate that nobody asked to spend -- on the weakest machine running
   // this, which is where reset is most likely to be reached for.
   setChecked(g_hSmaa, false);
-  if (g_hSharpen) SendMessageW(g_hSharpen, CB_SETCURSEL, 0, 0);
+  if (g_hSharpen)
+    SendMessageW(g_hSharpen, CB_SETCURSEL, 0, 0);
   setSsaaIndex(0);
   setChecked(g_hSkipLogos, false);
   setChecked(g_hSkipMovie, false);
@@ -1706,19 +1719,32 @@ struct Layout {
   // tallest of them.
   ~Layout() { g_contentBottom = std::max(g_contentBottom, y); }
 
-  // Columns, measured from the page's own edges. Checkbox rows use a nearer
-  // note column: a checkbox carries its own label, so leaving its note out at
-  // the combo note column strands it across a gap of empty space.
+  // Columns, measured from the page's own edges.
   static int left()          { return g_pageRect.left + S(8); }
   static int right()         { return g_pageRect.right - S(8); }
   static int labelWidth()    { return S(150); }
   static int controlLeft()   { return left() + S(156); }
   static int controlWidth()  { return S(230); }
-  static int noteLeft()      { return left() + S(406); }
+  // DESCRIPTIONS GO UNDER THEIR CONTROL, not in a column beside it.
+  //
+  // A third column made the description's length part of the page's geometry:
+  // a long one made its row tall and left the short rows sitting in white
+  // space, and no two kinds of row agreed on where the column started. Under
+  // the control the text is next to what it describes, its length only affects
+  // its own row, and the window loses about 230 pixels of width it was
+  // carrying for the longest sentence on any page.
+  //
+  // The indent is what marks the text as belonging to the control above rather
+  // than standing on its own, which is the job the column used to do.
+  static int noteLeft()      { return left() + S(16); }
   static int noteWidth()     { return right() - noteLeft(); }
-  static int checkNoteLeft() { return left() + S(276); }
-  static int checkNoteWidth(){ return right() - checkNoteLeft(); }
   static int fullWidth()     { return right() - left(); }
+
+  // The two vertical gaps. Named because under() has to undo one to reach the
+  // other, and a bare number there would be the kind of thing that survives a
+  // change to the spacing and quietly stops lining up.
+  static int lineGap()       { return S(4); }    // control to its description
+  static int rowGap()        { return S(14); }   // one row to the next
 
   int measure(const wchar_t* text, int width) const {
     HDC dc = GetDC(parent);
@@ -1751,7 +1777,15 @@ struct Layout {
     return height;
   }
 
-  // label + control + note. The row is as tall as whichever side needs more.
+  // The description under a control, and the space that closes the row. Kept in
+  // one place because the three row kinds differ only in what goes above it.
+  void closeRow(const wchar_t* noteText) {
+    if (noteText)
+      y += lineGap() + note(noteText, noteLeft(), noteWidth(), y);
+    y += rowGap();
+  }
+
+  // label + control, then the description under both.
   void row(const wchar_t* labelText, HWND control, const wchar_t* noteText) {
     // The label is centred against the control rather than nudged down by a
     // fixed four pixels, which only looked centred at one font size.
@@ -1761,20 +1795,17 @@ struct Layout {
     // for a combo box the height passed here is how far the list drops.
     MoveWindow(control, controlLeft(), y, controlWidth(), S(200), TRUE);
     onPage(page, control);
-    int used = controlHeight();
-    if (noteText)
-      used = std::max(used, note(noteText, noteLeft(), noteWidth(), y));
-    y += used + S(12);
+    y += controlHeight();
+    closeRow(noteText);
   }
 
+  // A checkbox carries its own label, so it spans the width the label and the
+  // control together would have taken.
   void checkRow(HWND check, const wchar_t* noteText) {
-    MoveWindow(check, left(), y, checkNoteLeft() - left() - S(16),
-      checkHeight(), TRUE);
+    MoveWindow(check, left(), y, fullWidth(), checkHeight(), TRUE);
     onPage(page, check);
-    int used = checkHeight();
-    if (noteText)
-      used = std::max(used, note(noteText, checkNoteLeft(), checkNoteWidth(), y));
-    y += used + S(12);
+    y += checkHeight();
+    closeRow(noteText);
   }
 
   // Bold, and with more air above it than below, so it binds to the rows it
@@ -1812,13 +1843,14 @@ struct Layout {
     y += height + S(12);
   }
 
-  // A line belonging to the control above it, so it starts at the control
-  // column rather than the label margin.
+  // A line belonging to the control above it. It reads as the last line of that
+  // control's description, so it sits in the description's own column -- and
+  // the row above must have been closed without one for the two to meet.
   void under(HWND control) {
-    MoveWindow(control, controlLeft(), y,
-      fullWidth() - (controlLeft() - left()), labelHeight(), TRUE);
+    y -= rowGap() - lineGap();
+    MoveWindow(control, noteLeft(), y, noteWidth(), labelHeight(), TRUE);
     onPage(page, control);
-    y += labelHeight() + S(10);
+    y += labelHeight() + rowGap();
   }
 
   // A SysLink measures itself: LM_GETIDEALSIZE takes the width it will be given
@@ -1999,6 +2031,7 @@ void createControls(HWND w) {
       // it depends on it: the two run at the same moment and either works
       // alone.
       g_hSharpen = mkCombo(w, 0, 0, 10, IDC_SHARPEN);
+      comboFill(g_hSharpen, kSharpenItems, kSharpenCount);
       page.row(L"Sharpening:", g_hSharpen,
         L"Sharpens the scene, which edge smoothing softens a little. Works on "
         L"its own too. Runs before the interface, so menus and text are left "

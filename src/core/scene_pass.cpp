@@ -12,10 +12,9 @@
 #include "log.h"
 #include "d3d11_hooks.h"
 #include "frame_map.h"
-#include "../engines/ktgl/scene_target.h"
-#include "scene_pass.h"
-#include "sharpen.h"
 #include "smaa.h"
+#include "scene_policy.h"
+#include "scene_pass.h"
 #include "supersample.h"
 
 namespace atfix {
@@ -118,66 +117,11 @@ void scenePassNoteBoundary(ID3D11DeviceContext* context, unsigned int numViews,
   if (FAILED(context->GetPrivateData(IID_DuskSceneColor, &size, &previous)))
     previous = nullptr;
 
-  // Scene -> not-scene: the scene is complete and the interface is not yet
-  // drawn, so `previous` is the surface to antialias.
-  //
-  // NOTE, and it is the open question of this whole area: this transition
-  // happens 5-22 times per frame, because the engine steps in and out of its
-  // scene targets while running its post-processing chain. Only the last one is
-  // the composite. SMAA tolerates that because its own once-per-frame latch
-  // makes the FIRST one win and the scene is largely complete by then -- but
-  // "largely" is doing work in that sentence and it has never been verified
-  // against a census. Anything with stricter timing needs the composite
-  // identified positively, not inferred from this transition -- which is
-  // exactly what supersampling now does, and why it fires nothing here.
-  //
-  // So when supersampling has engaged this pass stands down entirely and SMAA
-  // runs inside the downscale instead, on the display-sized result. Running
-  // both would antialias the scene twice; running this one would additionally
-  // do it at the supersampled size, where a morphological filter's pixel-counted
-  // search distances are wrong by the supersampling factor.
-  //
-  // Keyed on ENGAGED rather than on configured. If supersampling is configured
-  // and never attaches -- the composite is never identified, the pass fails, a
-  // second host is refused -- then keying on configuration alone would leave
-  // SMAA with nowhere to run, and it would fall back to the Present path and
-  // antialias the interface. That is strictly worse than turning supersampling
-  // off. The frame latch inside smaaApplySceneColor makes the brief overlap
-  // harmless: for the first frames before SSAA engages, SMAA runs here at scene
-  // resolution; afterwards the in-pass call at display resolution claims the
-  // frame first.
-  // A NOTE THE COMMENT ABOVE EARNED. It has warned since it was written that
-  // "the scene is largely complete by the first transition" had never been
-  // checked. It was checked on 2026-08-10 by counting: this engine leaves the
-  // scene target exactly once per frame, so the concern does not apply here --
-  // and the reason the transition is still the wrong place on KTGL is that the
-  // interface is drawn afterwards, into a different surface. See
-  // engines/ktgl/scene_target.cpp.
-
-  // The Glow-anchored variant claims the frame itself, and the latch inside
-  // smaaApplySceneColor means whichever fires first wins -- so this one has to
-  // stand down entirely when that is on, or it would keep antialiasing the
-  // surface nothing reads.
-  static const bool atGlow = [] {
-    const char* env = std::getenv("DUSK_SMAA_AT_GLOW");
-    return env && env[0] != '0';
-  }();
-  // Nor when this engine has a pre-UI anchor of its own. That anchor fires
-  // later in the frame, on the surface the interface is about to be drawn into,
-  // and this call would claim the frame's one SMAA pass before it got there --
-  // which is exactly what happened: the anchor was called every frame and
-  // refused every frame, and the only symptom was that nothing changed.
-  if (previous && !arrivingIsScene && !ssaaEngaged() && !atGlow &&
-      !ktglPreUiActive())
-    // Sharpening runs on the same surface immediately after, while the
-    // interface is still not in it -- the same order the KTGL anchor uses, so
-    // the setting means one thing across all three games.
-  {
-    smaaApplySceneColor(context, previous);
-    // Independent of the smoothing above: with edge smoothing off this is a
-    // sharpening filter on the finished scene, still before the interface.
-    sharpenApply(context, previous);
-  }
+  // NO PASS RUNS HERE. Both engines' pre-UI moments are elsewhere, and this
+  // transition was the wrong place on each of them for a different reason --
+  // see engines/phyre/pre_ui.h and engines/ktgl/scene_target.h. What this
+  // function still does is decide which surface IS the scene, which is what the
+  // private-data tag below and supersampling's host tag are for.
 
   if (arrivingIsScene) {
     noteAccepted(arrivingColor);
@@ -211,8 +155,12 @@ void STDMETHODCALLTYPE hookedOMSetRenderTargets(
     ID3D11DeviceContext* self, UINT numViews,
     ID3D11RenderTargetView* const* views, ID3D11DepthStencilView* depth) {
   frameMapNoteTargets(self, numViews, views);
-  ktglPreUiNoteTargets(numViews, views);
+  // AFTER the boundary, not before. scenePassNoteBoundary is what tags the
+  // arriving surface as a scene colour host, and an anchor that runs first sees
+  // every surface untagged on its first bind -- which is exactly what a
+  // diagnostic reported on 2026-08-08, as "sceneHostTag=no" on the scene.
   scenePassNoteBoundary(self, numViews, views, depth);
+  scenePolicy().noteTargets(self, numViews, views);
 
   // Is the swap chain's back buffer among the targets arriving? On this engine
   // that is the composite and nothing else, and it is the positive
@@ -278,12 +226,6 @@ namespace atfix {
 
 // Called from the hooked Present. Reports how many times a frame leaves the
 // scene target, which decides whether "fire on the last one" is implementable.
-// The surface the test accepted, for whoever needs to check that it is the same
-// one the engine reads downstream. Raw and compared only, never dereferenced.
-void* scenePassAcceptedSurface() {
-  return g_acceptedCount.load(std::memory_order_relaxed) ? g_accepted[0]
-                                                         : nullptr;
-}
 
 void scenePassFrameTick() {
   // Nothing per-frame to reset here any more. Kept as the hook point because

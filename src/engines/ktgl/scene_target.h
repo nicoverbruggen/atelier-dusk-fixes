@@ -15,6 +15,11 @@ void installKtglSceneTarget();
 void ktglPreUiNoteTargets(unsigned int numViews,
                           struct ID3D11RenderTargetView* const* views);
 struct ID3D11Texture2D* ktglPreUiNoteDraw();
+
+// The anchor itself, called after a forwarded draw. Exposed because the raster
+// correction owns the draw slots whenever supersampling is on, and it reaches
+// this through ScenePolicy::afterDraw. See scene_target.cpp.
+void ktglPreUiAfterDraw(ID3D11DeviceContext* context);
 void ktglPreUiFrameTick();
 bool ktglPreUiActive();
 

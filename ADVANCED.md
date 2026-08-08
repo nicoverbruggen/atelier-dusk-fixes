@@ -52,7 +52,6 @@ These are environment variables, not ini keys. They are for comparison and bug r
 | `DUSK_FRAME_CAPTURE=<frames>` | Writes the back buffer to `dusk-frame-<n>.png` beside the log on each listed frame, with a checksum of the pixels. A comma-separated list is accepted. |
 | `DUSK_FRAME_MAP=<frame>` | Records one frame's whole structure — every render-target bind, shader bind and draw, in order — and writes a PNG of each full-screen colour surface it touched. |
 | `DUSK_FRAME_MAP_AT=<surface>:<draw>` | With the above, also copies that surface as it stood after the Nth draw of its bind. The copy is recorded in stream order, which is the only way to see a surface mid-frame on an engine that records on deferred contexts. |
-| `DUSK_GLOW_TRACE=1` | Identifies Escha & Logy's or Shallie's bloom composite by shader checksum and reports where it sits in the frame. Changes nothing. |
 
 Environment values are read before the ini layer. A wrapper that exports one of these variables, even with a default value, overrides the file and can make a validation run test the wrong configuration.
 

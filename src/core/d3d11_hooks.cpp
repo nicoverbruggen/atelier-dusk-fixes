@@ -16,8 +16,7 @@
 #include "sharpen.h"
 #include "smaa.h"
 #include "frame_map.h"
-#include "../engines/ktgl/glow_anchor.h"
-#include "../engines/ktgl/scene_target.h"
+#include "scene_policy.h"
 #include "supersample.h"
 #include "../../vendor/minhook/include/MinHook.h"
 
@@ -80,20 +79,21 @@ const ContextHookSpec kScenePassHooks[] = {
     "OMSetRenderTargetsAndUnorderedAccessViews" },
 };
 
-// The Glow anchor's set: the one bind point that says the composite is about to
-// draw. Owned by engines/ktgl/glow_anchor.cpp.
-const ContextHookSpec kGlowHooks[] = {
-  { 9, reinterpret_cast<void*>(&hookedPSSetShader),
-    offsetof(ContextOriginals, psSetShader), "PSSetShader" },
-  { 12, reinterpret_cast<void*>(&hookedPreUiDrawIndexed),
-    offsetof(ContextOriginals, drawIndexed), "DrawIndexed(pre-UI)" },
-  { 13, reinterpret_cast<void*>(&hookedPreUiDraw),
-    offsetof(ContextOriginals, draw), "Draw(pre-UI)" },
-  { 20, reinterpret_cast<void*>(&hookedPreUiDrawIndexedInstanced),
-    offsetof(ContextOriginals, drawIndexedInstanced),
+// The pre-UI pass's set: the four draw slots a first-draw anchor fires from.
+// The slots and the originals are this file's business; the detours themselves
+// are the engine's, and arrive through ScenePolicy::drawDetours. The frame map
+// rides the same detours so only one set exists on the vtable.
+//
+// Built at install time rather than declared, because an engine without a draw
+// anchor supplies four nulls and this set is then not installed at all.
+ContextHookSpec preUiHooks[4] = {
+  { 12, nullptr, offsetof(ContextOriginals, drawIndexed),
+    "DrawIndexed(pre-UI)" },
+  { 13, nullptr, offsetof(ContextOriginals, draw), "Draw(pre-UI)" },
+  { 20, nullptr, offsetof(ContextOriginals, drawIndexedInstanced),
     "DrawIndexedInstanced(pre-UI)" },
-  { 21, reinterpret_cast<void*>(&hookedPreUiDrawInstanced),
-    offsetof(ContextOriginals, drawInstanced), "DrawInstanced(pre-UI)" },
+  { 21, nullptr, offsetof(ContextOriginals, drawInstanced),
+    "DrawInstanced(pre-UI)" },
 };
 
 #undef ORIGINAL_AT
@@ -182,7 +182,7 @@ void d3d11InstallHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
   // off from installing nothing and reporting nothing.
   if (!highRes.createTexture2D && !highRes.rasterCorrection &&
       !anisotropyLevel() && !smaaPreUiEnabled() && !ssaaActive() &&
-      !glowTraceEnabled() && !frameMapEnabled() && !sharpenEnabled())
+      !frameMapEnabled() && !sharpenEnabled())
     return;
 
   // The Phyre module initializes MinHook for Ayesha, but this subsystem is the
@@ -237,16 +237,27 @@ void d3d11InstallHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
   // same detour and substitutes at PSSetShaderResources. Both live here.
   // The pre-UI anchor fires from the draw detours in this set, so a plain SMAA
   // session needs them too -- not just a trace run.
-  // The draw slots belong to the pre-UI pass; the Glow trace and the frame map
-  // ride along on the same detours.
-  const bool wantsGlowSet = smaaPreUiEnabled() || sharpenEnabled() ||
-                            glowTraceEnabled() || frameMapEnabled();
-  if (wantsGlowSet && (highRes.rasterCorrection || ssaaConfigured()))
-    log("KTGL pre-UI: declined -- the raster correction owns the draw"
-        " detours this run (supersampling is on, and it antialiases inside its"
-        " own downscale instead).");
-  else if (wantsGlowSet)
-    append(kGlowHooks, int(sizeof(kGlowHooks) / sizeof(kGlowHooks[0])));
+  // The draw slots belong to the pre-UI pass; the frame map rides along on the
+  // same detours.
+  //
+  // ASKED OF THE ENGINE, not of the resolution fix. This used to decline the
+  // set whenever `highRes.rasterCorrection || ssaaConfigured()` was true, and
+  // then log the decision in KTGL's words. On Ayesha the raster correction is
+  // on in every session, so the line printed "supersampling is on" while
+  // supersampling was off -- and it was describing a set Ayesha does not want
+  // for a reason that has nothing to do with why it does not want it.
+  const bool wantsDrawSet =
+    (scenePolicy().preUiAtFirstDraw() &&
+     (smaaPreUiEnabled() || sharpenEnabled())) || frameMapEnabled();
+  if (wantsDrawSet && (highRes.rasterCorrection || ssaaConfigured()))
+    log("Pre-UI anchor: riding the raster correction's draw detours this run"
+        " -- one vtable slot cannot hold two, and the anchor is reached through"
+        " ScenePolicy::afterDraw instead. The pass still runs.");
+  else if (wantsDrawSet && scenePolicy().drawDetours[0]) {
+    for (int i = 0; i < 4; ++i)
+      preUiHooks[i].detour = scenePolicy().drawDetours[i];
+    append(preUiHooks, 4);
+  }
   // Sharpening rides the same bind detour: it needs the pre-UI anchor, and the
   // anchor is fed from OMSetRenderTargets. Leaving it out here is how a
   // sharpening-only session installed nothing and reported nothing.
@@ -292,20 +303,6 @@ void d3d11InstallHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
         MH_EnableHook(samplerTarget) != MH_OK) {
       log("D3D11HOOKS: could not hook CreateSamplerState; anisotropic"
           " filtering will not engage this session");
-    }
-  }
-
-  // Device slot 15, CreatePixelShader. The anchor has to see the bytecode, and
-  // that exists only at creation.
-  if (glowTraceEnabled()) {
-    void* shaderTarget = deviceVtable[15];
-    if (MH_CreateHook(shaderTarget,
-          reinterpret_cast<void*>(&hookedCreatePixelShader),
-          reinterpret_cast<void**>(&g_deviceOriginals.createPixelShader))
-            != MH_OK ||
-        MH_EnableHook(shaderTarget) != MH_OK) {
-      log("GLOW trace: could not hook CreatePixelShader; the composite cannot"
-          " be identified this session");
     }
   }
 
@@ -384,7 +381,7 @@ void d3d11InstallHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
   // the moment structurally and never asks for a main render size, so on Escha
   // & Logy and Shallie this warning was simply false -- it printed in every
   // session of a working feature, which is worse than not printing at all.
-  if (!highRes.rasterCorrection && !ktglPreUiActive() &&
+  if (!highRes.rasterCorrection && scenePolicy().needsMainRenderSize() &&
       (smaaPreUiEnabled() || ssaaConfigured()))
     log("D3D11HOOKS: WARNING the high-resolution fix is off, so no main render"
         " size is ever learned; the scene test cannot match and neither the"

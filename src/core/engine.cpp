@@ -8,10 +8,14 @@
 
 #include "game.h"
 #include "log.h"
+#include "scene_policy.h"
 #include "supersample_policy.h"
 #include "../engines/ktgl/ktgl.h"
 #include "../engines/ktgl/present_clamp.h"
+#include "../engines/ktgl/scene_policy.h"
+#include "../engines/ktgl/window_size.h"
 #include "../engines/phyre/phyre.h"
+#include "../engines/phyre/scene_policy.h"
 #include "../engines/phyre/ssaa_policy.h"
 
 namespace atfix {
@@ -48,6 +52,24 @@ const SsaaPolicy& ssaaPolicy() {
   return policy;
 }
 
+// Where this process's pre-UI pass fires, and what it needs installed for it.
+// Same dispatch, same file, same reason as ssaaPolicy() above: this is the one
+// file entitled to name both engine modules.
+//
+// No environment override. The two anchors are not interchangeable -- forcing
+// KTGL's draw anchor onto Ayesha would arm it against a draw stream it was
+// never measured on -- so there is nothing an override could usefully mean.
+const ScenePolicy& scenePolicy() {
+  static const ScenePolicy& policy = [] () -> const ScenePolicy& {
+    switch (currentEngine()) {
+      case Engine::Ktgl:  return ktglScenePolicy();
+      case Engine::Phyre: return phyreScenePolicy();
+      default:            return sceneNoPolicy();
+    }
+  }();
+  return policy;
+}
+
 }  // namespace atfix
 
 namespace dusk {
@@ -66,6 +88,20 @@ using atfix::titleName;
 Engine g_engine = Engine::Unknown;
 
 }  // namespace
+
+void installEngineEarlyFixes() {
+  switch (currentEngine()) {
+    case Engine::Ktgl:
+      // Declines on its own unless the present clamp is engaged, which is the
+      // KTGL games with supersampling on.
+      atfix::installKtglWindowSize();
+      break;
+    default:
+      // Ayesha has none. The window background fix is core's, not an engine's,
+      // and main.cpp installs it directly.
+      break;
+  }
+}
 
 bool initializeEngineFixes() {
   static const bool initialized = [] {

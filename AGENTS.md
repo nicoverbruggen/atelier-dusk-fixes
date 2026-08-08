@@ -25,6 +25,10 @@ Neither engine module may include the other's headers, and no address pack belon
 
 User-facing options go in `dusk-fix.ini` through the capability matrix's `Descriptor`; environment switches are diagnostics and must not be given an ini key. See `ADVANCED.md` for the option surface.
 
+`default.ini` ships in the release archive, renamed to `dusk-fix.ini`, and repeats defaults that really live in `src/core/config.cpp` and `src/core/game.cpp`'s capability matrix. When you add, rename, remove or re-default an option, update `default.ini` and `ADVANCED.md` in the same change.
+
+`scripts/check_default_ini.py` enforces this and runs in CI: it checks that every option the code reads is documented, that nothing documented is unread, that the literal defaults agree, and that the launcher's own fallbacks agree too — the launcher keeps a separate copy of every default, and one that drifts does not just display the wrong value, it writes it back on the next Save. An option deliberately kept out of `default.ini` goes in the allowlist at the top of that script rather than being dropped from the check. Two are there now: `SMAA` and `AnisotropicFiltering` are on by default only on Ayesha, so no single shipped value can be correct for all three games.
+
 This is the sibling of `../atelier-arland-fixes`. Read that repository's `AGENTS.md` and `TECHNICAL.md` first: its architecture (d3d11 proxy, capability matrix, hook idioms, documentation rules) is the template for this project.
 
 ## Documentation policy

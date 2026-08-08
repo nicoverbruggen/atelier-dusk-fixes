@@ -81,15 +81,22 @@ jobs:
           path: dist
       - name: Check version
         run: python3 scripts/read_version.py VERSION
+      # default.ini ships to users and repeats defaults that live in src/, so
+      # check it before packaging rather than spending a separate runner on it.
+      - name: Check shipped configuration defaults
+        run: python3 scripts/check_default_ini.py
       - name: Assemble the archive
         run: |
           mkdir -p dist/dusk-fix
           cp README.md CHANGELOG.md ADVANCED.md TECHNICAL.md LICENSE dist/dusk-fix/
           mkdir -p dist/dusk-fix/LICENSES
           cp vendor/minhook/LICENSE.txt dist/dusk-fix/LICENSES/MinHook.txt
+          # Shipped under its final name so the archive extracts straight into
+          # the game directory with nothing to rename.
+          cp default.ini dist/dusk-fix.ini
           cd dist
           zip -r ../dusk-fix.zip \
-            d3d11.dll dusk-fix-launcher.exe msimg32.dll dusk-fix
+            d3d11.dll dusk-fix-launcher.exe msimg32.dll dusk-fix.ini dusk-fix
       - uses: actions/upload-artifact@v7
         with:
           name: dusk-fix

@@ -312,6 +312,7 @@ ID3D11Texture2D* g_small = nullptr;
 ID3D11RenderTargetView* g_smallRTV = nullptr;
 ID3D11ShaderResourceView* g_smallSRV = nullptr;
 UINT g_smallWidth = 0, g_smallHeight = 0;
+DXGI_FORMAT g_smallFormat = DXGI_FORMAT_UNKNOWN;
 bool g_passReady = false;
 bool g_passBroken = false;
 
@@ -548,7 +549,12 @@ bool initPass(ID3D11Device* device) {
 
 bool ensureSmall(ID3D11Device* device, UINT width, UINT height,
                  DXGI_FORMAT format) {
-  if (g_small && g_smallWidth == width && g_smallHeight == height)
+  // Format is part of the key, not just the size. Two hosts can want the same
+  // destination size in different formats, and a texture that is the right size
+  // in the wrong format is not a texture this pass can use: the render-target
+  // view writes one format and the composite samples another.
+  if (g_small && g_smallWidth == width && g_smallHeight == height &&
+      g_smallFormat == format)
     return true;
   // A new texture holds nobody's downscale, whatever the old one held.
   g_smallHost = nullptr;
@@ -577,9 +583,11 @@ bool ensureSmall(ID3D11Device* device, UINT width, UINT height,
       FAILED(device->CreateShaderResourceView(g_small, nullptr, &g_smallSRV))) {
     release(g_smallSRV); release(g_smallRTV); release(g_small);
     g_smallWidth = g_smallHeight = 0;
+    g_smallFormat = DXGI_FORMAT_UNKNOWN;
     return false;
   }
   g_smallWidth = width; g_smallHeight = height;
+  g_smallFormat = format;
   return true;
 }
 
@@ -690,14 +698,26 @@ bool runDownscale(ID3D11DeviceContext* context, ID3D11Texture2D* host,
 
   const DXGI_FORMAT format = concreteFormat(sourceDesc.Format);
   ID3D11ShaderResourceView* source = nullptr;
-  bool ok = initPass(device) &&
-            ensureSmall(device, destWidth, destHeight, format) &&
-            (source = sourceViewFor(device, host, sourceDesc)) != nullptr;
+  // Which step failed, and the host it failed on. A count on its own says the
+  // pass declined without saying what it declined, which cost a whole run to
+  // find out the last time this fired.
+  const char* step = "shaders";
+  bool ok = initPass(device);
+  if (ok) {
+    step = "the destination texture";
+    ok = ensureSmall(device, destWidth, destHeight, format);
+  }
+  if (ok) {
+    step = "a view over the source";
+    ok = (source = sourceViewFor(device, host, sourceDesc)) != nullptr;
+  }
   if (!ok) {
     if (g_passFailures.fetch_add(1, std::memory_order_relaxed) == 0)
-      log("SSAA: the downscale pass could not be prepared for a ",
-          std::dec, sourceDesc.Width, "x", sourceDesc.Height, " scene target;"
-          " the engine's own bilinear resample stands this session");
+      log("SSAA: the downscale pass could not prepare ", step, " for a ",
+          std::dec, sourceDesc.Width, "x", sourceDesc.Height, " host"
+          " (format=", unsigned(sourceDesc.Format),
+          " bind=0x", std::hex, sourceDesc.BindFlags, std::dec,
+          "); the engine's own bilinear resample stands for it");
     release(source);
     device->Release();
     return false;
@@ -909,7 +929,19 @@ bool ssaaSubstituteShaderResources(ID3D11DeviceContext* context,
           IID_ID3D11Texture2D, reinterpret_cast<void**>(&texture))) && texture) {
       D3D11_TEXTURE2D_DESC desc = {};
       texture->GetDesc(&desc);
-      if (desc.SampleDesc.Count == 1 &&
+      // A render target, and not a depth surface. Size alone is not enough on
+      // the clamp route: the composite marker only says the back buffer is
+      // bound, and this engine samples a 2048x2048 depth texture during that
+      // window. It is larger than the display on both axes, so the size test
+      // alone took it as the scene and tried to downscale it once per draw.
+      // Nothing wrong reached the screen only because the pass could not build
+      // a shader-resource view over a depth format, which is a failure standing
+      // in for a rule. This is the rule: the scene colour host is a colour
+      // target the engine renders into.
+      const bool colourTarget =
+        (desc.BindFlags & D3D11_BIND_RENDER_TARGET) != 0 &&
+        (desc.BindFlags & D3D11_BIND_DEPTH_STENCIL) == 0;
+      if (colourTarget && desc.SampleDesc.Count == 1 &&
           desc.Width > destWidth && desc.Height > destHeight) {
         host = texture;          // ownership moves here
         hostDesc = desc;

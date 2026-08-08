@@ -130,7 +130,8 @@ struct Capabilities {
   bool ssaaScalesGameIni;  // ...by multiplying the game's own resolution?
   bool smaa;            // [Rendering] SMAA
   bool smaaPreUi;       // ...and does it run before the interface is drawn?
-  bool startupSkips;    // [Startup] SkipLogos / SkipIntroMovie
+  bool skipLogos;       // [Startup] SkipLogos -- Ayesha only
+  bool skipMovie;       // [Startup] SkipIntroMovie
 };
 
 // `ssaaScalesGameIni` is where the two engines' supersampling differs, and the
@@ -153,10 +154,10 @@ struct Capabilities {
 // interface along with everything else. Offering the same one-line description
 // for both would be describing the wrong trade to two thirds of the users.
 const Capabilities kCapabilities[kGameCount] = {
-  //             Ssaa   ScalesIni  Smaa  PreUI  Startup
-  /* Ayesha  */ { true,  false,     true,  true,  true  },
-  /* Escha   */ { true,  true,      true,  false, false },
-  /* Shallie */ { true,  true,      true,  false, false },
+  //             Ssaa   ScalesIni  Smaa  PreUI  Logos  Movie
+  /* Ayesha  */ { true,  false,     true,  true,  true,  true },
+  /* Escha   */ { true,  true,      true,  false, false, true },
+  /* Shallie */ { true,  true,      true,  false, false, true },
 };
 
 char g_iniPath[MAX_PATH] = {};       // dusk-fix.ini, in the game folder
@@ -168,7 +169,7 @@ int g_game = -1;                     // index into kGames, -1 when none found
 
 Capabilities capabilities() {
   if (g_game < 0 || g_game >= kGameCount)
-    return Capabilities{ false, false, false, false, false };
+    return Capabilities{ false, false, false, false, false, false };
   return kCapabilities[g_game];
 }
 
@@ -1070,12 +1071,12 @@ void loadFromIni() {
     setSsaaIndexReducing(index);
   }
 
-  // [Startup]: both off by default, and Ayesha-only.
-  if (capabilities().startupSkips) {
+  // [Startup]: both off by default, and gated separately.
+  if (capabilities().skipLogos)
     setChecked(g_hSkipLogos, iniBool(g_iniPath, "Startup", "SkipLogos", false));
+  if (capabilities().skipMovie)
     setChecked(g_hSkipMovie,
       iniBool(g_iniPath, "Startup", "SkipIntroMovie", false));
-  }
 
   setChecked(g_hSkipLauncher,
     iniBool(g_iniPath, "Launcher", "SkipLauncher", false));
@@ -1143,11 +1144,11 @@ SaveOutcome saveToIni() {
     iniWrite("Rendering", "Supersampling",
       kSsaaItems[ssaaSelectedIndex()].value, g_iniPath);
 
-  if (capabilities().startupSkips) {
+  if (capabilities().skipLogos)
     iniWriteBool(g_iniPath, "Startup", "SkipLogos", isChecked(g_hSkipLogos));
+  if (capabilities().skipMovie)
     iniWriteBool(g_iniPath, "Startup", "SkipIntroMovie",
       isChecked(g_hSkipMovie));
-  }
 
   iniWriteBool(g_iniPath, "Launcher", "SkipLauncher",
     isChecked(g_hSkipLauncher));
@@ -1875,21 +1876,25 @@ void createControls(HWND w) {
       : L"The game runs at your display's refresh rate, 120 Hz and 144 Hz "
         L"included. The mod does not cap the frame rate.");
 
-    // [Startup]. Ayesha-only: the two KTGL games run a different boot path and
-    // neither the logo object nor the movie routine has a homolog there.
-    if (capabilities().startupSkips) {
+    // [Startup]. The two halves are gated separately: only Ayesha's boot logos
+    // have a reachable object, while all three games can skip their movie.
+    if (capabilities().skipLogos || capabilities().skipMovie) {
       page.heading(L"Startup");
-      g_hSkipLogos = mkCheck(w, L"Skip the startup logos", 0, 0, 10,
-        IDC_SKIPLOGOS);
-      page.checkRow(g_hSkipLogos,
-        L"The logos play while the game loads, so this shows a black screen "
-        L"for as long as loading takes rather than starting sooner.");
-      g_hSkipMovie = mkCheck(w, L"Skip the opening movie", 0, 0, 10,
-        IDC_SKIPMOVIE);
-      page.checkRow(g_hSkipMovie,
-        L"Goes straight to the title screen. The ending and event movies still "
-        L"play, but the opening cannot be replayed from the Movies menu while "
-        L"this is on.");
+      if (capabilities().skipLogos) {
+        g_hSkipLogos = mkCheck(w, L"Skip the startup logos", 0, 0, 10,
+          IDC_SKIPLOGOS);
+        page.checkRow(g_hSkipLogos,
+          L"The logos play while the game loads, so this shows a black screen "
+          L"for as long as loading takes rather than starting sooner.");
+      }
+      if (capabilities().skipMovie) {
+        g_hSkipMovie = mkCheck(w, L"Skip the opening movie", 0, 0, 10,
+          IDC_SKIPMOVIE);
+        page.checkRow(g_hSkipMovie,
+          L"Goes straight to the title screen. The ending and event movies "
+          L"still play, but the opening cannot be replayed from the Movies "
+          L"menu while this is on.");
+      }
     }
 
     // [Launcher] SkipLauncher. Read by the 32-bit msimg32 proxy rather than by

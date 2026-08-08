@@ -21,27 +21,21 @@
 // seen-bit with `bts` into its bitset BEFORE calling the open routine, so
 // detouring the open routine cannot lose an unlock.
 //
-// WHICH INDICES ARE SKIPPED, and why this is not simply index 0 as it is in
-// Arland. Ayesha's table has eleven entries where the Arland games have four:
+// WHAT IS SKIPPED: the first movie the process plays, and nothing after. See
+// consumeStartupMovieBudget in core/util.h for the reasoning, which is shared
+// with the KTGL implementation so that the mod has one rule rather than two.
 //
-//   0 opening    1 ending    2 teaser    3 avantitle    4..10 worldview_01..07
+// The short version, and it is why this replaced an index-based gate: Ayesha's
+// table has eleven entries -- `0 opening`, `1 ending`, `2 teaser`,
+// `3 avantitle`, `4..10 worldview_01..07` -- and static analysis could not say
+// which of `opening` and `avantitle` boots, because the play method is virtual
+// and its callers pass a computed index. An index rule therefore had to skip
+// both to be sure, and skipping both meant the in-game Movies gallery could not
+// replay either. Counting plays needs to know neither: the budget is spent
+// during boot, so the gallery is always afterwards.
 //
-// "Avant title" is the pre-title sequence, so the movie a player actually sees
-// when booting Ayesha may be index 3 rather than index 0. That could not be
-// settled statically: the movie player's play method is virtual and its callers
-// pass a computed index, so there is no constant-index call site to read. Both
-// are skipped, because both are intro movies and the feature is worded as
-// covering them. The endings and the seven worldview movies go through the same
-// routine untouched, which is the whole reason this gates on the index at all.
-//
-// Every distinct index this routine is asked for is logged once, so the first
-// real run says which movie the boot path actually plays and the set above can
-// be narrowed if it turns out to be wider than it needs to be.
-//
-// THE MOVIES GALLERY IS AFFECTED. Everything that plays a movie goes through
-// this one routine, so with the option on the opening cannot be replayed from
-// the in-game gallery either. That is also true of the shipped Arland feature,
-// where it is undocumented; here it is stated in ADVANCED.md.
+// The index is still read and logged, because which movie boots is worth
+// knowing; it just no longer decides anything.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
@@ -53,6 +47,7 @@
 #include "../../core/game.h"
 #include "../../core/hook_util.h"
 #include "../../core/log.h"
+#include "../../core/util.h"
 
 namespace atfix {
 
@@ -79,16 +74,13 @@ constexpr uintptr_t kMovieOpenRvas[2] = {
   /* BuildMultilingual */ 0x091bb0,
 };
 
-// The movies played on the way to the title screen, and the player state byte
-// the open routine sets when it declines to play. Entry 0 of the table was
-// confirmed to be opening.wmv in both builds (EN table 0x15f3a40, ML 0x1758470).
-constexpr int32_t kOpeningMovieIndex = 0;
-constexpr int32_t kAvantTitleMovieIndex = 3;
-constexpr uintptr_t kPlayerStateOffset = 0x30;
+// One movie is skipped: whatever the boot path plays first. Both tables were
+// dumped and verified (EN 0x15f3a40, ML 0x1758470, eleven 0x20-byte records,
+// identical between the builds).
+constexpr int kStartupMovieBudget = 1;
 
-bool isIntroMovie(int32_t index) {
-  return index == kOpeningMovieIndex || index == kAvantTitleMovieIndex;
-}
+// The player state byte the open routine sets when it declines to play.
+constexpr uintptr_t kPlayerStateOffset = 0x30;
 
 // Identical between Ayesha's two builds, and NOT the same window as either of
 // the Arland ones: Ayesha frames with `lea rbp,[rsp-0x60]` (disp8) where
@@ -109,21 +101,27 @@ std::atomic<bool> skipping{false};
 // the first run somebody makes, without asking them to set a switch first.
 std::atomic<uint32_t> seenIndices{0};
 
-void noteIndex(int32_t index, bool skipped) {
+void noteIndex(int32_t index, bool skipped, int ordinal) {
   if (index < 0 || index > 31)
     return;
   const uint32_t bit = 1u << index;
   const uint32_t previous = seenIndices.fetch_or(bit, std::memory_order_relaxed);
   if (previous & bit)
     return;
-  log("MOVIE: open index=", std::dec, index, skipped ? " (skipped)" : " (played)");
+  // The ordinal says whether the budget is the right size: a second movie
+  // before the player has control would mean one is too few.
+  log("MOVIE: open #", std::dec, ordinal, " index=", index,
+      skipped ? " (skipped)" : " (played)");
 }
 
 void STDMETHODCALLTYPE skippedMovieOpen(uintptr_t self, int32_t index,
                                         BYTE flag, uintptr_t context) {
-  const bool skip =
-    skipping.load(std::memory_order_relaxed) && isIntroMovie(index);
-  noteIndex(index, skip);
+  int ordinal = 0;
+  // The budget is consumed by every play, skipped or not, so a movie arriving
+  // before the boot one cannot leave it unprotected.
+  const bool skip = skipping.load(std::memory_order_relaxed) &&
+                    consumeStartupMovieBudget(kStartupMovieBudget, &ordinal);
+  noteIndex(index, skip, ordinal);
   if (!skip) {
     originalMovieOpen(self, index, flag, context);
     return;

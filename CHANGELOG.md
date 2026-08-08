@@ -17,7 +17,7 @@ The first release. This is what the mod does, rather than a list of changes: the
 
 ### Graphics options
 
-- **Supersampling**, in all three games. The scene is rendered above the display resolution and resampled down, which is the only antialiasing that improves texture interiors and alpha-tested edges as well as model silhouettes. Multipliers are 1.25x, 1.5x, 2x, 3x and 4x. In Escha & Logy and Shallie the interface is included, so its artwork is sharper at high resolutions too.
+- **Supersampling**, in all three games. The scene is rendered above the display resolution and resampled down, which is the only antialiasing that improves texture interiors and alpha-tested edges as well as model silhouettes. Multipliers are 1.25x, 1.5x, 2x, 3x and 4x. In Escha & Logy and Shallie the interface is included, which is the only setting that improves it at high resolutions. Those games magnify their interface artwork from a fixed 1920x1080 layout, so it looks cleanest when the render resolution is a whole multiple of that: 150% on a 1440p screen, 200% on a 1080p one.
 - **Edge smoothing (SMAA)**, in all three games. Cheap, and it reaches edges multisampling cannot. In Ayesha it runs before the interface is drawn, so menu text stays sharp. In Escha & Logy and Shallie it runs over the finished picture and softens text along with everything else, which is why it is off there unless asked for.
 - **Anisotropic filtering** at 16x in Ayesha. It costs nothing measurable, so it has no setting.
 

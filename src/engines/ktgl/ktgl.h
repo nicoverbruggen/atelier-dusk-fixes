@@ -49,6 +49,12 @@ struct KtglGame {
   // shared the way the save-path ones are.
   std::array<BYTE, 16> padCreateExpected;
   uintptr_t mixCardUpdateRva;     // Card::Update, the synthesis pump (core/mix_card.h)
+  // The two halves of the intro movie skip (movie_skip.h). The play routine is
+  // where the file is opened and where the skip happens; the path builder one
+  // frame up is the only place carrying the movie index, and it is always
+  // forwarded because the gallery seen-bit is set inside it.
+  uintptr_t moviePlayRva;
+  uintptr_t movieOpenRva;
   uint8_t exeBuild;
 };
 

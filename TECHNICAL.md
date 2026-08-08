@@ -42,7 +42,7 @@ The two engines reach it by opposite routes, and only the plumbing differs. On A
 
 In both cases the composite is identified positively, by the bind whose color target is the swap-chain back buffer, rather than inferred from when the engine stops drawing into the scene.
 
-On the KTGL games the whole frame is supersampled rather than the scene alone, because the interface is composed in the same coordinate space. That costs more and is also the only thing in the mod that improves the interface art at high resolutions.
+On the KTGL games the whole frame is supersampled rather than the scene alone, because the interface is composed in the same coordinate space. That costs more, and it is also the only setting that improves the interface at high resolutions. Those games lay the interface out in a fixed 1920x1080 space and magnify its artwork to fill the frame, so the picture is cleanest when the render resolution is a whole multiple of 1920x1080: at 2560x1440 that is the 150% setting, and at 1920x1080 it is 200%.
 
 **SMAA** is available in all three games, and where it runs differs.
 
@@ -108,7 +108,7 @@ This is a preference rather than a correction, so it ships off. `[Interface] Ste
 
 ## Startup logos and the opening movie
 
-Two independent skips, both Ayesha-only and both opt-in, using the same mechanism the Arland mod uses because Ayesha runs the same PhyreEngine boot code. Neither is validated in game yet.
+Two independent skips, both opt-in and both confirmed in game. The logo skip is Ayesha-only; the movie skip covers all three games.
 
 **The logos** belong to an object the application creates before it starts initializing the engine. Its update runs on the render thread and steps a phase sequence over fullscreen picture layers; the application does its whole engine and resource initialization while that animates, and only then waits for the sequence to report its terminal phase. Writing that phase releases the wait. The draw is suppressed as well, because forcing the phase stops the picture layers being ticked and a never-ticked layer's contents are not worth reasoning about.
 
@@ -128,7 +128,7 @@ Between the game's window appearing and its first frame being drawn there is abo
 
 The correction intercepts one call and changes one field of one window class, and only when three conditions hold together: the class comes from the executable itself, it is named `KTGL.A11`, and its background is exactly the grey stock brush. Windows hands out one shared handle per stock brush for the whole process, so that last comparison is an exact match rather than a guess. Anything else passes through untouched, so a build that stopped asking for grey would simply stop being affected. No game code is patched, no address is hardcoded, and the structure the game passed is never written to: the swap is made on a copy.
 
-Ayesha registers the same class name as the Arland games and with the same brush. Escha & Logy and Shallie do not contain that class name, so the correction never matches there and needs no per-game gate to say so. Always on, with no setting, and not validated in game yet.
+Ayesha registers the same class name as the Arland games and with the same brush. Escha & Logy and Shallie do not contain that class name, so the correction never matches there and needs no per-game gate to say so. Always on, with no setting, and confirmed in game.
 
 ## Launcher
 

@@ -75,6 +75,7 @@ else
     'src/engines/phyre/worldmap_fix.cpp',
     'src/engines/ktgl/ktgl.cpp',
     'src/engines/ktgl/loading_text_fix.cpp',
+    'src/engines/ktgl/movie_skip.cpp',
     'src/engines/ktgl/system_save_fix.cpp',
     'src/engines/ktgl/control_prompt_fix.cpp',
     'vendor/minhook/src/hde/hde64.c',

@@ -1435,7 +1435,8 @@ int buttonHeight()  { return g_lineHeight + S(12); }
 // layout be a single top-to-bottom pass rather than a set of coordinates that
 // have to agree with each other.
 HWND mkLabel(HWND parent, const wchar_t* text, int x, int y, int w, int h) {
-  HWND c = CreateWindowExW(0, L"STATIC", text, WS_CHILD | WS_VISIBLE,
+  HWND c = CreateWindowExW(0, L"STATIC", text,
+    WS_CHILD | WS_VISIBLE | SS_NOPREFIX,
     x, y, w, h, parent, nullptr, nullptr, nullptr);
   setFont(c);
   return c;
@@ -1758,7 +1759,11 @@ struct Layout {
 
   HWND place(const wchar_t* cls, const wchar_t* text, DWORD style,
              int x, int top, int width, int height, HFONT font = nullptr) {
-    HWND control = CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | style,
+    // SS_NOPREFIX, because every caller passes L"STATIC" and a static treats a
+    // literal `&` as a mnemonic prefix. It could not be set here if this ever
+    // created a BUTTON: SS_NOPREFIX is 0x80, which on a button is BS_BITMAP.
+    HWND control = CreateWindowExW(0, cls, text,
+      WS_CHILD | WS_VISIBLE | SS_NOPREFIX | style,
       x, top, width, height, parent, nullptr, nullptr, nullptr);
     setFont(control, font);
     onPage(page, control);
@@ -1924,7 +1929,7 @@ void createControls(HWND w) {
     std::max((int)strip.right + S(12), labelRight - S(320));
   g_hGameLabel = CreateWindowExW(0, L"STATIC",
     g_gameName ? g_gameName : L"No game detected",
-    WS_CHILD | WS_VISIBLE | SS_RIGHT | SS_ENDELLIPSIS,
+    WS_CHILD | WS_VISIBLE | SS_RIGHT | SS_ENDELLIPSIS | SS_NOPREFIX,
     labelLeft, labelTop, labelRight - labelLeft, labelHeight(),
     w, nullptr, nullptr, nullptr);
   setFont(g_hGameLabel);

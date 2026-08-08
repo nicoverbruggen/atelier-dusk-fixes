@@ -130,8 +130,16 @@ struct Capabilities {
   bool ssaaScalesGameIni;  // ...by multiplying the game's own resolution?
   bool smaa;            // [Rendering] SMAA
   bool smaaPreUi;       // ...and does it run before the interface is drawn?
-  bool skipLogos;       // [Startup] SkipLogos -- Ayesha only
+  bool skipLogos;       // [Startup] SkipLogos
   bool skipMovie;       // [Startup] SkipIntroMovie
+  // Whether skipping the logos actually saves time, which differs by engine and
+  // is the whole substance of the checkbox's description. On Ayesha the logos
+  // animate while the game loads, so suppressing them buys a black screen of the
+  // same length. On the other two they are a timed sequence the loading does not
+  // overlap -- eight seconds of hold, read out of the game's own step table --
+  // so the skip is real. Telling both games the same thing would be wrong for
+  // one of them.
+  bool logosCostTime;
 };
 
 // `ssaaScalesGameIni` is where the two engines' supersampling differs, and the
@@ -154,10 +162,10 @@ struct Capabilities {
 // interface along with everything else. Offering the same one-line description
 // for both would be describing the wrong trade to two thirds of the users.
 const Capabilities kCapabilities[kGameCount] = {
-  //             Ssaa   ScalesIni  Smaa  PreUI  Logos  Movie
-  /* Ayesha  */ { true,  false,     true,  true,  true,  true },
-  /* Escha   */ { true,  true,      true,  false, false, true },
-  /* Shallie */ { true,  true,      true,  false, false, true },
+  //             Ssaa   ScalesIni  Smaa  PreUI  Logos  Movie  LogoTime
+  /* Ayesha  */ { true,  false,     true,  true,  true,  true,  false },
+  /* Escha   */ { true,  true,      true,  false, true,  true,  true  },
+  /* Shallie */ { true,  true,      true,  false, true,  true,  true  },
 };
 
 char g_iniPath[MAX_PATH] = {};       // dusk-fix.ini, in the game folder
@@ -169,7 +177,7 @@ int g_game = -1;                     // index into kGames, -1 when none found
 
 Capabilities capabilities() {
   if (g_game < 0 || g_game >= kGameCount)
-    return Capabilities{ false, false, false, false, false, false };
+    return Capabilities{ false, false, false, false, false, false, false };
   return kCapabilities[g_game];
 }
 
@@ -1876,24 +1884,27 @@ void createControls(HWND w) {
       : L"The game runs at your display's refresh rate, 120 Hz and 144 Hz "
         L"included. The mod does not cap the frame rate.");
 
-    // [Startup]. The two halves are gated separately: only Ayesha's boot logos
-    // have a reachable object, while all three games can skip their movie.
+    // [Startup]. The two halves stay gated separately even though all three
+    // games now support both: the gating is what keeps a game that loses one
+    // of them from showing a dead checkbox.
     if (capabilities().skipLogos || capabilities().skipMovie) {
       page.heading(L"Startup");
       if (capabilities().skipLogos) {
         g_hSkipLogos = mkCheck(w, L"Skip the startup logos", 0, 0, 10,
           IDC_SKIPLOGOS);
-        page.checkRow(g_hSkipLogos,
-          L"The logos play while the game loads, so this shows a black screen "
-          L"for as long as loading takes rather than starting sooner.");
+        page.checkRow(g_hSkipLogos, capabilities().logosCostTime
+          ? L"Reaches the title screen about five seconds sooner."
+          : L"The logos play while the game loads, so this shows a black "
+            L"screen for as long as loading takes rather than starting "
+            L"sooner.");
       }
       if (capabilities().skipMovie) {
         g_hSkipMovie = mkCheck(w, L"Skip the opening movie", 0, 0, 10,
           IDC_SKIPMOVIE);
         page.checkRow(g_hSkipMovie,
-          L"Goes straight to the title screen. The ending and event movies "
-          L"still play, but the opening cannot be replayed from the Movies "
-          L"menu while this is on.");
+          L"Goes straight to the title screen. Only the movie that plays at "
+          L"startup is skipped, so endings, event movies and the Movies menu "
+          L"are unaffected.");
       }
     }
 

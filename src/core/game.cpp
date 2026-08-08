@@ -341,8 +341,8 @@ constexpr Support X = Support::OnByDefault;
 // fails loudly the next time a Feature is added without extending every row.
 //                               Stats Trace Verfy Censu Probe Targt HiRes Cache Field Stabl Smaa  Ssaa  Aniso WMap  Logo  Movi  Typo  SysSv Promt PadRe Synth
 constexpr Support kAyesha[]  = { O,    O,    O,    O,    O,    O,    X,    X,    X,    X,    X,    O,    X,    X,    O,    O,    U,    U,    U,    O,    U };
-constexpr Support kEscha[]   = { U,    U,    U,    U,    U,    O,    U,    U,    U,    U,    O,    O,    O,    U,    U,    O,    X,    X,    U,    O,    X };
-constexpr Support kShallie[] = { U,    U,    U,    U,    U,    O,    U,    U,    U,    U,    O,    O,    O,    U,    U,    O,    X,    X,    O,    O,    X };
+constexpr Support kEscha[]   = { U,    U,    U,    U,    U,    O,    U,    U,    U,    U,    O,    O,    O,    U,    O,    O,    X,    X,    U,    O,    X };
+constexpr Support kShallie[] = { U,    U,    U,    U,    U,    O,    U,    U,    U,    U,    O,    O,    O,    U,    O,    O,    X,    X,    O,    O,    X };
 
 constexpr std::size_t kColumns = static_cast<std::size_t>(Feature::Count);
 static_assert(std::size(kAyesha) == kColumns,  "Ayesha row is not one entry per Feature");

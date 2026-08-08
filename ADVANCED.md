@@ -12,12 +12,12 @@ The game's own `Setting.ini` remains separate. Resolution, fullscreen mode, lang
 
 | Key | Values | Default | Effect |
 |---|---|---|---|
-| `SkipLogos` | `true` / `false` | `false` | Skips the publisher and developer logos shown while the game boots. Atelier Ayesha only. |
-| `SkipIntroMovie` | `true` / `false` | `false` | Skips the movies played on the way to the title screen. Atelier Ayesha only. |
+| `SkipLogos` | `true` / `false` | `false` | Skips the publisher and developer logos shown while the game boots. |
+| `SkipIntroMovie` | `true` / `false` | `false` | Skips the movie played on the way to the title screen. |
 
-`SkipLogos` does not make the game start sooner. The logos play while the game loads, so skipping them shows a black screen for as long as loading takes. It also stops the attract replay that would otherwise run after the title screen sits idle, because both wait on the same thing.
+`SkipLogos` behaves differently on Atelier Ayesha than on the other two, because the games differ. On Ayesha the logos animate while the game loads, so skipping them shows a black screen for as long as loading takes rather than starting sooner, and it also stops the attract replay that would otherwise run after the title screen sits idle, because both wait on the same thing. On Escha & Logy and Shallie the logos are a timed sequence the loading does not overlap, so skipping them reaches the title screen about eight seconds sooner and takes the health and safety notice with them.
 
-`SkipIntroMovie` gates on which movie is being opened, so the ending and event movies are unaffected. While it is on, the opening also cannot be replayed from the in-game Movies menu, because every movie the game plays goes through the routine this intercepts.
+`SkipIntroMovie` skips the first movie the game plays and nothing after it, so endings, event movies and the in-game Movies menu are all unaffected. Counting rather than identifying is deliberate: every movie goes through the same routine, so a rule that recognized the opening would also skip it when you chose it from the menu yourself. One consequence is worth knowing rather than reporting as a fault: if you leave the title screen alone, the attract sequence still plays the opening, because by then the skip is spent. Touching anything stops it.
 
 ### `[Launcher]`
 
@@ -42,11 +42,12 @@ These are environment variables, not ini keys. They are for comparison and bug r
 | `DUSK_FIELD_ENGINE_FIX=0` | Disables the Ayesha field-jitter fix. The resting stabilizer depends on this rescale. |
 | `DUSK_FIELD_STABILIZER=0` | Disables only the resting part of the field-jitter fix. This leaves the threshold rescale active. |
 | `DUSK_LOADING_TEXT=0` | Leaves the "Loadning system data." misspelling on Escha & Logy's and Shallie's first screen uncorrected. |
-| `DUSK_SKIP_LOGOS=1` | Skips Ayesha's startup logos for one session, without setting the ini key. |
-| `DUSK_SKIP_INTRO_MOVIE=1` | Skips Ayesha's opening movie for one session, without setting the ini key. |
+| `DUSK_SKIP_LOGOS=1` | Skips the startup logos for one session, without setting the ini key. |
+| `DUSK_SKIP_INTRO_MOVIE=1` | Skips the opening movie for one session, without setting the ini key. |
 | `DUSK_SMAA=0` / `=1` | Ayesha's SMAA pass. |
 | `DUSK_SSAA=<percent>` | Ayesha's supersampling factor, 100 for off. |
 | `DUSK_ANISO=<level>` | Anisotropic filtering level: 2, 4, 8 or 16, anything else for off. |
+| `DUSK_IPU_TRACE=1` | Logs each distinct 2D image Escha & Logy or Shallie loads, with its file name and the address that asked for it. Changes nothing the game does. |
 
 Environment values are read before the ini layer. A wrapper that exports one of these variables, even with a default value, overrides the file and can make a validation run test the wrong configuration.
 

@@ -13,11 +13,11 @@
 //     SRV at init, and the system-save-data wipe on quit.
 //   * Shallie: the CreateSamplerState bug AGT patched.
 //
-// None of those is implemented yet. What this module does install is the
-// "Loadning system data." correction (loading_text_fix.h), which is the first
-// fix here and needs no engine knowledge at all -- it rewrites one misspelled
-// string literal in the mapped image. The four executable identities are
-// verified; that check is the gate this and every future fix installs behind.
+// Neither of those is implemented yet. What this module does install is the
+// "Loadning system data." correction (loading_text_fix.h), the system-save
+// guard, Shallie's control-prompt hold, the intro movie skip and the startup
+// logo skip. The four executable identities are verified; that check is the
+// gate this and every fix here installs behind.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
@@ -55,6 +55,39 @@ struct KtglGame {
   // forwarded because the gallery seen-bit is set inside it.
   uintptr_t moviePlayRva;
   uintptr_t movieOpenRva;
+  // The DUSK_IPU_TRACE diagnostic (ipu_trace.h): the 2D-image loader and the
+  // table it indexes, whose rows name their own files. Both were taken from the
+  // build's own RTTI -- the `Ipu` vtable, then the slot whose prologue matches
+  // -- rather than by searching for a shape, which matters because the slot
+  // differs between the games (Escha 3, Shallie 14). `Rows` is cross-checked at
+  // install against the bound the loader itself carries; the counts differ
+  // because Shallie's table is shorter.
+  uintptr_t ipuLoadRva;
+  uintptr_t ipuTableRva;
+  uint32_t ipuTableRows;
+  // The startup logo skip (logo_skip.h): the body all three logo states call,
+  // and the byte offset of the elapsed-seconds float inside `Title` that the
+  // body zeroes and the sequence's advance check reads. The offset differs
+  // between the games because Shallie lays that object out differently, and the
+  // install refuses unless the body it hooked really does zero the offset the
+  // row names.
+  uintptr_t logoEnterRva;
+  uint32_t logoElapsedOffset;
+  // Removing the hold is not enough on its own: the step opens with a fade and
+  // closes with another, and its update refuses to advance while either runs. So
+  // the skip also answers "is a fade running" with no, for the one image object
+  // the logo step owns. `logoIpuOffset` is where the step stores that object on
+  // the `Title`, and `ipuFadeBusyRva` is the predicate body -- a different vtable
+  // slot in each game (Escha 8, Shallie 19), so it is carried as an address.
+  uint32_t logoIpuOffset;
+  uintptr_t ipuFadeBusyRva;
+  // Byte on the image object that stops it drawing. Not invented here: the image
+  // loader clears exactly this byte on its own "this row has no image" branch,
+  // one instruction before it records -1 as the held row. The skip clears the
+  // byte and leaves the row alone, which is the half of that branch that is safe
+  // -- the -1 is what crashed the first attempt. Escha keeps it at 0xc0 and
+  // Shallie at 0x40.
+  uint32_t ipuHideOffset;
   uint8_t exeBuild;
 };
 
@@ -66,7 +99,6 @@ namespace dusk {
 // records the result, and installs whichever fixes in this directory are
 // enabled. Idempotent. Returns true if the executable was recognized, whether or
 // not any individual fix installed -- each reports its own outcome to the log.
-// Installs no hooks: nothing here detours anything yet.
 bool initializeKtglFixes();
 
 // Present. Nothing here needs a frame boundary yet; the hook exists so that the

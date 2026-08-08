@@ -26,7 +26,7 @@ Multisampling is deliberately not offered. It cannot reach what actually aliases
 ### Convenience
 
 - **A settings launcher**, in place of Koei Tecmo's. Resolution, window mode, language, character outlines and every option above in one window, with the game's own settings editor and launcher still reachable from it. It can be skipped so that Play in Steam goes straight into the game.
-- **Skipping the startup logos and the opening movie** in Ayesha. Neither makes the game start sooner: the logos play while it loads.
+- **Skipping the startup logos and the opening movie**, in all three games. On Escha & Logy and Shallie this reaches the title screen about five seconds sooner; on Ayesha it does not, because there the logos play while the game loads.
 - **A steady control-hint panel** in Shallie, which otherwise replays its slide-in entrance every time the interface is rebuilt.
 
 ### Scope

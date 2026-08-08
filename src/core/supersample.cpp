@@ -195,6 +195,8 @@ std::atomic<uint64_t> g_passFailures{0};
 std::atomic<uint64_t> g_backBufferRetags{0};
 std::atomic<bool> g_backBufferKnown{false};
 std::atomic<UINT> g_backWidth{0};
+std::atomic<UINT> g_clampedRenderWidth{0};
+std::atomic<UINT> g_clampedRenderHeight{0};
 std::atomic<UINT> g_backHeight{0};
 
 // The pass's own re-entry guard.
@@ -570,8 +572,7 @@ bool ensureSmall(ID3D11Device* device, UINT width, UINT height,
   // 1920x1080 image into the corner of a 2880x1620 texture the composite sampled
   // whole. That is the same rule the project already applies to context calls:
   // the mod's own D3D11 work must not travel through the mod's own hooks.
-  if (FAILED(d3d11DeviceOriginals().createTexture2D(
-          device, &td, nullptr, &g_small)) ||
+  if (FAILED(createTexture2DUnhooked(device, &td, nullptr, &g_small)) ||
       FAILED(device->CreateRenderTargetView(g_small, nullptr, &g_smallRTV)) ||
       FAILED(device->CreateShaderResourceView(g_small, nullptr, &g_smallSRV))) {
     release(g_smallSRV); release(g_smallRTV); release(g_small);
@@ -1253,6 +1254,10 @@ void ssaaClampPresentSize(UINT* width, UINT* height, const char* where) {
     return;
   const UINT wasWidth = *width;
   const UINT wasHeight = *height;
+  // Remembered so the window hook can recognise the window the engine sizes
+  // from this same number. See engines/ktgl/window_size.cpp.
+  g_clampedRenderWidth.store(wasWidth, std::memory_order_relaxed);
+  g_clampedRenderHeight.store(wasHeight, std::memory_order_relaxed);
   *width = displayWidth;
   *height = displayHeight;
   // Once per distinct call site and size, so a per-frame resize cannot flood
@@ -1351,6 +1356,26 @@ void ssaaFrameTick(IDXGISwapChain* swapChain) {
         // a per-host destination texture is worth building.
         " secondHostRefusals=",
         g_secondHostRefusals.load(std::memory_order_relaxed));
+}
+
+}  // namespace atfix
+
+namespace atfix {
+
+bool ssaaClampedDisplaySize(unsigned int* width, unsigned int* height) {
+  if (!ssaaPresentClampEnabled())
+    return false;
+  return displaySize(width, height);
+}
+
+bool ssaaClampedRenderSize(unsigned int* width, unsigned int* height) {
+  const UINT w = g_clampedRenderWidth.load(std::memory_order_relaxed);
+  const UINT h = g_clampedRenderHeight.load(std::memory_order_relaxed);
+  if (!w || !h)
+    return false;
+  *width = w;
+  *height = h;
+  return true;
 }
 
 }  // namespace atfix

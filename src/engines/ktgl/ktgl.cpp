@@ -17,6 +17,7 @@
 #include "logo_skip.h"
 #include "movie_skip.h"
 #include "system_save_fix.h"
+#include "window_size.h"
 #include "../../core/game.h"
 #include "../../core/mix_card.h"
 #include "../../core/pad_rescan.h"

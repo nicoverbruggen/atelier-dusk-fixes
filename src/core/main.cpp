@@ -29,6 +29,7 @@
 #include "supersample.h"
 #include "util.h"
 #include "window_background.h"
+#include "../engines/ktgl/window_size.h"
 #include "version.h"
 #include "../../vendor/minhook/include/MinHook.h"
 
@@ -388,6 +389,12 @@ DLLEXPORT HRESULT __stdcall D3D11CreateDeviceAndSwapChain(
       pSwapChainDesc->BufferDesc.RefreshRate.Denominator,
       pSwapChainDesc->Windowed != FALSE);
 
+  // Both swap-chain routes, because which one a game takes is the game's
+  // choice. The KTGL games observed so far come through the factory hook, but a
+  // fix that only covers the route that was tested is a fix with a silent hole.
+  if (SUCCEEDED(hr))
+    atfix::ssaaFitOutputWindow(pSwapChainDesc);
+
   if (SUCCEEDED(hr) && ppSwapChain && *ppSwapChain) {
     atfix::ssaaNoteBackBuffer(*ppSwapChain);
     atfix::hookPresent(*ppSwapChain);
@@ -418,6 +425,11 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
       if (!disable || disable[0] == '0') {
         MH_Initialize();
         atfix::installWindowBackgroundFix();
+        // Same reason as the line above: the window is created before the game
+        // reaches D3D11, so a hook installed when the proxy is first used is
+        // already too late. Declines on its own unless the present clamp is
+        // active, which is only the KTGL games with supersampling on.
+        atfix::installKtglWindowSize();
       }
       break;
     }

@@ -243,6 +243,12 @@ void ssaaClampPresentSize(UINT* width, UINT* height, const char* where);
 // or when the window already has the right client area.
 void ssaaFitOutputWindow(const DXGI_SWAP_CHAIN_DESC* desc);
 
+// The two sizes the present clamp works between: what the display gets, and
+// what the engine asked for before being clamped. Both false when the clamp
+// route is not active or nothing has been clamped yet.
+bool ssaaClampedDisplaySize(unsigned int* width, unsigned int* height);
+bool ssaaClampedRenderSize(unsigned int* width, unsigned int* height);
+
 // Called at Present. Counters, the periodic line, and the one-shot lines that
 // name the states in which this feature is configured and doing nothing.
 //

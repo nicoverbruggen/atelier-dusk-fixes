@@ -465,7 +465,7 @@ bool initSized(ID3D11Device* dev, UINT w, UINT h, DXGI_FORMAT fmt) {
     // Through the original: see the same call in supersample.cpp. A pass
     // target that happens to be 1920x1080 would otherwise be rewritten to
     // the scene size by the high-resolution fix.
-    if (FAILED(d3d11DeviceOriginals().createTexture2D(dev, &td, nullptr, tex)))
+    if (FAILED(createTexture2DUnhooked(dev, &td, nullptr, tex)))
       return false;
     if (srv && FAILED(dev->CreateShaderResourceView(*tex, nullptr, srv)))
       return false;

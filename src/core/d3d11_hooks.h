@@ -59,6 +59,23 @@ struct DeviceOriginals {
 
 const DeviceOriginals& d3d11DeviceOriginals();
 
+// Create a texture the way the mod's own passes must: never through the hooked
+// device, so the high-resolution fix cannot rewrite a target the mod owns.
+//
+// The original is only captured when that fix installs its device hook, and the
+// fix is unsupported on Escha & Logy and Shallie -- so on those two the pointer
+// is null and calling it is a jump to zero. When nothing is hooked there is
+// nothing to bypass, and the device's own method is the unhooked path already.
+inline HRESULT createTexture2DUnhooked(ID3D11Device* device,
+                                       const D3D11_TEXTURE2D_DESC* desc,
+                                       const D3D11_SUBRESOURCE_DATA* data,
+                                       ID3D11Texture2D** out) {
+  const DeviceOriginals& originals = d3d11DeviceOriginals();
+  return originals.createTexture2D
+    ? originals.createTexture2D(device, desc, data, out)
+    : device->CreateTexture2D(desc, data, out);
+}
+
 // ---- context --------------------------------------------------------------
 
 using PFN_RSSetViewports = void (STDMETHODCALLTYPE *) (

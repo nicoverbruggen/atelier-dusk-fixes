@@ -24,7 +24,6 @@ extern Log log;   // main.cpp
 
 namespace {
 
-std::atomic<uint32_t> g_leavesThisFrame{0};
 
 // HOW MANY DISTINCT SURFACES THE TEST ACCEPTS, which is the question the leave
 // count just redirected us to. One leave per frame means the trigger fires at
@@ -49,12 +48,7 @@ void noteAccepted(ID3D11Texture2D* colour) {
     return;
   g_accepted[n] = colour;
   g_acceptedCount.store(n + 1, std::memory_order_relaxed);
-  log("SCENEPASS: distinct scene colour surface #", std::dec, n + 1,
-      " accepted -- more than one means the pass and the composite can be"
-      " looking at different surfaces");
 }
-std::atomic<uint32_t> g_leavesMin{0xffffffff}, g_leavesMax{0};
-std::atomic<uint64_t> g_leavesSum{0}, g_leavesFrames{0};
 
 // The scene colour last bound on this context. Per-context, because Ayesha
 // records its scene on a deferred context and replays it on the immediate one,
@@ -152,18 +146,13 @@ void scenePassNoteBoundary(ID3D11DeviceContext* context, unsigned int numViews,
   // harmless: for the first frames before SSAA engages, SMAA runs here at scene
   // resolution; afterwards the in-pass call at display resolution claims the
   // frame first.
-  // HOW MANY TIMES THE SCENE IS LEFT PER FRAME, and whether that count is
-  // stable enough to fire on the last one instead of the first.
-  //
-  // The first is measurably wrong on this engine. An edge-map run on 2026-08-10
-  // showed the antialiased output drawn over by later scene content: sky and
-  // distant background carried edges, the ground, character and sprites did
-  // not. The comment above this line has warned since it was written that
-  // "largely complete" was doing the work and had never been checked; it is
-  // checked now and it is false here. Ayesha survives the same trigger because
-  // its first transition happens to be late.
-  if (previous && !arrivingIsScene)
-    g_leavesThisFrame.fetch_add(1, std::memory_order_relaxed);
+  // A NOTE THE COMMENT ABOVE EARNED. It has warned since it was written that
+  // "the scene is largely complete by the first transition" had never been
+  // checked. It was checked on 2026-08-10 by counting: this engine leaves the
+  // scene target exactly once per frame, so the concern does not apply here --
+  // and the reason the transition is still the wrong place on KTGL is that the
+  // interface is drawn afterwards, into a different surface. See
+  // engines/ktgl/scene_target.cpp.
 
   // The Glow-anchored variant claims the frame itself, and the latch inside
   // smaaApplySceneColor means whichever fires first wins -- so this one has to
@@ -297,28 +286,9 @@ void* scenePassAcceptedSurface() {
 }
 
 void scenePassFrameTick() {
-  const uint32_t leaves = g_leavesThisFrame.exchange(0, std::memory_order_relaxed);
-  if (!leaves)
-    return;
-  uint32_t prev = g_leavesMin.load(std::memory_order_relaxed);
-  while (leaves < prev &&
-         !g_leavesMin.compare_exchange_weak(prev, leaves,
-                                            std::memory_order_relaxed)) {}
-  prev = g_leavesMax.load(std::memory_order_relaxed);
-  while (leaves > prev &&
-         !g_leavesMax.compare_exchange_weak(prev, leaves,
-                                            std::memory_order_relaxed)) {}
-  g_leavesSum.fetch_add(leaves, std::memory_order_relaxed);
-  const uint64_t frames = g_leavesFrames.fetch_add(1, std::memory_order_relaxed) + 1;
-  if (frames % 600)
-    return;
-  log("SCENEPASS leaves-per-frame min=", std::dec,
-      g_leavesMin.load(std::memory_order_relaxed),
-      " max=", g_leavesMax.load(std::memory_order_relaxed),
-      " mean=", g_leavesSum.load(std::memory_order_relaxed) / frames,
-      " over ", frames, " compositing frames"
-      " (a stable count means the last leave can be fired on instead of the"
-      " first)");
+  // Nothing per-frame to reset here any more. Kept as the hook point because
+  // Present is the right place for it and the next thing that needs one will
+  // want it.
 }
 
 }  // namespace atfix

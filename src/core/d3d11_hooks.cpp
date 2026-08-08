@@ -380,7 +380,12 @@ void d3d11InstallHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
   // nothing enlarged for supersampling to downscale. Both features that read
   // the scene pass then report themselves configured and do nothing, which is
   // exactly the state this project has now been in three times.
-  if (!highRes.rasterCorrection && (smaaPreUiEnabled() || ssaaConfigured()))
+  // NOT on the engine that has its own pre-UI anchor. That anchor identifies
+  // the moment structurally and never asks for a main render size, so on Escha
+  // & Logy and Shallie this warning was simply false -- it printed in every
+  // session of a working feature, which is worse than not printing at all.
+  if (!highRes.rasterCorrection && !ktglPreUiActive() &&
+      (smaaPreUiEnabled() || ssaaConfigured()))
     log("D3D11HOOKS: WARNING the high-resolution fix is off, so no main render"
         " size is ever learned; the scene test cannot match and neither the"
         " pre-UI SMAA pass nor supersampling will do anything this session");

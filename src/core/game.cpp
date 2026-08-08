@@ -261,8 +261,15 @@ constexpr Support X = Support::OnByDefault;
 // `DUSK_WORLDMAP=0` stands it down for a comparison, and it has no ini key for
 // the reason given on Descriptor: a correction is not a setting.
 //
-// Escha & Logy and Shallie are Unsupported because nothing has been measured
-// there -- not because their maps are known to be fine.
+// Escha & Logy ships it on too, for the same reason and on the same evidence
+// shape: its cursor mover scales the stick vector by a constant per frame and
+// Shallie's multiplies by the frame delta, read from the bytes of both. See
+// engines/ktgl/worldmap_fix.h.
+//
+// SHALLIE STAYS UNSUPPORTED, and that is a finding rather than a gap: its mover
+// is already correct, so hooking it would rescale a rate that does not need it.
+// Its d-pad branches do still overwrite the scaled value with a flat constant,
+// which is a separate defect in a shared menu object and is not this row.
 //
 // TargetCensus is the one diagnostic that is NOT Ayesha-only. It reads nothing
 // but the D3D11 resources the game creates, so it needs no mapped address and
@@ -341,7 +348,7 @@ constexpr Support X = Support::OnByDefault;
 // fails loudly the next time a Feature is added without extending every row.
 //                               Stats Trace Verfy Censu Probe Targt HiRes Cache Field Stabl Smaa  Ssaa  Aniso WMap  Logo  Movi  Typo  SysSv Promt PadRe Synth
 constexpr Support kAyesha[]  = { O,    O,    O,    O,    O,    O,    X,    X,    X,    X,    X,    O,    X,    X,    O,    O,    U,    U,    U,    O,    U };
-constexpr Support kEscha[]   = { U,    U,    U,    U,    U,    O,    U,    U,    U,    U,    O,    O,    O,    U,    O,    O,    X,    X,    U,    O,    X };
+constexpr Support kEscha[]   = { U,    U,    U,    U,    U,    O,    U,    U,    U,    U,    O,    O,    O,    X,    O,    O,    X,    X,    U,    O,    X };
 constexpr Support kShallie[] = { U,    U,    U,    U,    U,    O,    U,    U,    U,    U,    O,    O,    O,    U,    O,    O,    X,    X,    O,    O,    X };
 
 constexpr std::size_t kColumns = static_cast<std::size_t>(Feature::Count);

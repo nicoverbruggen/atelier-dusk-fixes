@@ -16,6 +16,7 @@
 #include "ipu_trace.h"
 #include "loading_text_fix.h"
 #include "logo_skip.h"
+#include "worldmap_fix.h"
 #include "movie_skip.h"
 #include "system_save_fix.h"
 #include "win_parts_trace.h"
@@ -158,6 +159,7 @@ bool initializeKtglFixes() {
     installControlPromptFix(id.base, *game);
     installKtglMovieSkip(id.base, *game);
     installKtglLogoSkip(id.base, *game);
+    installKtglWorldMapFix(id.base, *game);
     // Diagnostic, off unless DUSK_IPU_TRACE is set. Last, because it
     // observes and the fixes above act.
     installIpuTrace(id.base, *game);

@@ -88,6 +88,7 @@ else
     'src/engines/ktgl/scene_target.cpp',
     'src/engines/ktgl/present_clamp.cpp',
     'src/engines/ktgl/scene_policy.cpp',
+    'src/engines/ktgl/worldmap_fix.cpp',
     'src/engines/ktgl/win_parts_trace.cpp',
     'src/engines/ktgl/system_save_fix.cpp',
     'src/engines/ktgl/window_size.cpp',

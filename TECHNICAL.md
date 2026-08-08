@@ -34,6 +34,10 @@ Escha & Logy and Shallie do not have this defect. Both size the swap chain and e
 
 `DUSK_HIGHRES=0` disables the correction for one session. It has no ini key because selecting the output resolution is already the user decision the correction implements.
 
+**The travel-map cursor** advances a fixed distance per frame in Ayesha and in Escha & Logy, so it crosses the map faster the higher the refresh rate — more than three times too fast at 200 Hz. The mod captures the frame delta the update already receives and rescales the step the mover applied by `min(dt * 60, 1)`, writing the corrected value to both the state's own copy and the render node it publishes to. At 60 fps and below the factor is 1 and the shipped behaviour is preserved exactly.
+
+Shallie is not corrected, and that is the evidence rather than an omission: the same function there takes the frame delta as a parameter and multiplies by it, while Escha's takes no float parameter at all. Reading both executables is what established the defect. `DUSK_WORLDMAP=0` stands the correction down; `DUSK_WORLDMAP_PROBE=1` logs measured units per second, which should scale with refresh rate before the correction and not after it.
+
 ## Antialiasing
 
 **Supersampling** is available in all three games and confirmed in game in each. It renders the scene above the display size and resamples it down with a box filter sized to the ratio, with sharpening folded into the same pass. Because the resample is the mod's own, fractional multipliers are usable; the ladder is 125%, 150%, 200%, 300%, and 400%. It is opt-in everywhere: 200% is four times the shaded pixels.

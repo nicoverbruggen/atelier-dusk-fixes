@@ -53,7 +53,7 @@ enum class Feature : uint8_t {
   Smaa,             // Ayesha: SMAA post-process antialiasing
   Supersampling,    // Ayesha: render above the display size, downscale to it
   AnisotropicFiltering, // any game: upgrade trilinear samplers (sampler.h)
-  WorldMapCursor,   // Ayesha: travel-map cursor moves per second, not per frame
+  WorldMapCursor,   // Ayesha + Escha: travel-map cursor per second, not per frame
   SkipStartupLogos, // any game: skip the publisher/developer logos shown at boot
   SkipIntroMovie,   // any game: skip the movie played on the way to the title
   LoadingTextTypo,  // Escha & Logy, Shallie: "Loadning" -> "Loading"

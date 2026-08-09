@@ -44,7 +44,6 @@ enum class Feature : uint8_t {
   AtlasTrace,       // Ayesha font-atlas lock/unlock sequence trace (one frame)
   AtlasVerify,      // Ayesha font-atlas snapshot-vs-real comparison (slow)
   AtlasCensus,      // Ayesha font-atlas writer census (enumerates every caller)
-  D3D11WriteProbe,  // Ayesha D3D11-level writes to a font atlas, if any exist
   TargetCensus,     // any game: sizes of the render/depth targets it creates
   HighResRendering, // Ayesha: scene targets follow the resolution, not 1080p
   AtlasCache,       // Ayesha atlas read caching (frame-scoped)
@@ -57,7 +56,7 @@ enum class Feature : uint8_t {
   SkipStartupLogos, // any game: skip the publisher/developer logos shown at boot
   SkipIntroMovie,   // any game: skip the movie played on the way to the title
   LoadingTextTypo,  // Escha & Logy, Shallie: "Loadning" -> "Loading"
-  SystemSaveGuard,  // Escha & Logy, Shallie: refuse to overwrite a failed load
+  SystemSaveGuard,  // KTGL: reject zero-byte loads; protect failed system loads
   ControlPromptHold,// Shallie: the control-hint panel stops replaying its slide
   PadRescanBackoff, // any game: rate-limit the controller rescan (unmeasured)
   SynthesisAnimationRate, // Escha & Logy, Shallie: synthesis cards tick at 59.94 Hz

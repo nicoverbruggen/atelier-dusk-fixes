@@ -25,6 +25,7 @@
 #include "../../core/game.h"
 #include "../../core/log.h"
 #include "../../core/mem.h"
+#include "../../core/protection_transaction.h"
 
 namespace atfix {
 
@@ -345,10 +346,11 @@ void STDMETHODCALLTYPE tracedFieldUpdate(uintptr_t self, float dt) {
 }
 
 // Confirm the threshold really holds the shipped value, and make its page
-// writable. Section flags say the data section is writable in every build, but
-// Meruru is SteamStub-wrapped, so the page is protected explicitly rather than
-// assumed.
-bool prepareThreshold(BYTE* base, const FieldPhysicsAddrs& addrs) {
+// writable. The page is protected explicitly rather than assumed, and the
+// original protection is retained until the hook has installed so a failed
+// attempt can put the whole process state back.
+bool prepareThreshold(BYTE* base, const FieldPhysicsAddrs& addrs,
+                      ProtectionTransaction& protection) {
   auto* threshold = reinterpret_cast<float*>(base + addrs.moveThreshold);
   uint32_t bits = 0;
   if (!tryRead(reinterpret_cast<uintptr_t>(threshold), bits)) {
@@ -360,8 +362,7 @@ bool prepareThreshold(BYTE* base, const FieldPhysicsAddrs& addrs) {
         kShippedThresholdBits, " at the threshold, found 0x", bits, std::dec);
     return false;
   }
-  DWORD previous = 0;
-  if (!VirtualProtect(threshold, sizeof(float), PAGE_READWRITE, &previous)) {
+  if (!protection.change(threshold, sizeof(float), PAGE_READWRITE)) {
     log("FIELDPHYS EngineFix declined: threshold page is not writable");
     return false;
   }
@@ -424,7 +425,8 @@ bool installFieldPhysics(BYTE* base, uint8_t exeBuild) {
     log("FIELDPHYS declined: unexpected collision-resolver prologue");
     return false;
   }
-  if (wantFix && !prepareThreshold(base, *addrs))
+  ProtectionTransaction protection;
+  if (wantFix && !prepareThreshold(base, *addrs, protection))
     return false;
   g_stabilizerActive = wantStabilizer;
 
@@ -432,11 +434,20 @@ bool installFieldPhysics(BYTE* base, uint8_t exeBuild) {
     reinterpret_cast<void*>(&tracedFieldUpdate),
     reinterpret_cast<void**>(&originalFieldUpdate));
   if (!installed) {
-    g_moveThreshold = nullptr;   // never leave a rescaled value without the hook
+    // No frame ran through the failed hook, so the value is still the shipped
+    // one; the mutation to undo is the writable page protection itself.
+    const bool restored = protection.rollback();
+    if (!restored)
+      log("FIELDPHYS rollback_incomplete: threshold page protection could not"
+          " be restored");
+    else
+      g_moveThreshold = nullptr;
     g_stabilizerActive = false;
+  } else {
+    protection.commit();
   }
   log("FIXES field_physics=", installed ? "active" : "failed",
-      " engine_fix=", g_moveThreshold ? 1 : 0,
+      " engine_fix=", installed && g_moveThreshold ? 1 : 0,
       " stabilizer=", g_stabilizerActive ? 1 : 0);
   log("DIAGNOSTICS field_trace=", fieldTraceEnabled() ? 1 : 0);
   return installed;

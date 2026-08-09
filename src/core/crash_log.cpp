@@ -19,6 +19,7 @@
 #include "config.h"
 #include "crash_log.h"
 #include "log.h"
+#include "module_lifetime.h"
 
 namespace atfix {
 
@@ -87,6 +88,26 @@ void moduleBasename(uintptr_t address, char* buffer, size_t size) {
   buffer[i] = '\0';
 }
 
+// The module owning `address`, or null. Handle identity is the only reliable
+// way to tell two modules apart: under Proton this mod and the system Direct3D
+// implementation are both literally named d3d11.dll.
+HMODULE moduleHandleOf(uintptr_t address) {
+  HMODULE module = nullptr;
+  if (!GetModuleHandleExA(
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        reinterpret_cast<LPCSTR>(address), &module))
+    return nullptr;
+  return module;
+}
+
+// This module, found from the address of a function inside it.
+HMODULE selfModule() {
+  static const HMODULE self =
+    moduleHandleOf(reinterpret_cast<uintptr_t>(&moduleHandleOf));
+  return self;
+}
+
 // Cached lowercased basename of the main executable, for GAME classification.
 const char* mainExeName() {
   static char name[MAX_PATH] = { };
@@ -104,7 +125,7 @@ const char* mainExeName() {
 // audio path (XAudio2), which the mod's D3D11 layer cannot fix but this report
 // can confirm (the signature Totori "battle screech" crash). AUDIO/MOD/GAME are
 // checked before the broader GRAPHICS/SYSTEM buckets so they win ties.
-const char* classifyModule(const char* lowerName) {
+const char* classifyModule(const char* lowerName, HMODULE module) {
   if (!lowerName || !lowerName[0])
     return "UNKNOWN";
   if (nameStartsWith(lowerName, "xaudio2") ||
@@ -114,8 +135,9 @@ const char* classifyModule(const char* lowerName) {
       nameContains(lowerName, "mmdevapi") ||
       nameContains(lowerName, "audioses"))
     return "AUDIO";
-  if (std::strcmp(lowerName, "d3d11.dll") == 0 ||
-      std::strcmp(lowerName, "msimg32.dll") == 0)
+  // Only this module is the mod. A d3d11.dll that is not us is the system
+  // Direct3D implementation we forward to, and falls through to GRAPHICS.
+  if (module && module == selfModule())
     return "MOD(this)";
   if (mainExeName()[0] && std::strcmp(lowerName, mainExeName()) == 0)
     return "GAME";
@@ -176,8 +198,14 @@ LONG WINAPI crashFilter(EXCEPTION_POINTERS* pointers) {
     // The single most useful triage line: which module faulted, and what kind
     // it is. AUDIO here means the fix is not in this D3D11-layer mod.
     moduleBasename(faultAddr, faultName, sizeof(faultName));
+    const HMODULE faultModule = moduleHandleOf(faultAddr);
+    // Say which d3d11.dll when it is not ours, so an offset into the system
+    // implementation is never read as an offset into this one.
+    const bool foreignNamesake = faultModule && faultModule != selfModule() &&
+      std::strcmp(faultName, "d3d11.dll") == 0;
     log("CRASH faulting-module=", faultName[0] ? faultName : "<unknown>",
-      " category=", classifyModule(faultName));
+      foreignNamesake ? " (system, not this mod)" : "",
+      " category=", classifyModule(faultName, faultModule));
     if (record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
         record->NumberParameters >= 2) {
       const ULONG_PTR kind = record->ExceptionInformation[0];
@@ -223,7 +251,8 @@ LONG WINAPI crashFilter(EXCEPTION_POINTERS* pointers) {
         continue;
       char frameName[MAX_PATH] = { };
       moduleBasename(value, frameName, sizeof(frameName));
-      if (std::strcmp(classifyModule(frameName), "AUDIO") == 0)
+      if (std::strcmp(classifyModule(frameName, moduleHandleOf(value)),
+                      "AUDIO") == 0)
         audioInStack = true;
       log("CRASH stack[+0x", std::hex, slot - stackTop, std::dec, "] ",
         describeAddress(value, describe, sizeof(describe)));
@@ -233,11 +262,14 @@ LONG WINAPI crashFilter(EXCEPTION_POINTERS* pointers) {
     // address), an audio module up the stack points at the XAudio2 path — the
     // signature Totori in-battle "screech" crash the D3D11 layer cannot fix.
     if (audioInStack ||
-        std::strcmp(classifyModule(faultName), "AUDIO") == 0)
+        (record && std::strcmp(classifyModule(faultName, moduleHandleOf(
+          reinterpret_cast<uintptr_t>(record->ExceptionAddress))), "AUDIO") == 0))
       log("CRASH hint: audio module (XAudio2) implicated — this is an "
         "audio-path fault, not a rendering fault");
   }
   log("CRASH end of report");
+  // Force the report past the operating-system cache before the process dies.
+  log.flush();
 
   handlingCrash.store(false, std::memory_order_release);
   return previousFilter
@@ -251,6 +283,14 @@ void installCrashLogger() {
     const char* value = std::getenv("DUSK_CRASH_LOG");
     if (value && value[0] == '0')
       return false;
+    // SetUnhandledExceptionFilter has no compare-and-restore operation. Once
+    // this callback is visible, the only race-free lifetime is the process's:
+    // pin the image first so a later FreeLibrary cannot leave a stale pointer.
+    if (!retainModuleForProcessLifetime()) {
+      log("FIXES crash_logging=off reason=module_retention_failed error=",
+        std::dec, GetLastError());
+      return false;
+    }
     previousFilter = SetUnhandledExceptionFilter(&crashFilter);
     // Names the previous filter unconditionally, unlike the Arland original
     // which hid it behind verbose logging. This project has no verbose switch,

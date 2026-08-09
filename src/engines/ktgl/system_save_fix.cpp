@@ -52,17 +52,24 @@ bool fixEnabled() {
   return featureEnabled(Feature::SystemSaveGuard);
 }
 
-// True only for a system-data operation on a readable object. Everything in this
-// file tests this first: GAMEDATA runs through the same two functions and must
-// pass through untouched.
-bool isSystemData(uintptr_t self) {
+// Load and save share this object. A false result means the discriminator could
+// not be read and the hook must decline; `systemData == false` is the valid
+// GAMEDATA kind, not a read failure.
+bool readSystemDataKind(uintptr_t self, bool& systemData) {
   uint8_t flag = 0;
-  return tryRead(self + kIsSystemData, flag) && flag != 0;
+  if (!tryRead(self + kIsSystemData, flag))
+    return false;
+  systemData = flag != 0;
+  return true;
 }
 
 void STDMETHODCALLTYPE tracedLoadStep(uintptr_t self) {
   originalLoadStep(self);
-  if (!fixEnabled() || !self || !isSystemData(self))
+  if (!fixEnabled() || !self)
+    return;
+
+  bool systemData = false;
+  if (!readSystemDataKind(self, systemData))
     return;
 
   uint8_t completed = 0;
@@ -76,15 +83,16 @@ void STDMETHODCALLTYPE tracedLoadStep(uintptr_t self) {
   if (bytesRead != 0) {
     // A real load. Release the latch so a session that recovers -- a Steam Cloud
     // sync completing, a lock being dropped -- can save normally again.
-    if (g_systemDataUntrusted.exchange(false, std::memory_order_relaxed))
+    if (systemData &&
+        g_systemDataUntrusted.exchange(false, std::memory_order_relaxed))
       log("SYSSAVE system data loaded (", std::dec, bytesRead,
           " bytes); saves re-enabled");
     return;
   }
 
-  // Completed, system data, and nothing was read. That is the defect: an open
-  // failure or a truncated file arriving at the success exit. Put the object
-  // into the state the engine's own read-failure branch would have set.
+  // Completed and nothing was read. That is the defect: an open failure or an
+  // empty file arriving at the success exit. Put the object into the state the
+  // engine's own read-failure branch would have set.
   const uint32_t state = kStateReadFailed;
   const uint32_t error = kErrorReadFailed;
   const uint8_t clear = 0;
@@ -96,16 +104,24 @@ void STDMETHODCALLTYPE tracedLoadStep(uintptr_t self) {
   std::memcpy(reinterpret_cast<void*>(self + kError), &error, sizeof(error));
   std::memcpy(reinterpret_cast<void*>(self + kCompleted), &clear, sizeof(clear));
 
-  g_systemDataUntrusted.store(true, std::memory_order_relaxed);
+  if (systemData)
+    g_systemDataUntrusted.store(true, std::memory_order_relaxed);
   const uint32_t n = g_loadsRepaired.fetch_add(1, std::memory_order_relaxed) + 1;
-  log("SYSSAVE load reported success having read 0 bytes -- forced to the"
-      " engine's read-failure state, and system-data saves are now refused"
-      " (n=", std::dec, n, ")");
+  if (systemData) {
+    log("SYSSAVE system-data load reported success having read 0 bytes --"
+        " forced to the engine's read-failure state, and system-data saves"
+        " are now refused (n=", std::dec, n, ")");
+  } else {
+    log("SYSSAVE GAMEDATA load reported success having read 0 bytes -- forced"
+        " to the engine's read-failure state; live game data was not replaced"
+        " (n=", std::dec, n, ")");
+  }
 }
 
 void STDMETHODCALLTYPE tracedSaveStep(uintptr_t self) {
-  if (fixEnabled() && self && isSystemData(self) &&
-      g_systemDataUntrusted.load(std::memory_order_relaxed)) {
+  bool systemData = false;
+  if (fixEnabled() && self && readSystemDataKind(self, systemData) &&
+      systemData && g_systemDataUntrusted.load(std::memory_order_relaxed)) {
     // Refusing means not calling through at all: the truncation happens inside,
     // at fopen(L"wb"), so anything that reaches the original has already
     // destroyed the file whatever it does afterwards.

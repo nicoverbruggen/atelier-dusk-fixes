@@ -88,13 +88,16 @@ namespace dusk {
 
 bool initializePhyreFixes() {
   static const bool initialized = [] {
-    // Before the feature gate below, and deliberately so. This registers a
-    // predicate with core's scene-pass module -- no hooks, no mapped addresses,
-    // no fingerprint needed -- and a session that enables only supersampling
-    // must still get it. Everything past the gate is a hooked,
-    // address-dependent fix; this is not one, and gating it with them would
-    // make the scene test decline every bind in exactly the configuration that
-    // asked for it.
+    // Identity is resolved independently of the address-based feature set.
+    // Shared D3D fixes (SMAA, anisotropy, sharpening and supersampling) still
+    // need a verified host when every Phyre address fix is disabled.
+    g_game = recognizeExecutable(g_base);
+    if (!g_game)
+      return false;
+
+    // This registers a predicate with core's scene-pass module. It carries no
+    // address and installs no hook, but it is still registered only after exact
+    // recognition so an unknown same-prefix executable receives no D3D policy.
     registerPhyreSceneTarget();
 
     const bool wantCache = atfix::featureEnabled(atfix::Feature::AtlasCache);
@@ -112,27 +115,20 @@ bool initializePhyreFixes() {
       atfix::featureEnabled(atfix::Feature::SkipStartupLogos);
     const bool wantMovieSkip =
       atfix::featureEnabled(atfix::Feature::SkipIntroMovie);
-    // Every feature this module can install has to be named here. A row added
-    // to the matrix and forgotten in this condition never reaches the
-    // fingerprint check below, so it declines silently while reporting nothing
-    // -- the same shape of failure as a short matrix row.
-    if (!wantCache && !wantStats && !wantTrace && !wantVerify && !wantCensus &&
-        !wantField && !wantWorldMap && !wantLogoSkip && !wantMovieSkip)
-      return false;
-    // ALREADY_INITIALIZED is a success here. DllMain initializes MinHook for
-    // the window-background fix, which has to be in place before the game
-    // registers its window class, so by the time this runs MinHook is normally
-    // already up. Treating that as a failure would decline every Ayesha fix.
-    const MH_STATUS init = MH_Initialize();
-    if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
-      log("phyre: MH_Initialize failed (", MH_StatusToString(init), ")");
-      return false;
+    const bool wantAddressFix =
+      wantCache || wantStats || wantTrace || wantVerify || wantCensus ||
+      wantField || wantWorldMap || wantLogoSkip || wantMovieSkip;
+    if (wantAddressFix) {
+      // ALREADY_INITIALIZED is a success here. DllMain initializes MinHook for
+      // the window-background fix, which has to be in place before the game
+      // registers its window class, so by the time this runs MinHook is normally
+      // already up. Treating that as a failure would decline every Ayesha fix.
+      const MH_STATUS init = MH_Initialize();
+      if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
+        log("phyre: MH_Initialize failed (", MH_StatusToString(init), ")");
+        return false;
+      }
     }
-
-    // One recognition for every Ayesha-specific fix in this DLL.
-    g_game = recognizeExecutable(g_base);
-    if (!g_game)
-      return false;
 
     if (wantCache || wantStats || wantTrace || wantVerify || wantCensus)
       installAtlasFix(g_base, *g_game, wantCache, wantStats, wantTrace,
@@ -169,6 +165,8 @@ bool initializePhyreFixes() {
     // because it starts a thread, which the loader lock forbids.
     atfix::startPadNotifyTrace();
 
+    // Recognition, not whether an address-based option happened to be enabled,
+    // is the contract with core: true authorizes the shared D3D fix surface.
     return true;
   }();
   return initialized;

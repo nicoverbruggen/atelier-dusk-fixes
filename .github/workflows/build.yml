@@ -34,6 +34,10 @@ jobs:
       - run: meson compile -C build64
       - name: Check d3d11 proxy exports
         run: python scripts/check_exports.py build64/d3d11.dll
+      - name: Check proxy safety contracts
+        run: python scripts/check_core_contract.py
+      - name: Check asynchronous lifecycle contract
+        run: python scripts/check_lifecycle_contract.py
       - uses: actions/upload-artifact@v7
         with:
           name: d3d11
@@ -85,6 +89,10 @@ jobs:
       # check it before packaging rather than spending a separate runner on it.
       - name: Check shipped configuration defaults
         run: python3 scripts/check_default_ini.py
+      - name: Check launcher contract
+        run: python3 scripts/check_launcher_contract.py
+      - name: Check transactional mutation contract
+        run: python3 scripts/check_transaction_contract.py
       - name: Assemble the archive
         run: |
           mkdir -p dist/dusk-fix

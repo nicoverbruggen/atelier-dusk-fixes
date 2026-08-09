@@ -130,12 +130,13 @@ bool initializeKtglFixes() {
           : (verified ? " (verified)" : " (MISMATCH)"));
     // The name alone is not an identity. Every RVA in kGames was read out of one
     // specific compile, so a build whose .text has moved gets the log line above
-    // and nothing else -- a patch that fires on an unrecognized build is worse
-    // than no patch.
+    // and no address-based or Direct3D fix -- a patch that fires on an
+    // unrecognized build is worse than no patch. The early window hooks are a
+    // separate, runtime-predicate exception installed before this check can run.
     if (!verified) {
-      log("FIXES ktgl=none (executable is not a verified build; installing"
-          " nothing)");
-      return true;
+      log("FIXES ktgl=none (executable is not a verified build; address and"
+          " Direct3D fixes declined; early window hooks are separate)");
+      return false;
     }
 
     // The loading-text correction rewrites bytes and hooks nothing, so it runs

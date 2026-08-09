@@ -81,6 +81,14 @@ constexpr std::array<BYTE, 16> kUpdateExpected = {
   0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56,
 };
 
+// Also byte-identical between both Shallie builds. Hide needs this second hook,
+// so it is verified before either hook is enabled; otherwise a wrong/missing
+// Draw row could silently degrade the requested Hide mode into Hold.
+constexpr std::array<BYTE, 16> kDrawExpected = {
+  0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x80, 0xb9,
+  0x38, 0x0d, 0x00, 0x00, 0x00, 0x48, 0x8b, 0xd9,
+};
+
 }  // namespace
 }  // namespace atfix
 
@@ -109,23 +117,43 @@ bool installControlPromptFix(BYTE* base, const atfix::KtglGame& game) {
     return false;
   }
 
-  const bool updateOk = installMinHookDetour(update,
-    reinterpret_cast<void*>(&tracedUpdate),
-    reinterpret_cast<void**>(&originalUpdate));
-
-  // Draw is only needed by the hide mode, and only hooked for it: hold has no
-  // business intercepting a call it does not change.
-  bool drawOk = true;
-  if (updateOk && m == Mode::Hide && game.controlPromptDrawRva) {
-    drawOk = installMinHookDetour(base + game.controlPromptDrawRva,
-      reinterpret_cast<void*>(&tracedDraw),
-      reinterpret_cast<void**>(&originalDraw));
+  BYTE* draw = game.controlPromptDrawRva
+    ? base + game.controlPromptDrawRva : nullptr;
+  if (m == Mode::Hide && (!draw || !matches(draw, kDrawExpected))) {
+    log("FIXES control_prompt=declined (draw prologue mismatch or missing)"
+        " mode=hide");
+    return false;
   }
 
-  log("FIXES control_prompt=", updateOk && drawOk ? "active" : "failed",
+  HookTransaction transaction;
+  bool created = transaction.create(update,
+    reinterpret_cast<void*>(&tracedUpdate),
+    reinterpret_cast<void**>(&originalUpdate));
+  // Draw is only needed by hide, but when it is needed both hooks are one
+  // transaction. A failed Draw create/enable can no longer leave Update live
+  // and turn the user's Hide request into Hold for the rest of the process.
+  if (created && m == Mode::Hide)
+    created = transaction.create(draw, reinterpret_cast<void*>(&tracedDraw),
+      reinterpret_cast<void**>(&originalDraw));
+  const bool enabled = created && transaction.enableAll();
+  if (!enabled) {
+    const HookTransactionFailure failure = transaction.failure();
+    log("CONTROL_PROMPT transaction failed stage=",
+        hookTransactionStageName(failure.stage), " status=", failure.status);
+    if (!transaction.rollback()) {
+      const HookTransactionFailure rollback = transaction.rollbackFailure();
+      log("CONTROL_PROMPT rollback_incomplete stage=",
+          hookTransactionStageName(rollback.stage), " status=",
+          rollback.status);
+    }
+  } else {
+    transaction.commit();
+  }
+
+  log("FIXES control_prompt=", enabled ? "active" : "failed",
       " mode=", m == Mode::Hide ? "hide" : "hold",
       " update_rva=0x", std::hex, game.controlPromptUpdateRva, std::dec);
-  return updateOk && drawOk;
+  return enabled;
 }
 
 }  // namespace dusk

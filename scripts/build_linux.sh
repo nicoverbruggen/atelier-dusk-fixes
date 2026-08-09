@@ -62,3 +62,7 @@ done
 # which the front-ends would not resolve.
 python3 "$repo/scripts/check_exports.py" \
   "$repo/build64/d3d11.dll" "$repo/build32/msimg32.dll"
+python3 "$repo/scripts/check_launcher_contract.py"
+python3 "$repo/scripts/check_transaction_contract.py"
+python3 "$repo/scripts/check_core_contract.py"
+python3 "$repo/scripts/check_lifecycle_contract.py"

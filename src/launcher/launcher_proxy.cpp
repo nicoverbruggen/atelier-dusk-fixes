@@ -231,6 +231,7 @@ struct DuskGame {
   const wchar_t* launcher;
   const wchar_t* english;
   const wchar_t* multilingual;
+  std::array<std::uint8_t, 17> launcherEntryExpected;
 };
 
 // The three games. Each ships an English build and a multilingual one carrying
@@ -240,16 +241,45 @@ struct DuskGame {
 // Unlike the Arland trilogy, whose three games share one ArlandDXLauncher.exe
 // binary, the Dusk launchers are per-game files. They are built from the same
 // source -- identical `.text` VirtualSize (0x14f4f4) and identical entry-point
-// RVA (0x1216f2) across all three -- but their `.text` bytes differ, so the
-// launcher name is what identifies the game rather than a shared signature.
+// RVA (0x1216f2) across all three -- but their bytes differ. Each row therefore
+// carries its own verified 17-byte entry window; a file name and a header RVA
+// alone are not authority to overwrite executable code. The last dword is an
+// absolute address, and all three PE relocation tables name it as HIGHLOW at
+// entry+13, so the comparison applies the loader's ASLR delta first.
 constexpr std::array<DuskGame, 3> SupportedGames = {{
   { L"Atelier_AyeshaLauncher.exe",
-    L"Atelier_Ayesha_EN.exe",           L"Atelier_Ayesha.exe" },
+    L"Atelier_Ayesha_EN.exe",           L"Atelier_Ayesha.exe",
+    { 0xe8,0x7f,0xe6,0x00,0x00,0xe9,0x00,0x00,
+      0x00,0x00,0x6a,0x14,0x68,0xb8,0xaf,0x59,0x00 } },
   { L"Atelier_Escha_and_LogyLauncher.exe",
-    L"Atelier_Escha_and_Logy_EN.exe",   L"Atelier_Escha_and_Logy.exe" },
+    L"Atelier_Escha_and_Logy_EN.exe",   L"Atelier_Escha_and_Logy.exe",
+    { 0xe8,0x7f,0xe6,0x00,0x00,0xe9,0x00,0x00,
+      0x00,0x00,0x6a,0x14,0x68,0xf8,0xaf,0x59,0x00 } },
   { L"Atelier_ShallieLauncher.exe",
-    L"Atelier_Shallie_EN.exe",          L"Atelier_Shallie.exe" },
+    L"Atelier_Shallie_EN.exe",          L"Atelier_Shallie.exe",
+    { 0xe8,0x7f,0xe6,0x00,0x00,0xe9,0x00,0x00,
+      0x00,0x00,0x6a,0x14,0x68,0xb8,0xaf,0x59,0x00 } },
 }};
+
+constexpr std::size_t kLauncherEntryRelocationOffset = 13;
+constexpr std::uint32_t kLauncherPreferredImageBase = 0x00400000;
+
+template<std::size_t N>
+void relocateEntryWindow(std::uint8_t* loadedBase,
+                         std::array<std::uint8_t, N>& expected) {
+  static_assert(N >= kLauncherEntryRelocationOffset + sizeof(std::uint32_t));
+  std::uint32_t absolute = 0;
+  std::memcpy(&absolute, expected.data() + kLauncherEntryRelocationOffset,
+              sizeof(absolute));
+  // PE32 HIGHLOW relocation arithmetic is modulo 2^32. The preferred base is
+  // the one verified in all three files, not the loaded header's ImageBase:
+  // Wine rewrites that field to the actual base and would make the delta zero.
+  absolute += static_cast<std::uint32_t>(
+                reinterpret_cast<std::uintptr_t>(loadedBase)) -
+              kLauncherPreferredImageBase;
+  std::memcpy(expected.data() + kLauncherEntryRelocationOffset, &absolute,
+              sizeof(absolute));
+}
 
 // Which executable a straight start runs, decided exactly as Koei Tecmo's own
 // launcher decides it: [Lang] Language in Setting.ini selects the multilingual
@@ -301,14 +331,20 @@ bool resolveGameExecutable(const DuskGame& game,
 // were not installed.
 void runOriginalEntryPoint() {
   DWORD oldProtect = 0;
-  if (VirtualProtect(g_entryPoint, g_entryOriginal.size(),
+  if (!VirtualProtect(g_entryPoint, g_entryOriginal.size(),
       PAGE_EXECUTE_READWRITE, &oldProtect)) {
-    std::memcpy(g_entryPoint, g_entryOriginal.data(), g_entryOriginal.size());
-    DWORD ignored = 0;
-    VirtualProtect(g_entryPoint, g_entryOriginal.size(), oldProtect, &ignored);
-    FlushInstructionCache(GetCurrentProcess(), g_entryPoint,
-      g_entryOriginal.size());
+    // Calling while the jump is still present re-enters redirectedEntryPoint,
+    // which comes back here again. Exit instead of recursing to stack failure.
+    launcherLog("could not restore the launcher entry point; exiting");
+    ExitProcess(1);
   }
+  std::memcpy(g_entryPoint, g_entryOriginal.data(), g_entryOriginal.size());
+  FlushInstructionCache(GetCurrentProcess(), g_entryPoint,
+    g_entryOriginal.size());
+  DWORD ignored = 0;
+  if (!VirtualProtect(g_entryPoint, g_entryOriginal.size(), oldProtect,
+                      &ignored))
+    launcherLog("launcher entry bytes restored, but page protection was not");
   reinterpret_cast<void (*)()>(g_entryPoint)();
 }
 
@@ -406,13 +442,23 @@ bool armRedirect() {
     reinterpret_cast<const IMAGE_NT_HEADERS32*>(base + dos->e_lfanew);
   if (nt->Signature != IMAGE_NT_SIGNATURE ||
       nt->FileHeader.Machine != IMAGE_FILE_MACHINE_I386 ||
-      !nt->OptionalHeader.AddressOfEntryPoint)
+      !nt->OptionalHeader.AddressOfEntryPoint ||
+      nt->OptionalHeader.SizeOfImage < game->launcherEntryExpected.size() ||
+      nt->OptionalHeader.AddressOfEntryPoint >
+        nt->OptionalHeader.SizeOfImage - game->launcherEntryExpected.size())
     return false;
 
-  // Taken from the headers rather than from a hardcoded address, so this holds
-  // for all three launchers (which do share an entry-point RVA today) and for
-  // any future build of them.
+  // The header locates the entry, and this title's loader-adjusted shipped byte
+  // window identifies it. A future build is deliberately left untouched until
+  // its entry bytes and relocation are measured and added to the row.
   g_entryPoint = base + nt->OptionalHeader.AddressOfEntryPoint;
+  auto expectedEntry = game->launcherEntryExpected;
+  relocateEntryWindow(base, expectedEntry);
+  if (std::memcmp(g_entryPoint, expectedEntry.data(), expectedEntry.size())) {
+    launcherLog("launcher entry bytes are unknown; leaving it untouched");
+    g_entryPoint = nullptr;
+    return false;
+  }
   std::memcpy(g_entryOriginal.data(), g_entryPoint, g_entryOriginal.size());
 
   DWORD oldProtect = 0;

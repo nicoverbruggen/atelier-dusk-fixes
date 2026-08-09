@@ -41,8 +41,8 @@ extern Log log;   // main.cpp
 
 namespace {
 
-// Matches the cadence of the other periodic diagnostics (d3d11_probe.cpp's
-// kReportInterval), so two of them running together interleave predictably.
+// Matches the cadence of the other periodic diagnostics, so two of them
+// running together interleave predictably.
 constexpr uint64_t kReportInterval = 300;
 
 // The size the engine hard-codes, and the blur target derived from it. Both are

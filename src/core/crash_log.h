@@ -5,7 +5,9 @@ namespace atfix {
 
 // Installs a last-chance unhandled-exception filter that writes a post-mortem
 // (exception, registers, module+RVA stack scan) to dusk-fix.log. Idempotent;
-// DUSK_CRASH_LOG=0 disables it.
+// DUSK_CRASH_LOG=0 disables it. Installing the process-wide callback pins this
+// DLL until process exit so the operating system can never call unmapped code;
+// the operation is therefore intentionally irreversible.
 //
 // Ported unchanged from the Arland project (this project's own code, MIT).
 // Brought over the moment a supersampling run died at ~19 seconds leaving

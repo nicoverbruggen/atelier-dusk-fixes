@@ -1,9 +1,8 @@
 // Derived from Philip Rebohle's atelier-sync-fix; see LICENSE (zlib).
 //
-// D3D11 proxy entry point. Deliberately thin compared to the Arland project's
-// main.cpp: this repository ships no rendering features of its own, so the proxy
-// exists to forward Direct3D, to hook Present as a frame boundary, and to give
-// the engine modules a point at which the game image is certainly unpacked.
+// D3D11 proxy entry point. It forwards Direct3D, installs the shared rendering
+// hooks for a verified Dusk executable, and gives the engine modules a point at
+// which the game image is certainly unpacked.
 //
 // It knows nothing about either engine. Everything past initializeEngineFixes()
 // is dispatched in core/engine.cpp -- see that header for why the two engines
@@ -13,12 +12,12 @@
 #include <d3d11.h>
 
 #include <array>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 
 #include "config.h"
 #include "crash_log.h"
-#include "d3d11_probe.h"
 #include "engine.h"
 #include "game.h"
 #include "log.h"
@@ -53,6 +52,13 @@ using PFN_D3D11CreateDevice = HRESULT (__stdcall *) (
   IDXGIAdapter*, D3D_DRIVER_TYPE, HMODULE, UINT, const D3D_FEATURE_LEVEL*,
   UINT, UINT, ID3D11Device**, D3D_FEATURE_LEVEL*, ID3D11DeviceContext**);
 
+// Forwarded untouched. The mod has nothing to do with D3D11-on-12, but a tool
+// injected alongside it can import the name statically, and a missing import
+// stops the process before it can open a window or write a log.
+using PFN_D3D11On12CreateDevice = HRESULT (__stdcall *) (
+  IUnknown*, UINT, const D3D_FEATURE_LEVEL*, UINT, IUnknown**, UINT, UINT,
+  ID3D11Device**, ID3D11DeviceContext**, D3D_FEATURE_LEVEL*);
+
 using PFN_D3D11CreateDeviceAndSwapChain = HRESULT (__stdcall *) (
   IDXGIAdapter*, D3D_DRIVER_TYPE, HMODULE, UINT, const D3D_FEATURE_LEVEL*,
   UINT, UINT, const DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**, ID3D11Device**,
@@ -61,18 +67,23 @@ using PFN_D3D11CreateDeviceAndSwapChain = HRESULT (__stdcall *) (
 struct D3D11Proc {
   PFN_D3D11CreateDevice             D3D11CreateDevice             = nullptr;
   PFN_D3D11CreateDeviceAndSwapChain D3D11CreateDeviceAndSwapChain = nullptr;
+  PFN_D3D11On12CreateDevice         D3D11On12CreateDevice         = nullptr;
 };
 
 D3D11Proc loadSystemD3D11() {
   static mutex initMutex;
   static D3D11Proc d3d11Proc;
+  // The procedure members are assigned separately. Publishing readiness with
+  // the first member lets another caller observe a half-filled table, so use a
+  // distinct release/acquire flag and publish only after every lookup.
+  static std::atomic<bool> ready{false};
 
-  if (d3d11Proc.D3D11CreateDevice)
+  if (ready.load(std::memory_order_acquire))
     return d3d11Proc;
 
   std::lock_guard lock(initMutex);
 
-  if (d3d11Proc.D3D11CreateDevice)
+  if (ready.load(std::memory_order_relaxed))
     return d3d11Proc;
 
   // Before anything else this DLL does, so a fault in our own installation is
@@ -92,11 +103,16 @@ D3D11Proc loadSystemD3D11() {
     log("D3D11 forwarding: d3d11_proxy.dll");
   } else {
     std::array<char, MAX_PATH + 1> path = { };
+    const UINT length = GetSystemDirectoryA(path.data(), MAX_PATH);
+    const char suffix[] = "\\d3d11.dll";
 
-    if (!GetSystemDirectoryA(path.data(), MAX_PATH))
+    // GetSystemDirectoryA returns the required length when the buffer is too
+    // small. The suffix includes its terminator, so this also proves the append
+    // stays inside the array.
+    if (!length || length + sizeof(suffix) > path.size())
       return D3D11Proc();
 
-    std::strncat(path.data(), "\\d3d11.dll", MAX_PATH);
+    std::memcpy(path.data() + length, suffix, sizeof(suffix));
     log("D3D11 forwarding: system d3d11.dll");
     libD3D11 = LoadLibraryA(path.data());
 
@@ -111,8 +127,18 @@ D3D11Proc loadSystemD3D11() {
   d3d11Proc.D3D11CreateDeviceAndSwapChain =
     reinterpret_cast<PFN_D3D11CreateDeviceAndSwapChain>(
       GetProcAddress(libD3D11, "D3D11CreateDeviceAndSwapChain"));
+  d3d11Proc.D3D11On12CreateDevice =
+    reinterpret_cast<PFN_D3D11On12CreateDevice>(
+      GetProcAddress(libD3D11, "D3D11On12CreateDevice"));
 
-  dusk::initializeEngineFixes();
+  if (!d3d11Proc.D3D11CreateDevice ||
+      !d3d11Proc.D3D11CreateDeviceAndSwapChain)
+    log("Loaded D3D11 module is missing a device-creation export;"
+        " device creation will fail");
+
+  // Failure returns above leave readiness clear so a transient loader failure
+  // can retry. A successfully loaded module is immutable after publication.
+  ready.store(true, std::memory_order_release);
   return d3d11Proc;
 }
 
@@ -126,7 +152,6 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* swapChain,
   // The frame boundary. For the Phyre module this is the atlas cache's entire
   // lifetime, not just where the diagnostic attributes out-of-drain locks.
   dusk::engineFrameTick();
-  d3d11WriteProbeFrameTick();
   highResFrameTick();
   // Counters and one-shot diagnostics ONLY. Supersampling deliberately does no
   // rendering work at Present: two of its four failed predecessors blacked the
@@ -338,6 +363,14 @@ DLLEXPORT HRESULT __stdcall D3D11CreateDevice(
   if (!proc.D3D11CreateDevice)
     return E_FAIL;
 
+  // Exact executable recognition is the boundary for every shared Direct3D
+  // mutation. A misplaced DLL, or a patched game build whose addresses have
+  // not been verified, receives the system call untouched.
+  if (!dusk::initializeEngineFixes())
+    return (*proc.D3D11CreateDevice)(pAdapter, DriverType, Software, Flags,
+      pFeatureLevels, FeatureLevels, SDKVersion, ppDevice, pFeatureLevel,
+      ppImmediateContext);
+
   HRESULT hr = (*proc.D3D11CreateDevice)(pAdapter, DriverType, Software, Flags,
     pFeatureLevels, FeatureLevels, SDKVersion, ppDevice, pFeatureLevel,
     ppImmediateContext);
@@ -352,9 +385,6 @@ DLLEXPORT HRESULT __stdcall D3D11CreateDevice(
     atfix::d3d11InstallHooks(*ppDevice,
       ppImmediateContext ? *ppImmediateContext : nullptr);
   }
-
-  if (SUCCEEDED(hr) && ppImmediateContext && *ppImmediateContext)
-    atfix::initializeD3D11WriteProbe(*ppImmediateContext);
 
   return hr;
 }
@@ -376,6 +406,15 @@ DLLEXPORT HRESULT __stdcall D3D11CreateDeviceAndSwapChain(
 
   if (!proc.D3D11CreateDeviceAndSwapChain)
     return E_FAIL;
+
+  // Keep the unknown-build path visibly and structurally free of every shared
+  // swap-chain transformation and hook. This guard must remain before the
+  // descriptor copy and its size clamp below.
+  if (!dusk::initializeEngineFixes())
+    return (*proc.D3D11CreateDeviceAndSwapChain)(pAdapter, DriverType,
+      Software, Flags, pFeatureLevels, FeatureLevels, SDKVersion,
+      pSwapChainDesc, ppSwapChain, ppDevice, pFeatureLevel,
+      ppImmediateContext);
 
   // The other swap-chain route, clamped for the same reason as the factory one.
   // The parameter is const, so the substitution is made on a copy and the
@@ -415,10 +454,30 @@ DLLEXPORT HRESULT __stdcall D3D11CreateDeviceAndSwapChain(
     atfix::d3d11InstallHooks(*ppDevice,
       ppImmediateContext ? *ppImmediateContext : nullptr);
 
-  if (SUCCEEDED(hr) && ppImmediateContext && *ppImmediateContext)
-    atfix::initializeD3D11WriteProbe(*ppImmediateContext);
-
   return hr;
+}
+
+// Pass-through only. This export exists for compatibility with tools that
+// import it; no Dusk hook or rendering feature is installed through this API.
+DLLEXPORT HRESULT __stdcall D3D11On12CreateDevice(
+        IUnknown*             pDevice,
+        UINT                  Flags,
+  const D3D_FEATURE_LEVEL*    pFeatureLevels,
+        UINT                  FeatureLevels,
+        IUnknown**            ppCommandQueues,
+        UINT                  NumQueues,
+        UINT                  NodeMask,
+        ID3D11Device**        ppDevice,
+        ID3D11DeviceContext** ppImmediateContext,
+        D3D_FEATURE_LEVEL*    pChosenFeatureLevel) {
+  atfix::D3D11Proc proc = atfix::loadSystemD3D11();
+
+  if (!proc.D3D11On12CreateDevice)
+    return E_NOTIMPL;
+
+  return proc.D3D11On12CreateDevice(pDevice, Flags, pFeatureLevels,
+    FeatureLevels, ppCommandQueues, NumQueues, NodeMask, ppDevice,
+    ppImmediateContext, pChosenFeatureLevel);
 }
 
 }  // extern "C"
@@ -445,16 +504,13 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
       break;
     }
     case DLL_PROCESS_DETACH:
-      // Only on real process teardown (lpvReserved non-null means the process is
-      // exiting and the loader will not run other DLLs' cleanup reliably).
-      // Same gate for the pad-notification trace, which owns a thread and two
-      // windows: on process exit its pump has already been terminated, so
-      // posting to its windows and waiting for it would wait for a thread that
-      // cannot answer.
-      if (!lpvReserved) {
-        atfix::stopPadNotifyTrace();
+      // Only on dynamic unload. Any asynchronous callback or worker pins this
+      // DLL before it is published, so dynamic detach cannot race either one.
+      // In the unpinned early-load case only MinHook can have been initialized.
+      // Process exit (lpvReserved non-null) must not enter MinHook after other
+      // threads may have been terminated while holding its internal spin lock.
+      if (!lpvReserved)
         MH_Uninitialize();
-      }
       break;
     default:
       break;

@@ -17,6 +17,7 @@ EXPECTED = {
     "d3d11.dll": {
         "D3D11CreateDevice": 22,
         "D3D11CreateDeviceAndSwapChain": 23,
+        "D3D11On12CreateDevice": 24,
     },
     "msimg32.dll": {
         "AlphaBlend": None,

@@ -37,7 +37,7 @@
 // (joined onto one line; the continuations are split here only for width)
 //
 // and the same with ID3D11DeviceContextVtbl. The context numbers are
-// corroborated by working code: d3d11_probe.cpp hooks Map at 14 successfully.
+// corroborated by the SDK declaration order and the central vtable census.
 namespace atfix {
 
 // ---- device ---------------------------------------------------------------
@@ -112,8 +112,8 @@ using PFN_OMSetRenderTargetsAndUnorderedAccessViews =
 // frames with every hook installed and reporting success, while the
 // device-level CreateTexture2D hook on the same run fired normally.
 //
-// (That also explains why d3d11_probe.cpp's Map hook has always worked on the
-// immediate context: texture uploads go through it. Drawing does not.)
+// Texture uploads observed on the immediate context do not contradict this:
+// drawing uses the distinct deferred implementation.
 struct ContextOriginals {
   PFN_RSSetViewports rsSetViewports = nullptr;
   PFN_RSSetScissorRects rsSetScissorRects = nullptr;

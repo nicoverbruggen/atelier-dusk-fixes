@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include "d3d11_hooks.h"
+#include "hook_util.h"
 #include "highres.h"
 #include "log.h"
 #include "sampler.h"
@@ -18,6 +19,7 @@
 #include "frame_map.h"
 #include "scene_policy.h"
 #include "supersample.h"
+#include "util.h"
 #include "../../vendor/minhook/include/MinHook.h"
 
 namespace atfix {
@@ -31,6 +33,8 @@ ContextOriginals g_immediateOriginals;
 ContextOriginals g_deferredOriginals;
 void** g_immediateVtable = nullptr;
 bool g_installed = false;
+bool g_installPoisoned = false;
+atfix::mutex g_installMutex;
 
 // One row per hooked context method. `originalOffset` names where in
 // ContextOriginals the trampoline belongs, so the table stays declarative and
@@ -98,42 +102,45 @@ ContextHookSpec preUiHooks[4] = {
 
 #undef ORIGINAL_AT
 
-// Hook one context's vtable from one spec table, filling `originals` with the
-// trampolines. Enabling happens per entry rather than in a second pass because
-// the two vtables are independent: a deferred context that cannot be hooked is
-// a reason to decline the whole install, and the caller undoes the device set.
-bool hookContextVtable(ID3D11DeviceContext* target, ContextOriginals& originals,
-                       const ContextHookSpec* specs, int count,
-                       const char* which) {
-  auto** vtable = *reinterpret_cast<void***>(target);
+// Add one context vtable to the central transaction. Nothing is enabled here:
+// every requested device/context target must first be created successfully, so
+// a later failure can remove the whole owned set while it is still inert.
+bool addContextVtable(void** vtable, ContextOriginals& originals,
+                      const ContextHookSpec* specs, int count,
+                      const char* which, HookTransaction& transaction) {
   auto* base = reinterpret_cast<uint8_t*>(&originals);
   for (int i = 0; i < count; ++i) {
     void* fn = vtable[specs[i].slot];
     void** slot = reinterpret_cast<void**>(base + specs[i].originalOffset);
-    const MH_STATUS created = MH_CreateHook(fn, specs[i].detour, slot);
-    // The two vtables can legitimately share an entry -- an implementation is
-    // free to give both context types the same function for a method that does
-    // not differ. MinHook refuses the second hook on that address, which is not
-    // an error: the first install already covers it. Reuse the trampoline it
-    // produced, which is the one recorded in the immediate set, since that
-    // vtable is always hooked first.
-    if (created == MH_ERROR_ALREADY_CREATED) {
-      auto* immediateBase = reinterpret_cast<uint8_t*>(&g_immediateOriginals);
-      *slot = *reinterpret_cast<void**>(
-        immediateBase + specs[i].originalOffset);
-      continue;
-    }
-    if (created != MH_OK) {
-      log("D3D11HOOKS: MH_CreateHook(", which, "::", specs[i].name,
-          ") failed: ", MH_StatusToString(created));
-      return false;
-    }
-    if (MH_EnableHook(fn) != MH_OK) {
-      log("D3D11HOOKS: MH_EnableHook(", which, "::", specs[i].name, ") failed");
+    if (!transaction.create(fn, specs[i].detour, slot)) {
+      const HookTransactionFailure& failure = transaction.failure();
+      log("D3D11HOOKS: transaction ", hookTransactionStageName(failure.stage),
+          " failed at ", which, "::", specs[i].name,
+          failure.status ? " status=" : "",
+          failure.status
+            ? MH_StatusToString(static_cast<MH_STATUS>(failure.status)) : "");
       return false;
     }
   }
   return true;
+}
+
+void clearHookPublications() {
+  g_deviceOriginals = {};
+  g_immediateOriginals = {};
+  g_deferredOriginals = {};
+  g_immediateVtable = nullptr;
+}
+
+void logRollbackFailure(const HookTransaction& transaction) {
+  const HookTransactionFailure& failure = transaction.rollbackFailure();
+  log("D3D11HOOKS: ROLLBACK INCOMPLETE stage=",
+      hookTransactionStageName(failure.stage), " target=", failure.target,
+      failure.status ? " status=" : "",
+      failure.status
+        ? MH_StatusToString(static_cast<MH_STATUS>(failure.status)) : "",
+      "; refusing every later install attempt because hook ownership is now"
+      " uncertain");
 }
 
 }  // namespace
@@ -169,7 +176,10 @@ void d3d11SetRenderTargets(ID3D11DeviceContext* context, UINT numViews,
 }
 
 void d3d11InstallHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
-  if (g_installed || !device)
+  if (!device)
+    return;
+  std::lock_guard<atfix::mutex> installLock(g_installMutex);
+  if (g_installed || g_installPoisoned)
     return;
 
   // Ask each feature what it needs before touching anything, so a session that
@@ -275,16 +285,61 @@ void d3d11InstallHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
     return;
   }
 
+  // Acquire the deferred vtable before asking MinHook to create anything. A
+  // device that cannot supply it must leave no device hook behind either.
+  ID3D11DeviceContext* deferred = nullptr;
+  void** immediateVtable = specCount
+    ? *reinterpret_cast<void***>(context) : nullptr;
+  void** deferredVtable = nullptr;
+  bool distinctVtables = false;
+  if (specCount) {
+    const HRESULT hr = device->CreateDeferredContext(0, &deferred);
+    if (FAILED(hr) || !deferred) {
+      log("D3D11HOOKS: CreateDeferredContext failed (hr=0x", std::hex,
+          uint32_t(hr), std::dec, "); the context hooks would miss every draw"
+          " this engine issues, so installing nothing");
+      if (owned)
+        owned->Release();
+      return;
+    }
+    deferredVtable = *reinterpret_cast<void***>(deferred);
+    distinctVtables = deferredVtable != immediateVtable;
+    log("D3D11HOOKS: context vtables immediate=",
+        reinterpret_cast<void*>(immediateVtable),
+        " deferred=", reinterpret_cast<void*>(deferredVtable),
+        distinctVtables ? " (distinct, both transactional)"
+                        : " (shared, one transactional set)");
+  }
+
+  clearHookPublications();
+  g_immediateVtable = immediateVtable;
+  HookTransaction transaction;
+  auto decline = [&]() {
+    const HookTransactionFailure& failure = transaction.failure();
+    log("D3D11HOOKS: transaction declined stage=",
+        hookTransactionStageName(failure.stage), " target=", failure.target,
+        failure.status ? " status=" : "",
+        failure.status
+          ? MH_StatusToString(static_cast<MH_STATUS>(failure.status)) : "");
+    if (!transaction.rollback()) {
+      g_installPoisoned = true;
+      logRollbackFailure(transaction);
+    } else {
+      clearHookPublications();
+      log("D3D11HOOKS: transaction rolled back completely; a later device may"
+          " retry");
+    }
+  };
+
   // Device slot 5. Wanted by the resolution fix and by the census alike, so it
   // goes in whenever either is on, and its failure is fatal to both.
-  void* createTarget = deviceVtable[5];
   if (highRes.createTexture2D) {
-    if (MH_CreateHook(createTarget,
+    if (!transaction.create(deviceVtable[5],
           reinterpret_cast<void*>(&hookedCreateTexture2D),
-          reinterpret_cast<void**>(&g_deviceOriginals.createTexture2D))
-            != MH_OK ||
-        MH_EnableHook(createTarget) != MH_OK) {
-      log("D3D11HOOKS: could not hook CreateTexture2D, installing nothing");
+          reinterpret_cast<void**>(&g_deviceOriginals.createTexture2D))) {
+      decline();
+      if (deferred)
+        deferred->Release();
       if (owned)
         owned->Release();
       return;
@@ -295,71 +350,58 @@ void d3d11InstallHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
   // upgrade is a descriptor rewrite at creation time, and sampler states are
   // created a handful of times per session, not per frame.
   if (anisotropyLevel()) {
-    void* samplerTarget = deviceVtable[23];
-    if (MH_CreateHook(samplerTarget,
+    if (!transaction.create(deviceVtable[23],
           reinterpret_cast<void*>(&hookedCreateSamplerState),
-          reinterpret_cast<void**>(&g_deviceOriginals.createSamplerState))
-            != MH_OK ||
-        MH_EnableHook(samplerTarget) != MH_OK) {
-      log("D3D11HOOKS: could not hook CreateSamplerState; anisotropic"
-          " filtering will not engage this session");
+          reinterpret_cast<void**>(&g_deviceOriginals.createSamplerState))) {
+      decline();
+      if (deferred)
+        deferred->Release();
+      if (owned)
+        owned->Release();
+      return;
     }
   }
 
   int hookedVtables = 0;
   if (specCount) {
-    g_immediateVtable = *reinterpret_cast<void***>(context);
-    if (!hookContextVtable(context, g_immediateOriginals, specs, specCount,
-                           "immediate")) {
-      if (highRes.createTexture2D)
-        MH_DisableHook(createTarget);
+    if (!addContextVtable(immediateVtable, g_immediateOriginals, specs,
+                          specCount, "immediate", transaction)) {
+      decline();
+      deferred->Release();
       if (owned)
         owned->Release();
       return;
     }
     ++hookedVtables;
 
-    // And the deferred context's vtable, which is where Ayesha actually draws.
-    // One is created purely to read its vtable and then released; every
-    // deferred context the game makes shares that vtable, so hooking through
-    // ours covers all of them.
-    ID3D11DeviceContext* deferred = nullptr;
-    const HRESULT hr = device->CreateDeferredContext(0, &deferred);
-    if (FAILED(hr) || !deferred) {
-      log("D3D11HOOKS: CreateDeferredContext failed (hr=0x", std::hex,
-          uint32_t(hr), std::dec, "); the context hooks would miss every draw"
-          " this engine issues, so installing nothing");
-      if (highRes.createTexture2D)
-        MH_DisableHook(createTarget);
-      if (owned)
-        owned->Release();
-      return;
-    }
-    void** deferredVtable = *reinterpret_cast<void***>(deferred);
-    const bool distinct = deferredVtable != g_immediateVtable;
-    log("D3D11HOOKS: context vtables immediate=",
-        reinterpret_cast<void*>(g_immediateVtable),
-        " deferred=", reinterpret_cast<void*>(deferredVtable),
-        distinct ? " (distinct, both hooked)" : " (shared, one hook set)");
-    bool ok = true;
-    if (distinct) {
-      ok = hookContextVtable(deferred, g_deferredOriginals, specs, specCount,
-                             "deferred");
-      if (ok)
-        ++hookedVtables;
+    if (distinctVtables) {
+      if (!addContextVtable(deferredVtable, g_deferredOriginals, specs,
+                            specCount, "deferred", transaction)) {
+        decline();
+        deferred->Release();
+        if (owned)
+          owned->Release();
+        return;
+      }
+      ++hookedVtables;
     } else {
-      // One vtable serves both; the immediate set already covers it.
+      // One vtable serves both; copying is safe because its hooks were created
+      // by this transaction, not inferred from an ALREADY_CREATED response.
       g_deferredOriginals = g_immediateOriginals;
     }
-    deferred->Release();
-    if (!ok) {
-      if (highRes.createTexture2D)
-        MH_DisableHook(createTarget);
-      if (owned)
-        owned->Release();
-      return;
-    }
   }
+
+  if (!transaction.enableAll()) {
+    decline();
+    if (deferred)
+      deferred->Release();
+    if (owned)
+      owned->Release();
+    return;
+  }
+  transaction.commit();
+  if (deferred)
+    deferred->Release();
 
   highResNoteImmediateContext(context);
 

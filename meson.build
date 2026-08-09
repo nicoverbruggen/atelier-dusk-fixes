@@ -53,7 +53,7 @@ else
     'src/core/main.cpp',
     'src/core/config.cpp',
     'src/core/crash_log.cpp',
-    'src/core/d3d11_probe.cpp',
+    'src/core/module_lifetime.cpp',
     'src/core/engine.cpp',
     'src/core/frame_capture.cpp',
     'src/core/frame_map.cpp',

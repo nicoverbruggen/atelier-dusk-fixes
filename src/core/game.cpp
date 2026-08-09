@@ -171,37 +171,38 @@ constexpr Support X = Support::OnByDefault;
 // Ayesha builds -- see the comment on the offset constants in field_physics.cpp
 // -- so nothing about this fix is now inherited on trust.
 //
-// Smaa is available in all three games, and the cell differs because WHERE it
-// runs differs. The passes themselves are the Arland project's own, ported
-// unchanged, so the antialiasing is never the experiment; the injection point
-// is.
+// Smaa is available in all three games and ON BY DEFAULT in all three, because
+// all three have a pre-UI injection point. smaa.cpp runs there on the scene
+// target before the game composites its interface, so menus and text are left
+// alone, and that is what makes on-by-default defensible. The passes themselves
+// are the Arland project's own, ported unchanged, so the antialiasing is never
+// the experiment; the injection point is.
 //
-// Ayesha is ON BY DEFAULT because it has a pre-UI injection point. smaa.cpp
-// runs there on the scene target before the game composites its interface, so
-// menus and text are left alone, and that is what made on-by-default
-// defensible -- it was OptIn for exactly as long as the only available path was
-// the full-frame one.
+// Ayesha has always had a scene-target test. Escha & Logy and Shallie got one
+// in src/engines/ktgl/scene_target.cpp -- the first draw into the surface the
+// interface is about to be drawn into. Both cells were OptIn for exactly as
+// long as the full-frame path was the only one those two games had, which
+// stopped being true when that test landed.
 //
-// Escha & Logy and Shallie are OPT-IN because they only have the full-frame
-// path. Their renderer has never been censused, so no scene-target test is
-// registered for it, so scenePassNoteBoundary declines every bind and the
-// pre-UI pass never claims a frame. smaaApply then runs at Present over the
-// finished image -- which antialiases the interface and its text along with the
-// scene. That is a real visual cost and exactly the kind of trade a user should
-// get to refuse, which is what OptIn is for.
-//
-// Nothing engine-specific is involved in that path and that is the whole reason
-// these two cells could change without new addresses: smaaApply takes the swap
+// Nothing engine-specific is involved in the fallback, and that is the whole
+// reason these cells can change without new addresses: smaaApply takes the swap
 // chain's back buffer, creates a render-target view over it and runs the
 // passes. No scene test, no mapped address, no dependency on the
 // high-resolution fix. The three gates in smaaApply that stand the Present path
 // down -- the per-frame latch, the pre-UI-proven latch, and g_broken -- are all
-// driven by the pre-UI path, which never engages here.
+// driven by the pre-UI path.
 //
-// The log says which one ran. "SMAA: pre-UI injection on the scene target" is
-// Ayesha; "SMAA: running at Present over the finished frame -- the interface is
-// antialiased too" is the KTGL games. Those two lines exist because "SMAA is
-// on" and "SMAA is on in the good place" are different facts.
+// The fallback is still reached, for the frames before the scene test accepts a
+// target. Measured 2026-08-09: Escha & Logy logged the full-frame line at
+// 621 ms and the pre-UI line at 3727 ms; Shallie 1695 ms and 3032 ms. So boot
+// and the logos are antialiased whole and everything after them is not, which
+// is a bounded cost rather than the standing one an earlier version of this
+// comment described.
+//
+// The log says which one ran. "SMAA: pre-UI active" is the wanted path;
+// "SMAA: running at Present over the finished frame -- the interface is
+// antialiased too" is the fallback. Those two lines exist because "SMAA is on"
+// and "SMAA is on in the good place" are different facts.
 //
 // Supersampling is OptIn on all three games. On Ayesha it is a rebuild rather
 // than a repair: four implementations preceded it and none of them worked. A
@@ -349,8 +350,8 @@ constexpr Support X = Support::OnByDefault;
 // fails loudly the next time a Feature is added without extending every row.
 //                               Stats Trace Verfy Censu Targt HiRes Cache Field Stabl Smaa  Ssaa  Aniso WMap  Logo  Movi  Typo  SysSv Promt PadRe Synth
 constexpr Support kAyesha[]  = { O,    O,    O,    O,    O,    X,    X,    X,    X,    X,    O,    X,    X,    O,    O,    U,    U,    U,    X,    U };
-constexpr Support kEscha[]   = { U,    U,    U,    U,    O,    U,    U,    U,    U,    O,    O,    O,    X,    O,    O,    X,    X,    U,    X,    X };
-constexpr Support kShallie[] = { U,    U,    U,    U,    O,    U,    U,    U,    U,    O,    O,    O,    U,    O,    O,    X,    X,    O,    X,    X };
+constexpr Support kEscha[]   = { U,    U,    U,    U,    O,    U,    U,    U,    U,    X,    O,    O,    X,    O,    O,    X,    X,    U,    X,    X };
+constexpr Support kShallie[] = { U,    U,    U,    U,    O,    U,    U,    U,    U,    X,    O,    O,    U,    O,    O,    X,    X,    O,    X,    X };
 
 constexpr std::size_t kColumns = static_cast<std::size_t>(Feature::Count);
 static_assert(std::size(kAyesha) == kColumns,  "Ayesha row is not one entry per Feature");

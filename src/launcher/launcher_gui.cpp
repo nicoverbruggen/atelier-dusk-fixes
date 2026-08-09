@@ -126,8 +126,8 @@ const int kGameCount = 3;
 // An earlier version of this file had no per-game knowledge at all and said so
 // in a comment: every mod fix was on by default with no control here, so the
 // window was identical for all three games. That stopped being true once the
-// antialiasing settings arrived. Both of them are Ayesha-only, because the KTGL
-// renderer has never been censused and nothing is known about what it binds.
+// antialiasing settings arrived, which differ by engine in how they are
+// plumbed even where they agree on what ships on.
 struct Capabilities {
   bool supersampling;   // [Rendering] Supersampling
   bool ssaaScalesGameIni;  // ...by multiplying the game's own resolution?
@@ -137,11 +137,11 @@ struct Capabilities {
   // DLL has ever seen the file: Steam's Play opens this launcher through the
   // msimg32 redirect, so on a fresh install the first save happens before the
   // game has run once and before featureEnabled has seeded anything. A flat
-  // false here would show Ayesha's shipped-on SMAA as off and then write that
-  // off into dusk-fix.ini, turning the feature off for the one game that ships
-  // it on. check_default_ini.py allowlists this key out of its value
-  // comparison, because no single shipped default.ini line can be right for all
-  // three games, so nothing else was checking it.
+  // false here would show shipped-on SMAA as off and then write that off into
+  // dusk-fix.ini, turning the feature off on a fresh install. The column now
+  // reads true for every game, which is not a reason to drop it: it is a copy
+  // of a matrix cell, and check_default_ini.py compares the two game by game so
+  // a future divergence is caught rather than silently written into the file.
   bool smaaOnByDefault;
   bool skipLogos;       // [Startup] SkipLogos
   bool skipMovie;       // [Startup] SkipIntroMovie
@@ -184,8 +184,8 @@ struct Capabilities {
 const Capabilities kCapabilities[kGameCount] = {
   //             Ssaa   ScalesIni  Smaa  SmaaOn  Logos  Movie  LogoTime
   /* Ayesha  */ { true,  false,     true, true,   true,  true,  false },
-  /* Escha   */ { true,  true,      true, false,  true,  true,  true  },
-  /* Shallie */ { true,  true,      true, false,  true,  true,  true  },
+  /* Escha   */ { true,  true,      true, true,   true,  true,  true  },
+  /* Shallie */ { true,  true,      true, true,   true,  true,  true  },
 };
 
 char g_iniPath[MAX_PATH] = {};       // dusk-fix.ini, in the game folder

@@ -38,7 +38,6 @@ SECTIONS = ("Rendering", "Startup", "Interface", "Launcher")
 # nothing, and for these two no line can keep that promise. They are named in
 # default.ini's comments instead, so a reader still learns they exist.
 UNDOCUMENTED = {
-    ("Rendering", "SMAA"),
     ("Rendering", "AnisotropicFiltering"),
 }
 

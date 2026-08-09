@@ -66,6 +66,30 @@ def main():
         for token in ("ProtectProc", "originalProtection_", "rollback()"):
             require(token in PROTECTION,
                     f"page-protection transaction is missing {token}")
+        # The proxy's own Present/resize and factory installers. They are
+        # outside the central owner, so nothing above covers them.
+        for token in ("MH_CreateHook", "MH_EnableHook"):
+            require(token not in MAIN,
+                    f"proxy installer calls {token} outside a transaction")
+        require(MAIN.count("HookTransaction transaction") == 2 and
+                MAIN.count("transaction.enableAll()") == 2 and
+                MAIN.count("transaction.commit()") == 2,
+                "the Present and factory installers are not both transactional")
+        require("declineHookTransaction" in MAIN and
+                "transaction.rollback()" in MAIN and
+                "ROLLBACK INCOMPLETE" in MAIN,
+                "proxy installer failure does not roll back and report")
+        present = re.search(r"void hookPresent\(.*?\n\}", MAIN, re.DOTALL)
+        require(present, "hookPresent not found")
+        present = present.group(0)
+        require(present.count("transaction.create(") == 3,
+                "Present and the two resize slots are not one requested set")
+        require(present.index("transaction.enableAll()") <
+                present.index("installed = true"),
+                "Present installation latches before the whole set is enabled")
+        require("poisoned" in present,
+                "Present installation does not quarantine an incomplete rollback")
+
         require("matches(draw, kDrawExpected)" in PROMPT,
                 "control-prompt Draw hook lacks a verified prologue")
         require("HookTransaction transaction" in PROMPT and

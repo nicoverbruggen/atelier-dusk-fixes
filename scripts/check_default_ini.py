@@ -153,6 +153,75 @@ def parse_matrix_defaults():
     return defaults
 
 
+def per_game_launcher_problems():
+    """Check the launcher's per-game copy of a matrix cell against the matrix.
+
+    A key in UNDOCUMENTED has no single shipped value, so neither the default.ini
+    comparison nor the launcher comparison above can reach it -- and that is
+    exactly the key whose launcher fallback is most likely to be wrong, because
+    the window shows and writes it before the DLL has ever seen the file. The
+    launcher therefore carries the cell itself, in kCapabilities, and this
+    compares that column against game.cpp row by row.
+    """
+    game = (ROOT / "src" / "core" / "game.cpp").read_text(encoding="utf-8")
+    gui = (ROOT / "src" / "launcher" / "launcher_gui.cpp").read_text(
+        encoding="utf-8"
+    )
+
+    rows = re.findall(
+        r'\{\s*"DUSK_[A-Z_0-9]+",\s*(?:"(\w+)"|nullptr),\s*(?:"(\w+)"|nullptr)\s*\}',
+        game,
+    )
+    grids = [
+        [c.strip() for c in m.split(",") if c.strip()]
+        for m in re.findall(r"constexpr Support k\w+\[\]\s*=\s*\{([^}]*)\}", game)
+    ]
+    grids = [g for g in grids if g and all(c in ("X", "O", "U") for c in g)]
+
+    body = re.search(r"struct Capabilities \{(.*?)\n\};", gui, re.DOTALL)
+    table = re.search(
+        r"const Capabilities kCapabilities\[kGameCount\] = \{(.*?)\n\};", gui,
+        re.DOTALL,
+    )
+    if len(grids) != 3 or not body or not table:
+        return ["the capability matrix or the launcher's copy could not be read"]
+
+    fields = re.findall(r"^\s*bool (\w+);", body.group(1), re.MULTILINE)
+    cells = [
+        [c.strip() for c in group.split(",") if c.strip()]
+        for group in re.findall(r"\{([^{}]*)\}", table.group(1))
+    ]
+    if len(cells) != 3:
+        return ["the launcher's kCapabilities table is not three rows"]
+
+    # field in the launcher's struct -> (section, key) it mirrors.
+    MIRRORED = {"smaaOnByDefault": ("Rendering", "SMAA")}
+    names = ("Ayesha", "Escha & Logy", "Shallie")
+    problems = []
+    for field, entry in MIRRORED.items():
+        if field not in fields:
+            problems.append(f"the launcher no longer carries {field}")
+            continue
+        column = fields.index(field)
+        try:
+            feature = [(s, k) for s, k in rows].index(entry)
+        except ValueError:
+            problems.append(f"{entry[0]}/{entry[1]} is not in game.cpp's descriptors")
+            continue
+        for game_index, name in enumerate(names):
+            if column >= len(cells[game_index]) or feature >= len(grids[game_index]):
+                problems.append(f"{name}: {field} has no cell to compare")
+                continue
+            expected = "true" if grids[game_index][feature] == "X" else "false"
+            actual = cells[game_index][column]
+            if actual != expected:
+                problems.append(
+                    f"{name}: the matrix makes {entry[0]}/{entry[1]} default to "
+                    f"{expected!r}, the launcher's {field} says {actual!r}"
+                )
+    return problems
+
+
 def parse_launcher():
     """(section, key) -> default value the settings launcher falls back to."""
     defaults = {}
@@ -206,6 +275,8 @@ def main():
                 f"{entry[0]}/{entry[1]}: default.ini says {ini[entry]!r}, "
                 f"the settings launcher falls back to {launcher[entry]!r}"
             )
+
+    problems.extend(per_game_launcher_problems())
 
     if problems:
         print("default.ini disagrees with the code:\n", file=sys.stderr)

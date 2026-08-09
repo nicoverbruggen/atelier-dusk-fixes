@@ -28,8 +28,8 @@
 // 0x20/0x40. It is what separates the scene colour from the post chain's own
 // targets, which are 0x20.
 //
-// THE DEPTH PREDICATE IS DELIBERATELY LOOSER THAN THE RECORD. The private
-// investigation record derives `0x48` exactly -- depth allocated readable. A
+// THE DEPTH PREDICATE IS DELIBERATELY LOOSER THAN THE STATIC READ. Reading the
+// same two creation paths derives `0x48` exactly -- depth allocated readable. A
 // target census run measured the only screen-sized depth at
 // `0x40`, no SHADER_RESOURCE. Those disagree, and the census is the weaker
 // evidence of the two because it only ever ran over the title screen, which has
@@ -43,7 +43,7 @@
 // than the swap chain's -- and under the present clamp those two deliberately
 // disagree, the render size being the larger. An equality against the swap chain
 // would be exactly false for the scene pair and exactly true for the back
-// buffer, which is the inversion the record warns about. A floor is true in both
+// buffer, which is the inversion this test exists to avoid. A floor is true in both
 // configurations and still excludes the 1024x1024 shadow pair.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>

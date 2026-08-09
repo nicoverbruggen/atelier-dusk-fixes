@@ -31,9 +31,10 @@ namespace {
 // another, and the result is exactly what was seen: the debug edge map showing
 // through in some regions and only some ground textures sharpened.
 //
-// The private record warns that Escha has a ping-pong pool of screen-sized
-// 0x28 colour targets that Shallie lacks. This counts them rather than assuming
-// the warning applies.
+// A static read of Escha's creation paths found a ping-pong pool of
+// screen-sized 0x28 colour targets that Shallie does not have, so more than one
+// bind can satisfy the test on that game. This counts them rather than assuming
+// the reading applies.
 constexpr int kMaxAccepted = 16;
 void* g_accepted[kMaxAccepted] = {};
 std::atomic<int> g_acceptedCount{0};

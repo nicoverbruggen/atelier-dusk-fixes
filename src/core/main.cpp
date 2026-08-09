@@ -20,6 +20,7 @@
 #include "crash_log.h"
 #include "engine.h"
 #include "game.h"
+#include "hook_util.h"
 #include "log.h"
 #include "pad_notify_trace.h"
 #include "d3d11_hooks.h"
@@ -207,46 +208,84 @@ HRESULT STDMETHODCALLTYPE hookedResizeTarget(
   return originalResizeTarget(swapChain, &clamped);
 }
 
+// Shared failure handling for the two proxy-local hook sets below. Runs the
+// rollback and reports what happened, and returns true when the rollback was
+// complete, meaning a later swap chain or device may retry. False means this
+// attempt may still own a live detour, so the caller must refuse every later
+// attempt rather than create a second hook over a target whose state is no
+// longer known. Same rule, and the same two log lines, as the central owner in
+// d3d11_hooks.cpp.
+bool declineHookTransaction(HookTransaction& transaction, const char* what) {
+  const HookTransactionFailure& failure = transaction.failure();
+  log(what, ": transaction declined stage=",
+      hookTransactionStageName(failure.stage), " target=", failure.target,
+      failure.status ? " status=" : "",
+      failure.status
+        ? MH_StatusToString(static_cast<MH_STATUS>(failure.status)) : "");
+  if (transaction.rollback()) {
+    log(what, ": rolled back completely; a later attempt may retry");
+    return true;
+  }
+  const HookTransactionFailure& rollbackFailure = transaction.rollbackFailure();
+  log(what, ": ROLLBACK INCOMPLETE stage=",
+      hookTransactionStageName(rollbackFailure.stage),
+      " target=", rollbackFailure.target,
+      rollbackFailure.status ? " status=" : "",
+      rollbackFailure.status
+        ? MH_StatusToString(static_cast<MH_STATUS>(rollbackFailure.status))
+        : "",
+      "; refusing every later attempt because hook ownership is now uncertain");
+  return false;
+}
+
 // Present lives in the swap chain's vtable, so it can only be hooked once an
 // instance exists. Called after each successful device/swapchain creation.
+//
+// Present and the two resize slots go in as one transaction, because the
+// present-size clamp is not a feature without them: the engine resizes its own
+// swap chain during device init, so a session that hooked Present and lost
+// ResizeBuffers would put the oversized backbuffer straight back while the
+// startup log said the clamp was on. Installation is latched only when the
+// whole requested set is live, and refused for the rest of the session only
+// when a rollback left ownership uncertain.
 void hookPresent(IDXGISwapChain* swapChain) {
-  static bool done = false;
-  if (done || !swapChain || !dusk::initializeEngineFixes())
+  static mutex installMutex;
+  static bool installed = false;
+  static bool poisoned = false;
+  if (!swapChain || !dusk::initializeEngineFixes())
+    return;
+  std::lock_guard lock(installMutex);
+  if (installed || poisoned)
     return;
   auto** vtable = *reinterpret_cast<void***>(swapChain);
   // IDXGISwapChain::Present is slot 8 (IUnknown 0-2, IDXGIObject 3-6,
-  // IDXGIDeviceSubObject 7, then Present).
-  void* target = vtable[8];
-  if (MH_CreateHook(target, reinterpret_cast<void*>(&hookedPresent),
-                    reinterpret_cast<void**>(&originalPresent)) != MH_OK)
+  // IDXGIDeviceSubObject 7, then Present). Slots 13 and 14 are ResizeBuffers
+  // and ResizeTarget, counted from the same base: GetBuffer 9,
+  // SetFullscreenState 10, GetFullscreenState 11, GetDesc 12, ResizeBuffers 13,
+  // ResizeTarget 14. The resize pair is requested only when the clamp is on, so
+  // an ordinary session has neither.
+  const bool clamps = ssaaPolicy().clampsPresentSize;
+  HookTransaction transaction;
+  bool created = transaction.create(vtable[8],
+    reinterpret_cast<void*>(&hookedPresent),
+    reinterpret_cast<void**>(&originalPresent));
+  if (created && clamps)
+    created =
+      transaction.create(vtable[13],
+        reinterpret_cast<void*>(&hookedResizeBuffers),
+        reinterpret_cast<void**>(&originalResizeBuffers)) &&
+      transaction.create(vtable[14],
+        reinterpret_cast<void*>(&hookedResizeTarget),
+        reinterpret_cast<void**>(&originalResizeTarget));
+  if (!created || !transaction.enableAll()) {
+    poisoned = !declineHookTransaction(transaction, "Present hook");
     return;
-  if (MH_EnableHook(target) != MH_OK)
-    return;
-  done = true;
-  log("Present hook installed");
-
-  // IDXGISwapChain slots 13 and 14, counted from the same base as Present at 8:
-  // IUnknown 0-2, IDXGIObject 3-6, IDXGIDeviceSubObject 7, Present 8, GetBuffer
-  // 9, SetFullscreenState 10, GetFullscreenState 11, GetDesc 12, ResizeBuffers
-  // 13, ResizeTarget 14. Installed only when the clamp is on, so an ordinary
-  // session has neither.
-  if (!ssaaPolicy().clampsPresentSize)
-    return;
-  void* resizeBuffers = vtable[13];
-  void* resizeTarget = vtable[14];
-  const bool buffersOk =
-    MH_CreateHook(resizeBuffers, reinterpret_cast<void*>(&hookedResizeBuffers),
-      reinterpret_cast<void**>(&originalResizeBuffers)) == MH_OK &&
-    MH_EnableHook(resizeBuffers) == MH_OK;
-  const bool targetOk =
-    MH_CreateHook(resizeTarget, reinterpret_cast<void*>(&hookedResizeTarget),
-      reinterpret_cast<void**>(&originalResizeTarget)) == MH_OK &&
-    MH_EnableHook(resizeTarget) == MH_OK;
-  // Named individually: a clamp that holds at creation and is then undone by an
-  // unhooked ResizeBuffers is the exact failure this pair exists to prevent, and
-  // it would otherwise look like the clamp simply did not work.
-  log("SSAA present clamp: enabled, ResizeBuffers=", buffersOk ? "hooked" : "FAILED",
-      " ResizeTarget=", targetOk ? "hooked" : "FAILED");
+  }
+  transaction.commit();
+  installed = true;
+  log("Present hook installed", clamps
+    ? "; SSAA present clamp enabled, ResizeBuffers and ResizeTarget hooked"
+    : "");
 }
 
 using PFN_IDXGIFactory_CreateSwapChain = HRESULT (STDMETHODCALLTYPE *) (
@@ -292,7 +331,17 @@ HRESULT STDMETHODCALLTYPE hookedCreateSwapChain(
 // actually means "never looked". The Arland proxy hooks both routes for the same
 // reason.
 void hookFactoryForSwapChain(ID3D11Device* device) {
-  if (!device || originalCreateSwapChain || !dusk::initializeEngineFixes())
+  static mutex installMutex;
+  // Installation state, kept separately from originalCreateSwapChain. MinHook
+  // publishes the trampoline at create time, so a create that succeeds and an
+  // enable that fails would set the pointer with no detour on the target, and
+  // using it as the guard would refuse every later device for the session.
+  static bool installed = false;
+  static bool poisoned = false;
+  if (!device || !dusk::initializeEngineFixes())
+    return;
+  std::lock_guard lock(installMutex);
+  if (installed || poisoned)
     return;
   // This is engine-agnostic, so it cannot assume an engine module has already
   // initialized MinHook. On Ayesha the Phyre module does and this used to be
@@ -324,16 +373,17 @@ void hookFactoryForSwapChain(ID3D11Device* device) {
   } else {
     // IDXGIFactory::CreateSwapChain is slot 10.
     void** vtable = *reinterpret_cast<void***>(factory);
-    MH_STATUS status = MH_CreateHook(vtable[10],
-      reinterpret_cast<void*>(&hookedCreateSwapChain),
-      reinterpret_cast<void**>(&originalCreateSwapChain));
-    if (!status || status == MH_ERROR_ALREADY_CREATED)
-      status = MH_EnableHook(vtable[10]);
-    if (status)
-      log("Failed to hook IDXGIFactory::CreateSwapChain: ",
-        MH_StatusToString(status));
-    else
+    HookTransaction transaction;
+    if (!transaction.create(vtable[10],
+          reinterpret_cast<void*>(&hookedCreateSwapChain),
+          reinterpret_cast<void**>(&originalCreateSwapChain)) ||
+        !transaction.enableAll()) {
+      poisoned = !declineHookTransaction(transaction, "CreateSwapChain hook");
+    } else {
+      transaction.commit();
+      installed = true;
       log("CreateSwapChain hook installed");
+    }
   }
   if (factory)
     factory->Release();

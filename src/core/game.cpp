@@ -202,10 +202,10 @@ constexpr Support X = Support::OnByDefault;
 // antialiased too" is the KTGL games. Those two lines exist because "SMAA is
 // on" and "SMAA is on in the good place" are different facts.
 //
-// Supersampling is OptIn on Ayesha and Unsupported on the KTGL games, and it is
-// a rebuild rather than a repair: four implementations preceded it and none of
-// them worked. A back-buffer redirect found nothing to attach to, because this
-// engine never composites through the back buffer's render-target view.
+// Supersampling is OptIn on all three games. On Ayesha it is a rebuild rather
+// than a repair: four implementations preceded it and none of them worked. A
+// back-buffer redirect found nothing to attach to, because this engine never
+// composites through the back buffer's render-target view.
 // Enlarging the scene targets and letting the engine resample worked but gave
 // four bilinear taps. Owning the resample improved it marginally.
 // Adding a once-per-frame latch to that pass produced a black scene, because

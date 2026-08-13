@@ -29,35 +29,6 @@
 
 namespace {
 
-void launcherLog(const char* message) {
-#ifdef DUSK_LAUNCHER_DIAGNOSTIC
-  std::array<char, 32768> path = { };
-  const DWORD length = GetModuleFileNameA(nullptr, path.data(), path.size());
-  if (!length || length == path.size())
-    return;
-  char* name = path.data();
-  for (char* cursor = path.data(); *cursor; cursor++) {
-    if (*cursor == '\\' || *cursor == '/')
-      name = cursor + 1;
-  }
-  std::memcpy(name, "dusk-launcher.log", sizeof("dusk-launcher.log"));
-  HANDLE file = CreateFileA(path.data(), FILE_APPEND_DATA,
-    FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
-    FILE_ATTRIBUTE_NORMAL, nullptr);
-  if (file == INVALID_HANDLE_VALUE)
-    return;
-  DWORD written = 0;
-  WriteFile(file, message, static_cast<DWORD>(std::strlen(message)),
-    &written, nullptr);
-  static constexpr char newline[] = "\r\n";
-  WriteFile(file, newline, sizeof(newline) - 1, &written, nullptr);
-  FlushFileBuffers(file);
-  CloseHandle(file);
-#else
-  (void)message;
-#endif
-}
-
 using PFN_AlphaBlend = BOOL (WINAPI *)(
   HDC, int, int, int, int, HDC, int, int, int, int, BLENDFUNCTION);
 using PFN_TransparentBlt = BOOL (WINAPI *)(
@@ -124,7 +95,8 @@ bool hostExeName(std::array<wchar_t, 32768>& path, const wchar_t** name) {
 // is what stops those buttons from being bounced straight back here.
 
 // What the redirect starts: our launcher normally, the game itself when
-// SkipLauncher is set. `g_startsGame` only picks the wording in the log.
+// SkipLauncher is set. `g_startsGame` is what armRedirect asks to decide which
+// of the two it resolves into `g_startTarget`.
 std::array<wchar_t, 32768> g_startTarget = { };
 bool g_startsGame = false;
 std::array<wchar_t, 32768> g_gameDirectory = { };
@@ -252,46 +224,38 @@ void applyAutoResolution(bool ssaaScalesGameIni) {
     }
   }
 
-  bool wrote = true;
+  // A refused write leaves that field at whatever it already held, which is a
+  // resolution the game can still use, so each one stands or falls on its own
+  // and none of them is worth abandoning the rest for.
   wchar_t value[16] = { };
   wsprintfW(value, L"%u", renderWidth);
-  wrote &= WritePrivateProfileStringW(L"Graphics", L"ScreenWidth", value,
-                                      settings.data()) != FALSE;
+  WritePrivateProfileStringW(L"Graphics", L"ScreenWidth", value,
+                             settings.data());
   wsprintfW(value, L"%u", renderHeight);
-  wrote &= WritePrivateProfileStringW(L"Graphics", L"ScreenHeight", value,
-                                      settings.data()) != FALSE;
+  WritePrivateProfileStringW(L"Graphics", L"ScreenHeight", value,
+                             settings.data());
 
   if (ssaaScalesGameIni && ini[0]) {
     if (percent > 100) {
       wsprintfW(value, L"%u", width);
-      wrote &= WritePrivateProfileStringW(
-        L"Rendering", L"DisplayWidth", value, ini.data()) != FALSE;
+      WritePrivateProfileStringW(
+        L"Rendering", L"DisplayWidth", value, ini.data());
       wsprintfW(value, L"%u", height);
-      wrote &= WritePrivateProfileStringW(
-        L"Rendering", L"DisplayHeight", value, ini.data()) != FALSE;
+      WritePrivateProfileStringW(
+        L"Rendering", L"DisplayHeight", value, ini.data());
     } else {
-      wrote &= WritePrivateProfileStringW(
-        L"Rendering", L"DisplayWidth", nullptr, ini.data()) != FALSE;
-      wrote &= WritePrivateProfileStringW(
-        L"Rendering", L"DisplayHeight", nullptr, ini.data()) != FALSE;
+      WritePrivateProfileStringW(
+        L"Rendering", L"DisplayWidth", nullptr, ini.data());
+      WritePrivateProfileStringW(
+        L"Rendering", L"DisplayHeight", nullptr, ini.data());
     }
     const int configured = GetPrivateProfileIntW(
       L"Rendering", L"Supersampling", 100, ini.data());
     if (configured != int(percent)) {
       wsprintfW(value, L"%u", percent);
-      wrote &= WritePrivateProfileStringW(
-        L"Rendering", L"Supersampling", value, ini.data()) != FALSE;
+      WritePrivateProfileStringW(
+        L"Rendering", L"Supersampling", value, ini.data());
     }
-  }
-
-  if (!wrote) {
-    launcherLog("AutoResolution: one or more resolution fields could not be "
-                "written; the existing fields remain authoritative");
-  } else if (ssaaScalesGameIni && percent > 100) {
-    launcherLog("AutoResolution: desktop base and supersampled KTGL render "
-                "resolution refreshed idempotently");
-  } else {
-    launcherLog("AutoResolution: presenting at the desktop resolution");
   }
 }
 
@@ -407,16 +371,17 @@ void runOriginalEntryPoint() {
       PAGE_EXECUTE_READWRITE, &oldProtect)) {
     // Calling while the jump is still present re-enters redirectedEntryPoint,
     // which comes back here again. Exit instead of recursing to stack failure.
-    launcherLog("could not restore the launcher entry point; exiting");
     ExitProcess(1);
   }
   std::memcpy(g_entryPoint, g_entryOriginal.data(), g_entryOriginal.size());
   FlushInstructionCache(GetCurrentProcess(), g_entryPoint,
     g_entryOriginal.size());
+  // Unchecked, and it has to stay that way: the original bytes are already
+  // back, so the stock launcher runs correctly whether or not the page returns
+  // to its old protection. Refusing to call it over a left-writable page would
+  // turn a cosmetic failure into a launcher that does nothing.
   DWORD ignored = 0;
-  if (!VirtualProtect(g_entryPoint, g_entryOriginal.size(), oldProtect,
-                      &ignored))
-    launcherLog("launcher entry bytes restored, but page protection was not");
+  VirtualProtect(g_entryPoint, g_entryOriginal.size(), oldProtect, &ignored);
   reinterpret_cast<void (*)()>(g_entryPoint)();
 }
 
@@ -433,21 +398,12 @@ void redirectedEntryPoint() {
   // same relationship our launcher gives it and the one Steam follows.
   if (!CreateProcessW(g_startTarget.data(), nullptr, nullptr, nullptr, FALSE,
       0, nullptr, g_gameDirectory.data(), &startup, &process)) {
-    launcherLog(g_startsGame
-      ? "the game failed to start; running the stock launcher"
-      : "configurator failed to start; running the stock launcher");
     runOriginalEntryPoint();
     return;
   }
   CloseHandle(process.hThread);
-  launcherLog(g_startsGame
-    ? "game started; holding this process open behind it"
-    : "configurator started; holding this process open behind it");
   WaitForSingleObject(process.hProcess, INFINITE);
   CloseHandle(process.hProcess);
-  launcherLog(g_startsGame
-    ? "game closed; ending the stock launcher"
-    : "configurator closed; ending the stock launcher");
   ExitProcess(0);
 }
 
@@ -473,7 +429,6 @@ bool armRedirect() {
 
   if (GetEnvironmentVariableW(L"DUSK_NO_REDIRECT", nullptr, 0) != 0 ||
       GetLastError() != ERROR_ENVVAR_NOT_FOUND) {
-    launcherLog("redirect stood down by DUSK_NO_REDIRECT");
     return false;
   }
 
@@ -494,13 +449,10 @@ bool armRedirect() {
   applyAutoResolution(game->ssaaScalesGameIni);
   if (g_startsGame) {
     if (!resolveGameExecutable(*game, g_startTarget)) {
-      launcherLog("SkipLauncher is set but no game executable is installed "
-        "here; leaving the stock launcher alone");
       return false;
     }
   } else if (!pathInGameDirectory(L"dusk-fix-launcher.exe", g_startTarget) ||
       GetFileAttributesW(g_startTarget.data()) == INVALID_FILE_ATTRIBUTES) {
-    launcherLog("no configurator installed; leaving the stock launcher alone");
     return false;
   }
 
@@ -527,7 +479,6 @@ bool armRedirect() {
   auto expectedEntry = game->launcherEntryExpected;
   relocateEntryWindow(base, expectedEntry);
   if (std::memcmp(g_entryPoint, expectedEntry.data(), expectedEntry.size())) {
-    launcherLog("launcher entry bytes are unknown; leaving it untouched");
     g_entryPoint = nullptr;
     return false;
   }
@@ -536,7 +487,6 @@ bool armRedirect() {
   DWORD oldProtect = 0;
   if (!VirtualProtect(g_entryPoint, g_entryOriginal.size(),
       PAGE_EXECUTE_READWRITE, &oldProtect)) {
-    launcherLog("entry point is not writable; leaving the stock launcher");
     return false;
   }
   g_entryPoint[0] = 0xe9;
@@ -547,9 +497,6 @@ bool armRedirect() {
   VirtualProtect(g_entryPoint, g_entryOriginal.size(), oldProtect, &ignored);
   FlushInstructionCache(GetCurrentProcess(), g_entryPoint,
     g_entryOriginal.size());
-  launcherLog(g_startsGame
-    ? "redirect armed at the launcher entry point (straight to the game)"
-    : "redirect armed at the launcher entry point");
   return true;
 }
 
@@ -566,9 +513,6 @@ BOOL CALLBACK loadSystemMsimg32(PINIT_ONCE, PVOID, PVOID*) {
     g_transparentBlt = reinterpret_cast<PFN_TransparentBlt>(
       GetProcAddress(module, "TransparentBlt"));
   }
-  launcherLog(module && g_alphaBlend && g_transparentBlt
-    ? "system msimg32 forwarding ready"
-    : "system msimg32 forwarding failed");
   return TRUE;
 }
 
@@ -596,7 +540,6 @@ extern "C" BOOL WINAPI TransparentBlt(
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
   if (reason == DLL_PROCESS_ATTACH) {
     DisableThreadLibraryCalls(instance);
-    launcherLog("msimg32 process attach");
     // Only armed here; it runs at the executable's entry point, once the
     // process (Steam's injections included) is fully assembled.
     armRedirect();

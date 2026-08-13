@@ -162,6 +162,14 @@ std::atomic<bool> g_init{false};
 bool g_broken = false;
 std::atomic<bool> g_preUiProven{false};
 std::atomic<bool> g_doneThisFrame{false};
+// One resource tuple, used from both deferred pre-UI recording and the
+// immediate Present fallback. Refuse an overlap instead of waiting inside a
+// D3D hook; the next frame can try again without risking a graphics-lock
+// deadlock. Runtime topology shows one game device per process, so a different
+// device is rejected explicitly rather than receiving resources created by the
+// first one.
+std::atomic<bool> g_passBusy{false};
+ID3D11Device* g_ownerDevice = nullptr;
 UINT g_width = 0, g_height = 0;
 DXGI_FORMAT g_format = DXGI_FORMAT_UNKNOWN;
 
@@ -197,6 +205,21 @@ ID3D11RenderTargetView* g_weightRTV = nullptr;
 ID3D11ShaderResourceView* g_weightSRV = nullptr;
 
 template <typename T> void release(T*& p) { if (p) { p->Release(); p = nullptr; } }
+
+bool acceptsDevice(ID3D11Device* device) {
+  if (!g_ownerDevice) {
+    g_ownerDevice = device;
+    g_ownerDevice->AddRef();
+    return true;
+  }
+  if (g_ownerDevice == device)
+    return true;
+  static std::atomic<bool> warned{false};
+  if (!warned.exchange(true, std::memory_order_relaxed))
+    log("SMAA: a second D3D11 device reached the shared pass; refusing it so"
+        " resources from the first device are never bound across devices");
+  return false;
+}
 
 // DUSK_SMAA_DEBUG=1 shows the detected edges, =2 the blend weights, instead of
 // the antialiased frame. A diagnostic, so it is environment-only.
@@ -649,11 +672,6 @@ bool smaaApplySceneColor(ID3D11DeviceContext* ctx, ID3D11Texture2D* scene) {
   if (sd.SampleDesc.Count != 1)
     return false;
 
-  ID3D11Device* dev = nullptr;
-  scene->GetDevice(&dev);
-  if (!dev)
-    return false;
-
   // Claim the frame BEFORE doing anything, not after.
   //
   // This is a re-entry guard, not bookkeeping. Restoring render targets at the
@@ -664,6 +682,23 @@ bool smaaApplySceneColor(ID3D11DeviceContext* ctx, ID3D11Texture2D* scene) {
   // screen for exactly that reason, before the intro video could play.
   if (g_doneThisFrame.exchange(true, std::memory_order_relaxed))
     return false;
+
+  bool expected = false;
+  if (!g_passBusy.compare_exchange_strong(expected, true,
+                                           std::memory_order_acquire)) {
+    g_doneThisFrame.store(false, std::memory_order_relaxed);
+    return false;
+  }
+
+  ID3D11Device* dev = nullptr;
+  scene->GetDevice(&dev);
+  if (!dev || !acceptsDevice(dev)) {
+    if (dev)
+      dev->Release();
+    g_passBusy.store(false, std::memory_order_release);
+    g_doneThisFrame.store(false, std::memory_order_relaxed);
+    return false;
+  }
 
   D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {};
   rtvDesc.Format = concreteFormat(sd.Format);
@@ -711,13 +746,15 @@ bool smaaApplySceneColor(ID3D11DeviceContext* ctx, ID3D11Texture2D* scene) {
     // all, quietly" -- which is the failure mode this project has now made
     // three times. Safe here: the scope guard above has already restored, so
     // nothing can recurse through the reset.
-    g_doneThisFrame.store(false, std::memory_order_relaxed);
     static std::atomic<bool> reported{false};
     if (!reported.exchange(true, std::memory_order_relaxed))
       log("SMAA: pre-UI pass could not run on the scene target; falling back to"
           " the Present path, which also antialiases the interface");
   }
   dev->Release();
+  g_passBusy.store(false, std::memory_order_release);
+  if (!ran)
+    g_doneThisFrame.store(false, std::memory_order_relaxed);
   return ran;
 }
 
@@ -766,8 +803,15 @@ void smaaApply(IDXGISwapChain* swapChain) {
   // Present, after the game has finished submitting the frame, so there is no
   // pending operation of the game's to preserve state for. The pre-UI path,
   // when it exists, will need one.
-  if (dev && ctx && backRTV)
-    smaaRunPasses(dev, ctx, back, backRTV);
+  if (dev && ctx && backRTV) {
+    bool expected = false;
+    if (g_passBusy.compare_exchange_strong(expected, true,
+                                            std::memory_order_acquire)) {
+      if (acceptsDevice(dev))
+        smaaRunPasses(dev, ctx, back, backRTV);
+      g_passBusy.store(false, std::memory_order_release);
+    }
+  }
   release(backRTV);
   release(back);
   if (ctx) ctx->Release();

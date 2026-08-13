@@ -25,6 +25,12 @@
 // RUN AFTER THE ANTIALIASING, never before. Sharpening first would give SMAA
 // harder edges to find and it would blend them away again, which is work spent
 // to arrive back where it started.
+//
+// COLOUR ONLY. KTGL consumes the interface target's existing alpha in later
+// composition. Writing the shader's constant alpha=1 into that channel caused
+// intermittent black terrain polygons in Shallie; an RGB-only blend write mask
+// fixed the defect in both sharpen-only and SMAA-plus-sharpen runs. The pass
+// must preserve alpha even if a future shader returns another value there.
 namespace atfix {
 
 // How hard to sharpen, 0 to 1. `[Rendering] Sharpen` or DUSK_SHARPEN as a
@@ -46,8 +52,10 @@ void sharpenPreload();
 // cannot read and write one resource in the same draw -- the runtime unbinds
 // one of them and the result is silently wrong.
 //
-// Returns false when the pass is off, could not be built, or the surface is a
-// shape it does not handle. A refusal costs sharpness and nothing else.
+// Returns false when the pass is off, could not be built, the surface is a
+// shape it does not handle, or a different D3D device owns the shared resource
+// tuple. The tuple is mutex-protected; a refusal costs sharpness and nothing
+// else.
 bool sharpenApply(ID3D11DeviceContext* ctx, ID3D11Texture2D* target);
 
 }  // namespace atfix

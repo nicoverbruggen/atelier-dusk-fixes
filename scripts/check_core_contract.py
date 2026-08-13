@@ -18,6 +18,14 @@ PHYRE = (ROOT / "src" / "engines" / "phyre" / "phyre.cpp").read_text()
 SHARPEN = (ROOT / "src" / "core" / "sharpen.cpp").read_text()
 SMAA = (ROOT / "src" / "core" / "smaa.cpp").read_text()
 SSAA = (ROOT / "src" / "core" / "supersample.cpp").read_text()
+HIGHRES = (ROOT / "src" / "core" / "highres.cpp").read_text()
+SCENE_PASS = (ROOT / "src" / "core" / "scene_pass.cpp").read_text()
+KTGL_PRE_UI = (
+    ROOT / "src" / "engines" / "ktgl" / "scene_target.cpp"
+).read_text()
+PHYRE_PRE_UI = (
+    ROOT / "src" / "engines" / "phyre" / "pre_ui.cpp"
+).read_text()
 PRESENT_CLAMP = (
     ROOT / "src" / "engines" / "ktgl" / "present_clamp.cpp"
 ).read_text()
@@ -171,6 +179,16 @@ def main():
         registration = phyre_init.find("registerPhyreSceneTarget();")
         if registration < recognition.end():
             raise ValueError("Phyre scene policy is registered before exact recognition")
+        notify = phyre_init.find("startPadNotifyTrace();")
+        success = phyre_init.rfind("return true;")
+        if notify < 0 or success < notify:
+            raise ValueError(
+                "Phyre initialization success no longer covers controller/diagnostic fan-out"
+            )
+        if re.search(r"if\s*\(\s*!wantAddressFix\s*\)\s*return false", phyre_init):
+            raise ValueError(
+                "Phyre initialization again depends on the address-patch subset"
+            )
 
         # Fullscreen passes run inside the engine's frame. Sharpening must put
         # back every render target it can displace, while every pass must skip
@@ -179,6 +197,9 @@ def main():
             "OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs",
             "D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs, dsv",
             "for (auto*& rtv : rtvs) release(rtv)",
+            "D3D11_COLOR_WRITE_ENABLE_RED |",
+            "D3D11_COLOR_WRITE_ENABLE_GREEN |",
+            "D3D11_COLOR_WRITE_ENABLE_BLUE",
         ):
             if fragment not in SHARPEN:
                 raise ValueError(
@@ -222,6 +243,74 @@ def main():
                     "KTGL present clamp no longer enforces its final bound: "
                     + fragment
                 )
+
+        # Width/height publications are indivisible, and a refused enlarged
+        # allocation is never hidden by returning one original-size member of
+        # an otherwise enlarged target family.
+        for fragment in (
+            "std::atomic<uint64_t> g_mainSize{0}",
+            "std::atomic<uint64_t> g_swapSize{0}",
+            "g_mainSize.compare_exchange_strong",
+            "g_swapSize.store(packSize(width, height), std::memory_order_release)",
+            "returning the failure without an incompatible",
+        ):
+            if fragment not in HIGHRES:
+                raise ValueError(
+                    "high-resolution publication/failure contract is missing: "
+                    + fragment
+                )
+        if HIGHRES.count(
+            "createTexture2D(self, desc, initialData, texture)"
+        ) != 1:
+            raise ValueError(
+                "high-resolution path has gained an original-descriptor retry"
+            )
+
+        # Deferred-context state follows the context object, and Finish mirrors
+        # D3D's restore-state contract instead of unconditionally dropping the
+        # SSAA marker.
+        for label, source, iid in (
+            ("raster", HIGHRES, "IID_DuskHighResRasterDirty"),
+            ("KTGL pre-UI", KTGL_PRE_UI, "IID_DuskKtglPreUiState"),
+            ("Phyre pre-UI", PHYRE_PRE_UI, "IID_DuskPhyrePreUiState"),
+        ):
+            for fragment in (iid, "SetPrivateData", "GetPrivateData"):
+                if fragment not in source:
+                    raise ValueError(
+                        f"{label} state no longer follows its D3D context: {fragment}"
+                    )
+        finish = function_body(
+            SCENE_PASS,
+            "HRESULT STDMETHODCALLTYPE hookedFinishCommandList(",
+            "FinishCommandList detour",
+        )
+        require(
+            r"if\s*\(SUCCEEDED\(result\)\s*&&\s*!restoreState\)\s*"
+            r"ssaaClearContextState\(self\)",
+            finish,
+            "FinishCommandList no longer preserves the marker with restoreState=TRUE",
+        )
+
+        # Each shared fullscreen resource tuple is serialized and tied to the
+        # one measured device. SSAA's substituted view crosses the guard only
+        # with a retained reference that the forwarding detour releases.
+        for label, source in (("SMAA", SMAA), ("SSAA", SSAA)):
+            for fragment in (
+                "std::atomic<bool> g_passBusy{false}",
+                "ID3D11Device* g_ownerDevice = nullptr",
+                "acceptsDevice(",
+            ):
+                if fragment not in source:
+                    raise ValueError(
+                        f"{label} shared-resource ownership is missing: {fragment}"
+                    )
+        for fragment in (
+            "g_smallSRV->AddRef()",
+            "substituted[i] != views[i]",
+            "substituted[i]->Release()",
+        ):
+            if fragment not in SSAA + SCENE_PASS:
+                raise ValueError("SSAA retained handoff is missing: " + fragment)
 
     except (OSError, ValueError) as exc:
         return fail(str(exc))

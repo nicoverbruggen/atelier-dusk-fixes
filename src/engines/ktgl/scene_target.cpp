@@ -50,6 +50,7 @@
 #include <d3d11.h>
 
 #include <atomic>
+#include <new>
 
 #include "scene_target.h"
 #include "../../core/highres.h"
@@ -159,11 +160,91 @@ namespace {
 
 constexpr uint32_t kGeometryRunDraws = 100;
 
-std::atomic<uint32_t> g_drawsThisBind{0};
-std::atomic<uint32_t> g_largestRun{0};
-std::atomic<bool> g_armed{false};
-std::atomic<ID3D11Texture2D*> g_preUiSurface{nullptr};
+// One sequence per recording context. Atomics on one process-global tuple used
+// to prevent torn scalar accesses while still allowing context B's bind to
+// close context A's draw run and context C's draw to consume A's surface.
+// Private data makes the context own both the sequence and its retained COM
+// reference, so replacement contexts begin clean and destruction releases the
+// armed surface automatically.
+const GUID IID_DuskKtglPreUiState =
+  { 0x4698aa9d, 0xb925, 0x4097,
+    { 0xb2, 0x20, 0x68, 0xf6, 0xb8, 0xf1, 0x59, 0x37 } };
+
+struct PreUiContextState final : IUnknown {
+  std::atomic<ULONG> references{1};
+  uint64_t frame = 0;
+  uint32_t drawsThisBind = 0;
+  uint32_t largestRun = 0;
+  bool armed = false;
+  ID3D11Texture2D* surface = nullptr;
+
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
+    if (!out)
+      return E_POINTER;
+    *out = nullptr;
+    if (!IsEqualIID(iid, IID_IUnknown))
+      return E_NOINTERFACE;
+    *out = static_cast<IUnknown*>(this);
+    AddRef();
+    return S_OK;
+  }
+  ULONG STDMETHODCALLTYPE AddRef() override {
+    return references.fetch_add(1, std::memory_order_relaxed) + 1;
+  }
+  ULONG STDMETHODCALLTYPE Release() override {
+    const ULONG left = references.fetch_sub(1, std::memory_order_acq_rel) - 1;
+    if (!left)
+      delete this;
+    return left;
+  }
+
+  void setSurface(ID3D11Texture2D* next) {
+    if (next)
+      next->AddRef();
+    if (surface)
+      surface->Release();
+    surface = next;
+  }
+  void reset() {
+    drawsThisBind = 0;
+    largestRun = 0;
+    armed = false;
+    setSurface(nullptr);
+  }
+
+private:
+  ~PreUiContextState() { setSurface(nullptr); }
+};
+
+std::atomic<uint64_t> g_preUiFrame{1};
+std::atomic<uint64_t> g_preUiClaimedFrame{0};
 std::atomic<bool> g_installed{false};
+
+PreUiContextState* preUiState(ID3D11DeviceContext* context) {
+  IUnknown* stored = nullptr;
+  UINT size = sizeof(stored);
+  if (SUCCEEDED(context->GetPrivateData(IID_DuskKtglPreUiState,
+                                        &size, &stored)) && stored)
+    return static_cast<PreUiContextState*>(stored);  // GetPrivateData AddRef'd
+
+  auto* created = new (std::nothrow) PreUiContextState;
+  if (!created)
+    return nullptr;
+  if (FAILED(context->SetPrivateDataInterface(IID_DuskKtglPreUiState,
+                                               created))) {
+    created->Release();
+    return nullptr;
+  }
+  return created;  // creator's reference; the context holds another
+}
+
+void enterCurrentFrame(PreUiContextState* state) {
+  const uint64_t frame = g_preUiFrame.load(std::memory_order_acquire);
+  if (state->frame == frame)
+    return;
+  state->reset();
+  state->frame = frame;
+}
 
 // RE-ENTRY GUARD, and it is not bookkeeping.
 //
@@ -198,7 +279,7 @@ bool ktglPreUiActive() {
          (smaaPreUiEnabled() || sharpenEnabled());
 }
 
-void ktglPreUiNoteTargets(unsigned int numViews,
+void ktglPreUiNoteTargets(ID3D11DeviceContext* context, unsigned int numViews,
                           ID3D11RenderTargetView* const* views) {
   // INERT UNLESS THIS ENGINE INSTALLED IT. These two are called from the shared
   // bind and draw detours, so without this check the anchor arms and fires on
@@ -207,38 +288,47 @@ void ktglPreUiNoteTargets(unsigned int numViews,
   // the sharpening pass when the anchor fired it a second time.
   if (!g_installed.load(std::memory_order_relaxed))
     return;
-  if (t_inPass || !numViews || !views || !views[0])
+  if (t_inPass || !context || !numViews || !views || !views[0])
     return;
+  PreUiContextState* state = preUiState(context);
+  if (!state)
+    return;
+  enterCurrentFrame(state);
   // Close the previous bind's run.
-  const uint32_t run = g_drawsThisBind.exchange(0, std::memory_order_relaxed);
-  uint32_t largest = g_largestRun.load(std::memory_order_relaxed);
-  while (run > largest &&
-         !g_largestRun.compare_exchange_weak(largest, run,
-                                             std::memory_order_relaxed)) {}
+  const uint32_t run = state->drawsThisBind;
+  state->drawsThisBind = 0;
+  if (run > state->largestRun)
+    state->largestRun = run;
 
-  g_armed.store(false, std::memory_order_relaxed);
-  g_preUiSurface.store(nullptr, std::memory_order_relaxed);
-  if (g_largestRun.load(std::memory_order_relaxed) < kGeometryRunDraws)
+  state->armed = false;
+  state->setSurface(nullptr);
+  if (state->largestRun < kGeometryRunDraws) {
+    state->Release();
     return;   // the scene has not been drawn yet this frame
+  }
 
   ID3D11Resource* resource = nullptr;
   views[0]->GetResource(&resource);
-  if (!resource)
+  if (!resource) {
+    state->Release();
     return;
+  }
   ID3D11Texture2D* texture = nullptr;
   resource->QueryInterface(IID_ID3D11Texture2D,
                            reinterpret_cast<void**>(&texture));
   resource->Release();
-  if (!texture)
+  if (!texture) {
+    state->Release();
     return;
+  }
   D3D11_TEXTURE2D_DESC d = {};
   texture->GetDesc(&d);
   unsigned int swapWidth = 0, swapHeight = 0;
   if (d.BindFlags == kColourBind && isTypeless(d.Format) &&
       highResSwapChainSize(&swapWidth, &swapHeight) &&
       d.Width >= swapWidth && d.Height >= swapHeight) {
-    g_armed.store(true, std::memory_order_relaxed);
-    g_preUiSurface.store(texture, std::memory_order_relaxed);
+    state->armed = true;
+    state->setSurface(texture);
 
     // WHICH SURFACE THIS ACTUALLY IS, reported once per distinct size.
     //
@@ -259,21 +349,36 @@ void ktglPreUiNoteTargets(unsigned int numViews,
       log("KTGL pre-UI: armed on ", std::dec, d.Width, "x", d.Height,
           " format=", uint32_t(d.Format), " bind=0x", std::hex, d.BindFlags,
           std::dec, " after a run of ",
-          g_largestRun.load(std::memory_order_relaxed), " draws",
+          state->largestRun, " draws",
           " -- sceneHostTag=", ssaaIsSceneHost(texture) ? "yes" : "no",
           " backBufferTag=", ssaaIsBackBuffer(texture) ? "yes" : "no");
   }
   texture->Release();
+  state->Release();
 }
 
-// Returns the surface to antialias once, on the first draw after arming.
-ID3D11Texture2D* ktglPreUiNoteDraw() {
-  if (!g_installed.load(std::memory_order_relaxed) || t_inPass)
+// Returns an owned reference to the surface once, on the first draw after
+// arming. The caller releases it after the passes have taken whatever D3D
+// references they need.
+ID3D11Texture2D* ktglPreUiNoteDraw(ID3D11DeviceContext* context) {
+  if (!g_installed.load(std::memory_order_relaxed) || t_inPass || !context)
     return nullptr;
-  const uint32_t n = g_drawsThisBind.fetch_add(1, std::memory_order_relaxed) + 1;
-  if (n != 1 || !g_armed.exchange(false, std::memory_order_relaxed))
+  PreUiContextState* state = preUiState(context);
+  if (!state)
     return nullptr;
-  return g_preUiSurface.load(std::memory_order_relaxed);
+  enterCurrentFrame(state);
+  const uint32_t n = ++state->drawsThisBind;
+  if (n != 1 || !state->armed) {
+    state->Release();
+    return nullptr;
+  }
+  state->armed = false;
+  ID3D11Texture2D* surface = state->surface;
+  if (surface)
+    surface->AddRef();
+  state->setSurface(nullptr);
+  state->Release();
+  return surface;
 }
 
 // ---- the draw detours this feature owns ------------------------------------
@@ -311,7 +416,24 @@ void ktglPreUiAfterDraw(ID3D11DeviceContext* self) {
   // attaches must not take this pass down with it.
   if (ssaaEngaged())
     return;
-  if (ID3D11Texture2D* preUi = ktglPreUiNoteDraw()) {
+  if (ID3D11Texture2D* preUi = ktglPreUiNoteDraw(self)) {
+    // THE ANCHOR CAN MATCH SEVERAL LATER FULL-SIZE SURFACES. Its structural
+    // rule identifies the first draw into the interface target after the main
+    // geometry run, but the "geometry has finished" half stays true for the
+    // rest of the frame. SMAA already had its own frame claim, so later fires
+    // quietly declined there; sharpening had no such claim and rewrote every
+    // later matching intermediate, producing intermittent black rectangles on
+    // terrain in a non-supersampled Shallie run. Claim the combined pre-UI
+    // operation here, where both consumers are visible.
+    const uint64_t frame = g_preUiFrame.load(std::memory_order_acquire);
+    uint64_t claimed = g_preUiClaimedFrame.load(std::memory_order_relaxed);
+    if (claimed == frame ||
+        !g_preUiClaimedFrame.compare_exchange_strong(
+          claimed, frame, std::memory_order_acq_rel,
+          std::memory_order_relaxed)) {
+      preUi->Release();
+      return;
+    }
     // Claimed BEFORE either pass runs, so their own binds and draws cannot come
     // back round and re-enter this.
     t_inPass = true;
@@ -339,8 +461,14 @@ void ktglPreUiAfterDraw(ID3D11DeviceContext* self) {
             " earlier frames declined, which is normal during a load)");
     } else {
       refusals.fetch_add(1, std::memory_order_relaxed);
+      // Neither consumer changed the target, so a later qualifying surface in
+      // this frame is still allowed to try, matching SMAA's own failure rule.
+      uint64_t thisFrame = frame;
+      g_preUiClaimedFrame.compare_exchange_strong(
+        thisFrame, 0, std::memory_order_release, std::memory_order_relaxed);
     }
     t_inPass = false;
+    preUi->Release();
   }
 }
 
@@ -378,10 +506,10 @@ void STDMETHODCALLTYPE hookedPreUiDrawInstanced(
 }
 
 void ktglPreUiFrameTick() {
-  g_drawsThisBind.store(0, std::memory_order_relaxed);
-  g_largestRun.store(0, std::memory_order_relaxed);
-  g_armed.store(false, std::memory_order_relaxed);
-  g_preUiSurface.store(nullptr, std::memory_order_relaxed);
+  // Contexts cannot be enumerated here. Advancing an epoch makes each one drop
+  // its own retained target and counters lazily on its next bind/draw, while a
+  // destroyed context releases them through its private state object.
+  g_preUiFrame.fetch_add(1, std::memory_order_release);
 }
 
 void installKtglSceneTarget() {

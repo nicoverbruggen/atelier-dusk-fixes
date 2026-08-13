@@ -34,6 +34,24 @@ def main():
                 raise ValueError(f"proxy game table is missing {launcher}")
         if table.count("0xe8,0x7f,0xe6") != 3:
             raise ValueError("not every Dusk launcher has an entry byte window")
+        if table.count("\n    false,") != 1 or table.count("\n    true,") != 2:
+            raise ValueError("proxy game table lost the two KTGL SSAA policies")
+
+        # Auto resolution must rebuild KTGL's multiplied render size from the
+        # desktop base and saved factor. Reading the already-multiplied game ini
+        # back as the base would compound the scale on every redirected start.
+        for token in (
+            "void applyAutoResolution(bool ssaaScalesGameIni)",
+            "candidateWidth = uint64_t(width) * candidate / 100",
+            "candidateHeight = uint64_t(height) * candidate / 100",
+            "L\"DisplayWidth\", value, ini.data()",
+            "L\"DisplayHeight\", value, ini.data()",
+            "applyAutoResolution(game->ssaaScalesGameIni)",
+        ):
+            if token not in PROXY:
+                raise ValueError(
+                    "redirected auto-resolution is no longer idempotent: " + token
+                )
 
         arm = require(r"bool armRedirect\(\) \{(.*?)\n\}", PROXY,
                       "armRedirect").group(1)

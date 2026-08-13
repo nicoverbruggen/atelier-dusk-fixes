@@ -170,8 +170,11 @@ void ssaaNoteTargetsBound(ID3D11DeviceContext* context, unsigned int numViews,
 constexpr unsigned int kSsaaMaxSubstitutedViews = 16;
 
 // Returns true when `substituted` should be forwarded instead of `views`. The
-// view it writes there is BORROWED -- this module holds the only reference and
-// keeps it alive for the session -- so the caller neither addrefs nor releases.
+// occupant check, downscale and shared tuple publication are one nonblocking
+// transaction tied to the first measured game device. The replacement view is
+// retained across that guard; after the forwarded PSSetShaderResources call
+// has taken its own reference, the caller releases every entry that differs
+// from `views`.
 //
 bool ssaaSubstituteShaderResources(ID3D11DeviceContext* context,
                                    unsigned int startSlot,
@@ -191,9 +194,9 @@ bool ssaaSubstituteShaderResources(ID3D11DeviceContext* context,
 // No-op on Ayesha, where the raster correction in highres.cpp owns this.
 void ssaaCorrectCompositeViewport(ID3D11DeviceContext* context);
 
-// Drop this context's composite marker. Called when a command list is closed:
-// a list can be recorded with the back buffer still bound, and the marker is
-// per-context state that the next recording must not inherit.
+// Drop this context's composite marker when D3D resets that context to default
+// state. `FinishCommandList(FALSE)` does; `FinishCommandList(TRUE)` restores
+// the state it had before the call and therefore deliberately keeps the marker.
 void ssaaClearContextState(ID3D11DeviceContext* context);
 
 // ---- the two engine routes ------------------------------------------------

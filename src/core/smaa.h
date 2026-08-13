@@ -8,8 +8,8 @@
 
 namespace atfix {
 
-// Whether SMAA post-processing is enabled. Ayesha-only and opt-in for now; see
-// the capability matrix in game.cpp.
+// Whether SMAA post-processing is enabled. Supported and on by default in all
+// three games; see the capability matrix in game.cpp.
 bool smaaEnabled();
 
 // Whether the pre-UI path is wanted. On by default when SMAA is on, because it
@@ -51,7 +51,10 @@ void smaaApply(IDXGISwapChain* swapChain);
 // worst.
 //
 // Saves and restores every piece of pipeline state it touches, scissor rects
-// included. Returns true if it ran, and runs at most once per frame.
+// included. Returns true if it ran, and runs at most once per frame. The pre-UI
+// and Present routes share one guarded resource tuple tied to the first game
+// device measured in the process; an overlapping call or second device is
+// refused rather than receiving another device's resources.
 bool smaaApplySceneColor(ID3D11DeviceContext* ctx, ID3D11Texture2D* scene);
 
 // Clears the once-per-frame latch. Called at Present.

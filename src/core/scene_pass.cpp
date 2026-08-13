@@ -184,6 +184,12 @@ void STDMETHODCALLTYPE hookedPSSetShaderResources(
                                     substituted, kSsaaMaxSubstitutedViews)) {
     d3d11OriginalsFor(self).psSetShaderResources(self, startSlot, numViews,
                                                  substituted);
+    // The replacement is returned retained so another recording context may
+    // resize the shared tuple without invalidating this handoff. D3D has taken
+    // its own reference by now.
+    for (UINT i = 0; i < numViews; ++i)
+      if (substituted[i] && substituted[i] != views[i])
+        substituted[i]->Release();
     return;
   }
 
@@ -193,12 +199,15 @@ void STDMETHODCALLTYPE hookedPSSetShaderResources(
 HRESULT STDMETHODCALLTYPE hookedFinishCommandList(
     ID3D11DeviceContext* self, BOOL restoreState,
     ID3D11CommandList** commandList) {
-  // The composite marker is per-context state, and a list can be closed with
-  // the back buffer still bound. Dropping it here keeps the next recording on
-  // this context from starting out believing it is inside the composite.
-  ssaaClearContextState(self);
-  return d3d11OriginalsFor(self).finishCommandList(self, restoreState,
-                                                   commandList);
+  const HRESULT result = d3d11OriginalsFor(self).finishCommandList(
+    self, restoreState, commandList);
+  // Mirror D3D's post-call state. FALSE resets the deferred context to its
+  // defaults; TRUE preserves the state it had immediately before Finish, so
+  // clearing our marker in both cases made the next list disagree with the
+  // actual context whenever the restore path was used.
+  if (SUCCEEDED(result) && !restoreState)
+    ssaaClearContextState(self);
+  return result;
 }
 
 void STDMETHODCALLTYPE hookedOMSetRenderTargetsAndUnorderedAccessViews(
@@ -213,7 +222,7 @@ void STDMETHODCALLTYPE hookedOMSetRenderTargetsAndUnorderedAccessViews(
   // the composite half way through.
   if (numViews != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) {
     frameMapNoteTargets(self, numViews, views);
-  scenePassNoteBoundary(self, numViews, views, depth);
+    scenePassNoteBoundary(self, numViews, views, depth);
     ssaaNoteTargetsBound(self, numViews, views);
   }
 

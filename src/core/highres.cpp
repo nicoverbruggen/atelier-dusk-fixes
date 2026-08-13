@@ -57,14 +57,24 @@ bool g_fixEnabled = false;
 bool g_censusEnabled = false;
 bool g_installed = false;
 
-// The main render size, learned from the first depth-stencil target the game
-// creates. Atomics because nothing guarantees the engine creates resources and
-// submits raster state on the same thread, and the cost is irrelevant next to a
-// texture creation.
-std::atomic<UINT> g_mainWidth{0};
-std::atomic<UINT> g_mainHeight{0};
-std::atomic<UINT> g_swapWidth{0};
-std::atomic<UINT> g_swapHeight{0};
+// Width and height are one fact, so publish them in one atomic value. Separate
+// relaxed atomics allowed a reader to observe the width from one publication
+// and the height from another; that is not a C++ data race, but it is not a
+// coherent resolution either.
+uint64_t packSize(UINT width, UINT height) {
+  return (uint64_t(width) << 32) | uint64_t(height);
+}
+
+bool unpackSize(uint64_t packed, UINT* width, UINT* height) {
+  if (!packed)
+    return false;
+  *width = UINT(packed >> 32);
+  *height = UINT(packed);
+  return *width && *height;
+}
+
+std::atomic<uint64_t> g_mainSize{0};
+std::atomic<uint64_t> g_swapSize{0};
 
 // ---- the census ------------------------------------------------------------
 
@@ -160,8 +170,10 @@ void censusReport(const D3D11_TEXTURE2D_DESC& desc, uintptr_t callerRva,
   if (!firstSeen)
     return;
 
-  const UINT swapWidth = g_swapWidth.load(std::memory_order_relaxed);
-  const UINT swapHeight = g_swapHeight.load(std::memory_order_relaxed);
+  UINT swapWidth = 0;
+  UINT swapHeight = 0;
+  unpackSize(g_swapSize.load(std::memory_order_acquire),
+             &swapWidth, &swapHeight);
   const char* relation =
     (swapWidth && desc.Width == swapWidth && desc.Height == swapHeight)
       ? " rel=matchesSwapChain"
@@ -196,8 +208,10 @@ void censusReport(const D3D11_TEXTURE2D_DESC& desc, uintptr_t callerRva,
 bool looksLikeMainTarget(const D3D11_TEXTURE2D_DESC& desc) {
   if (!(desc.BindFlags & D3D11_BIND_DEPTH_STENCIL))
     return false;
-  const UINT swapWidth = g_swapWidth.load(std::memory_order_relaxed);
-  const UINT swapHeight = g_swapHeight.load(std::memory_order_relaxed);
+  UINT swapWidth = 0;
+  UINT swapHeight = 0;
+  unpackSize(g_swapSize.load(std::memory_order_acquire),
+             &swapWidth, &swapHeight);
   if (swapWidth && swapHeight &&
       desc.Width == swapWidth && desc.Height == swapHeight)
     return true;
@@ -244,10 +258,11 @@ HRESULT STDMETHODCALLTYPE hookedCreateTexture2D(
   const char* action = "passthrough";
 
   if (g_fixEnabled) {
-    if (!g_mainWidth.load(std::memory_order_relaxed) &&
-        looksLikeMainTarget(local)) {
-      g_mainWidth.store(local.Width, std::memory_order_relaxed);
-      g_mainHeight.store(local.Height, std::memory_order_relaxed);
+    uint64_t noMainSize = 0;
+    if (looksLikeMainTarget(local) &&
+        g_mainSize.compare_exchange_strong(
+          noMainSize, packSize(local.Width, local.Height),
+          std::memory_order_release, std::memory_order_relaxed)) {
       log("HIGHRES: main render size ", std::dec, local.Width, "x",
           local.Height);
       action = "adoptedAsMain";
@@ -308,16 +323,20 @@ HRESULT STDMETHODCALLTYPE hookedCreateTexture2D(
 
   const HRESULT hr =
     d3d11DeviceOriginals().createTexture2D(self, &local, initialData, texture);
-  // A resize the driver refuses is not survivable silently: the game would get
-  // no texture at all where it expected one. Retry with exactly what it asked
-  // for, so the worst case is the unfixed 1080p frame rather than a broken one.
-  if (FAILED(hr) && (local.Width != desc->Width || local.Height != desc->Height ||
-                     local.SampleDesc.Count != desc->SampleDesc.Count)) {
-    log("HIGHRES: resize to ", std::dec, local.Width, "x", local.Height,
-        " was refused (hr=0x", std::hex, uint32_t(hr), std::dec,
-        "); falling back to the game's own ", desc->Width, "x", desc->Height);
-    return d3d11DeviceOriginals().createTexture2D(self, desc, initialData, texture);
-  }
+  // Never hide a refused resize by substituting the game's original-size
+  // descriptor. Related targets must agree on their dimensions, and by this
+  // point earlier members may already have been created at the enlarged size;
+  // the hook cannot roll those allocations back. Returning the driver's
+  // failure leaves recovery with the engine, which can abandon the operation,
+  // instead of manufacturing a mixed-size family behind its back. This is the
+  // same fail-closed policy used by the Arland high-resolution path.
+  if (FAILED(hr) &&
+      (local.Width != desc->Width || local.Height != desc->Height ||
+       local.SampleDesc.Count != desc->SampleDesc.Count))
+    log("HIGHRES: resized allocation ", std::dec, local.Width, "x",
+        local.Height, " was refused (hr=0x", std::hex, uint32_t(hr),
+        std::dec, "); returning the failure without an incompatible ",
+        desc->Width, "x", desc->Height, " fallback");
   return hr;
 }
 
@@ -342,20 +361,29 @@ namespace {
 // the next draw, when the render target is actually bound and can be asked how
 // big it is. The four draw hooks that costs are the price of the correction
 // being conditional on the thing it depends on.
-struct RasterState {
-  std::atomic<bool> dirty{false};
-};
+// Raster dirtiness belongs to the context whose command stream submitted it.
+// A single "deferred" bucket was safe only if all deferred contexts serialized
+// their RS and draw calls. The games create replacement deferred contexts, and
+// the hook surface explicitly accepts more than one, so hang the bit on the
+// D3D object itself. Its lifetime then follows context destruction and pointer
+// reuse cannot inherit an earlier context's pending update.
+const GUID IID_DuskHighResRasterDirty =
+  { 0x52e91c75, 0x620a, 0x45c7,
+    { 0x97, 0x71, 0xe4, 0xf6, 0xe1, 0x7d, 0xb8, 0x0a } };
 
-// Two states, as in the Arland implementation: the immediate context and
-// everything else (the engine's deferred contexts). Keyed by comparing against
-// the immediate context recorded at install, so the hot path is a pointer
-// compare rather than a map lookup under a lock.
-RasterState g_immediateRaster;
-RasterState g_deferredRaster;
-ID3D11DeviceContext* g_immediateContext = nullptr;
+void markRasterDirty(ID3D11DeviceContext* context) {
+  const UINT dirty = 1;
+  context->SetPrivateData(IID_DuskHighResRasterDirty, sizeof(dirty), &dirty);
+}
 
-RasterState& rasterStateFor(ID3D11DeviceContext* context) {
-  return context == g_immediateContext ? g_immediateRaster : g_deferredRaster;
+bool takeRasterDirty(ID3D11DeviceContext* context) {
+  UINT dirty = 0;
+  UINT size = sizeof(dirty);
+  if (FAILED(context->GetPrivateData(IID_DuskHighResRasterDirty,
+                                     &size, &dirty)) || !dirty)
+    return false;
+  context->SetPrivateData(IID_DuskHighResRasterDirty, 0, nullptr);
+  return true;
 }
 
 
@@ -478,8 +506,7 @@ void sampleRaster(const D3D11_VIEWPORT& viewport, const D3D11_RECT& scissor,
 // when that target is genuinely larger than what was submitted -- which is what
 // makes this conditional on the thing the eager version assumed.
 void updateViewportScissor(ID3D11DeviceContext* context) {
-  RasterState& state = rasterStateFor(context);
-  if (!state.dirty.exchange(false, std::memory_order_acq_rel))
+  if (!takeRasterDirty(context))
     return;
   g_updatesEntered.fetch_add(1, std::memory_order_relaxed);
 
@@ -548,7 +575,7 @@ void STDMETHODCALLTYPE hookedRSSetViewports(
   d3d11OriginalsFor(self).rsSetViewports(self, count, viewports);
   g_rsViewportCalls.fetch_add(1, std::memory_order_relaxed);
   if (g_fixEnabled)
-    rasterStateFor(self).dirty.store(true, std::memory_order_release);
+    markRasterDirty(self);
 }
 
 void STDMETHODCALLTYPE hookedRSSetScissorRects(
@@ -556,7 +583,7 @@ void STDMETHODCALLTYPE hookedRSSetScissorRects(
   d3d11OriginalsFor(self).rsSetScissorRects(self, count, rects);
   g_rsScissorCalls.fetch_add(1, std::memory_order_relaxed);
   if (g_fixEnabled)
-    rasterStateFor(self).dirty.store(true, std::memory_order_release);
+    markRasterDirty(self);
 }
 
 // The four draw entry points. Each does the same thing: settle any pending
@@ -639,7 +666,7 @@ HighResWants highResResolveWants() {
 }
 
 void highResNoteImmediateContext(ID3D11DeviceContext* context) {
-  g_immediateContext = context;
+  (void)context;
   // Called only once the install has fully succeeded, which is what makes it
   // the right place to latch this: the census summary is gated on it, and a
   // summary reporting "nothing found" after a failed install would be
@@ -676,30 +703,17 @@ bool highResSceneSize(unsigned int* width, unsigned int* height) {
 }
 
 bool highResMainSize(unsigned int* width, unsigned int* height) {
-  const UINT w = g_mainWidth.load(std::memory_order_relaxed);
-  const UINT h = g_mainHeight.load(std::memory_order_relaxed);
-  if (!w || !h)
-    return false;
-  *width = w;
-  *height = h;
-  return true;
+  return unpackSize(g_mainSize.load(std::memory_order_acquire), width, height);
 }
 
 bool highResSwapChainSize(unsigned int* width, unsigned int* height) {
-  const UINT w = g_swapWidth.load(std::memory_order_relaxed);
-  const UINT h = g_swapHeight.load(std::memory_order_relaxed);
-  if (!w || !h)
-    return false;
-  *width = w;
-  *height = h;
-  return true;
+  return unpackSize(g_swapSize.load(std::memory_order_acquire), width, height);
 }
 
 void noteSwapChainSize(unsigned int width, unsigned int height,
                        unsigned int format, unsigned int refreshNumerator,
                        unsigned int refreshDenominator, bool windowed) {
-  g_swapWidth.store(width, std::memory_order_relaxed);
-  g_swapHeight.store(height, std::memory_order_relaxed);
+  g_swapSize.store(packSize(width, height), std::memory_order_release);
   static bool logged = false;
   if (logged)
     return;
@@ -726,11 +740,15 @@ void highResFrameTick() {
     std::lock_guard lock(g_shapesMutex);
     distinctShapes = g_shapes.size();
   }
+  UINT swapWidth = 0, swapHeight = 0;
+  UINT mainWidth = 0, mainHeight = 0;
+  unpackSize(g_swapSize.load(std::memory_order_acquire),
+             &swapWidth, &swapHeight);
+  unpackSize(g_mainSize.load(std::memory_order_acquire),
+             &mainWidth, &mainHeight);
   log("TARGETCENSUS frame=", std::dec, frame,
-      " swapChain=", g_swapWidth.load(std::memory_order_relaxed), "x",
-      g_swapHeight.load(std::memory_order_relaxed),
-      " mainRT=", g_mainWidth.load(std::memory_order_relaxed), "x",
-      g_mainHeight.load(std::memory_order_relaxed),
+      " swapChain=", swapWidth, "x", swapHeight,
+      " mainRT=", mainWidth, "x", mainHeight,
       " targetsCreated=", targets,
       " distinctShapes=", distinctShapes,
       " rsViewports=", g_rsViewportCalls.load(std::memory_order_relaxed),

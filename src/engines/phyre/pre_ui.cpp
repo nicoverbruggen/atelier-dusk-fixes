@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <new>
 
 #include "pre_ui.h"
 #include "../../core/log.h"
@@ -27,14 +28,57 @@ namespace {
 // value in tuning it finer.
 constexpr uint32_t kSceneDrawThreshold = 24;
 
-// The target currently bound, and how many draws have gone into it since it
-// was. A reference is held, because the pass runs at the bind that replaces it
-// and nothing else guarantees the surface is still alive then.
-std::atomic<ID3D11Texture2D*> g_current{nullptr};
-std::atomic<uint32_t> g_currentDraws{0};
+// The target and draw run belong to the context that recorded them. Keeping
+// them in one process-global pair let an immediate/deferred interleave attach
+// one context's draw count to another context's surface; the pointer's
+// load-then-AddRef sequence could also race its replacement. A context-owned
+// COM object keeps the tuple together and retains the surface for precisely the
+// context lifetime that can consume it.
+const GUID IID_DuskPhyrePreUiState =
+  { 0xec81b85e, 0x73bc, 0x44f8,
+    { 0x8a, 0xd4, 0x2d, 0x3c, 0x66, 0x30, 0x0f, 0x5e } };
 
-// One firing per frame. Reset at Present.
-std::atomic<bool> g_firedThisFrame{false};
+struct PreUiContextState final : IUnknown {
+  std::atomic<ULONG> references{1};
+  uint64_t frame = 0;
+  uint32_t draws = 0;
+  ID3D11Texture2D* current = nullptr;
+
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
+    if (!out)
+      return E_POINTER;
+    *out = nullptr;
+    if (!IsEqualIID(iid, IID_IUnknown))
+      return E_NOINTERFACE;
+    *out = static_cast<IUnknown*>(this);
+    AddRef();
+    return S_OK;
+  }
+  ULONG STDMETHODCALLTYPE AddRef() override {
+    return references.fetch_add(1, std::memory_order_relaxed) + 1;
+  }
+  ULONG STDMETHODCALLTYPE Release() override {
+    const ULONG left = references.fetch_sub(1, std::memory_order_acq_rel) - 1;
+    if (!left)
+      delete this;
+    return left;
+  }
+
+  void setCurrent(ID3D11Texture2D* next) {
+    if (next)
+      next->AddRef();
+    if (current)
+      current->Release();
+    current = next;
+    draws = 0;
+  }
+
+private:
+  ~PreUiContextState() { setCurrent(nullptr); }
+};
+
+std::atomic<uint64_t> g_preUiFrame{1};
+std::atomic<uint64_t> g_claimedFrame{0};
 
 // Re-entry guard. The passes bind render targets of their own, so they come
 // straight back through the bind that triggered them; without this the anchor
@@ -58,13 +102,30 @@ ID3D11Texture2D* textureOf(ID3D11RenderTargetView* view) {
   return texture;
 }
 
-void setCurrent(ID3D11Texture2D* texture) {
-  if (texture)
-    texture->AddRef();
-  if (ID3D11Texture2D* previous =
-        g_current.exchange(texture, std::memory_order_relaxed))
-    previous->Release();
-  g_currentDraws.store(0, std::memory_order_relaxed);
+PreUiContextState* preUiState(ID3D11DeviceContext* context) {
+  IUnknown* stored = nullptr;
+  UINT size = sizeof(stored);
+  if (SUCCEEDED(context->GetPrivateData(IID_DuskPhyrePreUiState,
+                                        &size, &stored)) && stored)
+    return static_cast<PreUiContextState*>(stored);  // GetPrivateData AddRef'd
+
+  auto* created = new (std::nothrow) PreUiContextState;
+  if (!created)
+    return nullptr;
+  if (FAILED(context->SetPrivateDataInterface(IID_DuskPhyrePreUiState,
+                                               created))) {
+    created->Release();
+    return nullptr;
+  }
+  return created;
+}
+
+void enterCurrentFrame(PreUiContextState* state) {
+  const uint64_t frame = g_preUiFrame.load(std::memory_order_acquire);
+  if (state->frame == frame)
+    return;
+  state->setCurrent(nullptr);
+  state->frame = frame;
 }
 
 }  // namespace
@@ -79,16 +140,30 @@ void phyrePreUiNoteTargets(ID3D11DeviceContext* context, unsigned int numViews,
   // display resolution and still before the interface. Two pre-UI passes do not
   // stack, they alternate -- they share one per-frame latch. See the
   // smaaApplySceneColor call in supersample.cpp.
-  if (ssaaEngaged())
+  if (ssaaEngaged()) {
+    // Drop any target retained before supersampling first engaged. This path
+    // no longer consumes it, so keeping it to context destruction would turn a
+    // mode transition into a session-long resource retention.
+    context->SetPrivateDataInterface(IID_DuskPhyrePreUiState, nullptr);
     return;
+  }
+
+  PreUiContextState* state = preUiState(context);
+  if (!state)
+    return;
+  enterCurrentFrame(state);
 
   ID3D11Texture2D* arriving =
     (numViews && views) ? textureOf(views[0]) : nullptr;
-  ID3D11Texture2D* leaving = g_current.load(std::memory_order_relaxed);
+  ID3D11Texture2D* leaving = state->current;
+  if (leaving)
+    leaving->AddRef();
 
   // Still the same surface: the pass that is running has not finished.
   if (arriving && arriving == leaving) {
     arriving->Release();
+    leaving->Release();
+    state->Release();
     return;
   }
 
@@ -102,10 +177,13 @@ void phyrePreUiNoteTargets(ID3D11DeviceContext* context, unsigned int numViews,
   // be released, somewhere in the middle of the chain, and claimed the frame's
   // one SMAA run doing it. A draw count separates them because only one of the
   // two receives the 3D pass.
-  const uint32_t draws = g_currentDraws.load(std::memory_order_relaxed);
-  if (leaving && draws >= kSceneDrawThreshold &&
-      !g_firedThisFrame.exchange(true, std::memory_order_relaxed)) {
-    leaving->AddRef();   // held across the passes, which replace g_current
+  const uint32_t draws = state->draws;
+  const uint64_t frame = g_preUiFrame.load(std::memory_order_acquire);
+  uint64_t claimed = g_claimedFrame.load(std::memory_order_relaxed);
+  if (leaving && draws >= kSceneDrawThreshold && claimed != frame &&
+      g_claimedFrame.compare_exchange_strong(
+        claimed, frame, std::memory_order_acq_rel,
+        std::memory_order_relaxed)) {
     t_inPass = true;
     // Order is a correctness requirement, not a preference: sharpening first
     // would hand SMAA harder edges to find and it would blend them away again.
@@ -127,28 +205,34 @@ void phyrePreUiNoteTargets(ID3D11DeviceContext* context, unsigned int numViews,
           ", on the surface the frame's 3D pass was drawn into, before the"
           " interface");
     }
-    leaving->Release();
   }
 
-  setCurrent(arriving);
+  state->setCurrent(arriving);
   if (arriving)
-    arriving->Release();   // setCurrent took its own reference
+    arriving->Release();   // the state took its own reference
+  if (leaving)
+    leaving->Release();
+  state->Release();
 }
 
-void phyrePreUiAfterDraw(ID3D11DeviceContext*) {
-  if (t_inPass)
+void phyrePreUiAfterDraw(ID3D11DeviceContext* context) {
+  if (t_inPass || !context)
     return;
   if (!smaaPreUiEnabled() && !sharpenEnabled())
     return;
-  g_currentDraws.fetch_add(1, std::memory_order_relaxed);
+  PreUiContextState* state = preUiState(context);
+  if (!state)
+    return;
+  enterCurrentFrame(state);
+  ++state->draws;
+  state->Release();
 }
 
 void phyrePreUiFrameTick() {
-  g_firedThisFrame.store(false, std::memory_order_relaxed);
-  // The bound target does NOT carry over: a frame starts by binding its own,
-  // and a count left standing would credit the next frame's first surface with
-  // the previous one's draws.
-  setCurrent(nullptr);
+  // The bound target does NOT carry over. Contexts cannot be enumerated here,
+  // so advancing an epoch makes each context release its own target and reset
+  // its count lazily on the next bind/draw.
+  g_preUiFrame.fetch_add(1, std::memory_order_release);
 }
 
 }  // namespace atfix

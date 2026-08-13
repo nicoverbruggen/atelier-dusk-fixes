@@ -196,7 +196,7 @@ bool autoResolutionRequested() {
          value[0] == L'y' || value[0] == L'Y';
 }
 
-void applyAutoResolution() {
+void applyAutoResolution(bool ssaaScalesGameIni) {
   if (!autoResolutionRequested())
     return;
   DEVMODEW mode = { };
@@ -217,20 +217,89 @@ void applyAutoResolution() {
   if (!pathInGameDirectory(L"Setting.ini", settings) ||
       GetFileAttributesW(settings.data()) == INVALID_FILE_ATTRIBUTES)
     return;
+
+  // KTGL sizes its scene from Setting.ini itself. The GUI therefore writes
+  // base x SSAA there and keeps the base in dusk-fix.ini for the swap-chain
+  // clamp. Re-resolving Auto used to overwrite Setting.ini with the bare
+  // desktop on every redirected start, silently disabling the larger scene.
+  // Always derive from the desktop base and the saved factor -- never from the
+  // already-multiplied Setting.ini value -- so repeated starts are idempotent.
+  unsigned renderWidth = width;
+  unsigned renderHeight = height;
+  unsigned percent = 100;
+  std::array<wchar_t, 32768> ini = { };
+  if (ssaaScalesGameIni && pathInGameDirectory(L"dusk-fix.ini", ini)) {
+    const int configured = GetPrivateProfileIntW(
+      L"Rendering", L"Supersampling", 100, ini.data());
+    const unsigned wanted =
+      configured == 125 || configured == 150 || configured == 200 ||
+      configured == 300 || configured == 400
+        ? unsigned(configured) : 100u;
+    constexpr unsigned factors[] = { 400, 300, 200, 150, 125 };
+    constexpr uint64_t maxWidth = 7680;
+    constexpr uint64_t maxHeight = 4320;
+    for (unsigned candidate : factors) {
+      if (candidate > wanted)
+        continue;
+      const uint64_t candidateWidth = uint64_t(width) * candidate / 100;
+      const uint64_t candidateHeight = uint64_t(height) * candidate / 100;
+      if (candidateWidth <= maxWidth && candidateHeight <= maxHeight) {
+        percent = candidate;
+        renderWidth = unsigned(candidateWidth) & ~1u;
+        renderHeight = unsigned(candidateHeight) & ~1u;
+        break;
+      }
+    }
+  }
+
+  bool wrote = true;
   wchar_t value[16] = { };
-  wsprintfW(value, L"%u", width);
-  WritePrivateProfileStringW(L"Graphics", L"ScreenWidth", value,
-    settings.data());
-  wsprintfW(value, L"%u", height);
-  WritePrivateProfileStringW(L"Graphics", L"ScreenHeight", value,
-    settings.data());
-  launcherLog("AutoResolution: presenting at the desktop resolution");
+  wsprintfW(value, L"%u", renderWidth);
+  wrote &= WritePrivateProfileStringW(L"Graphics", L"ScreenWidth", value,
+                                      settings.data()) != FALSE;
+  wsprintfW(value, L"%u", renderHeight);
+  wrote &= WritePrivateProfileStringW(L"Graphics", L"ScreenHeight", value,
+                                      settings.data()) != FALSE;
+
+  if (ssaaScalesGameIni && ini[0]) {
+    if (percent > 100) {
+      wsprintfW(value, L"%u", width);
+      wrote &= WritePrivateProfileStringW(
+        L"Rendering", L"DisplayWidth", value, ini.data()) != FALSE;
+      wsprintfW(value, L"%u", height);
+      wrote &= WritePrivateProfileStringW(
+        L"Rendering", L"DisplayHeight", value, ini.data()) != FALSE;
+    } else {
+      wrote &= WritePrivateProfileStringW(
+        L"Rendering", L"DisplayWidth", nullptr, ini.data()) != FALSE;
+      wrote &= WritePrivateProfileStringW(
+        L"Rendering", L"DisplayHeight", nullptr, ini.data()) != FALSE;
+    }
+    const int configured = GetPrivateProfileIntW(
+      L"Rendering", L"Supersampling", 100, ini.data());
+    if (configured != int(percent)) {
+      wsprintfW(value, L"%u", percent);
+      wrote &= WritePrivateProfileStringW(
+        L"Rendering", L"Supersampling", value, ini.data()) != FALSE;
+    }
+  }
+
+  if (!wrote) {
+    launcherLog("AutoResolution: one or more resolution fields could not be "
+                "written; the existing fields remain authoritative");
+  } else if (ssaaScalesGameIni && percent > 100) {
+    launcherLog("AutoResolution: desktop base and supersampled KTGL render "
+                "resolution refreshed idempotently");
+  } else {
+    launcherLog("AutoResolution: presenting at the desktop resolution");
+  }
 }
 
 struct DuskGame {
   const wchar_t* launcher;
   const wchar_t* english;
   const wchar_t* multilingual;
+  bool ssaaScalesGameIni;
   std::array<std::uint8_t, 17> launcherEntryExpected;
 };
 
@@ -249,14 +318,17 @@ struct DuskGame {
 constexpr std::array<DuskGame, 3> SupportedGames = {{
   { L"Atelier_AyeshaLauncher.exe",
     L"Atelier_Ayesha_EN.exe",           L"Atelier_Ayesha.exe",
+    false,
     { 0xe8,0x7f,0xe6,0x00,0x00,0xe9,0x00,0x00,
       0x00,0x00,0x6a,0x14,0x68,0xb8,0xaf,0x59,0x00 } },
   { L"Atelier_Escha_and_LogyLauncher.exe",
     L"Atelier_Escha_and_Logy_EN.exe",   L"Atelier_Escha_and_Logy.exe",
+    true,
     { 0xe8,0x7f,0xe6,0x00,0x00,0xe9,0x00,0x00,
       0x00,0x00,0x6a,0x14,0x68,0xf8,0xaf,0x59,0x00 } },
   { L"Atelier_ShallieLauncher.exe",
     L"Atelier_Shallie_EN.exe",          L"Atelier_Shallie.exe",
+    true,
     { 0xe8,0x7f,0xe6,0x00,0x00,0xe9,0x00,0x00,
       0x00,0x00,0x6a,0x14,0x68,0xb8,0xaf,0x59,0x00 } },
 }};
@@ -419,7 +491,7 @@ bool armRedirect() {
   // follow the display at all; without it the window is about to re-resolve the
   // same value anyway, so doing it here as well costs nothing and keeps one
   // code path rather than two.
-  applyAutoResolution();
+  applyAutoResolution(game->ssaaScalesGameIni);
   if (g_startsGame) {
     if (!resolveGameExecutable(*game, g_startTarget)) {
       launcherLog("SkipLauncher is set but no game executable is installed "

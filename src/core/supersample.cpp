@@ -678,6 +678,26 @@ std::atomic<uint64_t> g_secondHostRefusals{0};
 // waiting for the right pair of threads; declining costs one frame of one
 // scene target's sharpness and is counted.
 std::atomic<bool> g_passBusy{false};
+ID3D11Device* g_ownerDevice = nullptr;
+
+// Runtime topology found one D3D11 device throughout both KTGL games. Make
+// that measured ownership an enforced boundary: a recreated/second device is
+// refused instead of being handed shaders, views, or textures allocated by the
+// original device.
+bool acceptsDevice(ID3D11Device* device) {
+  if (!g_ownerDevice) {
+    g_ownerDevice = device;
+    g_ownerDevice->AddRef();
+    return true;
+  }
+  if (g_ownerDevice == device)
+    return true;
+  static std::atomic<bool> warned{false};
+  if (!warned.exchange(true, std::memory_order_relaxed))
+    log("SSAA: a second D3D11 device reached the shared downscale pass;"
+        " refusing it so resources are never bound across devices");
+  return false;
+}
 
 // Box-filter `host` down to `destWidth` x `destHeight` into g_small, then run
 // SMAA on the result if it is enabled. Returns false if anything failed, in
@@ -687,7 +707,9 @@ bool runDownscale(ID3D11DeviceContext* context, ID3D11Texture2D* host,
                   UINT destWidth, UINT destHeight) {
   ID3D11Device* device = nullptr;
   host->GetDevice(&device);
-  if (!device) {
+  if (!device || !acceptsDevice(device)) {
+    if (device)
+      device->Release();
     g_passFailures.fetch_add(1, std::memory_order_relaxed);
     return false;
   }
@@ -987,6 +1009,18 @@ bool ssaaSubstituteShaderResources(ID3D11DeviceContext* context,
     return false;
   }
 
+  // The occupant check, possible downscale, tuple publication and returned
+  // view handoff are one transaction. Reading the host/frame pair before this
+  // guard used to be a data race, and returning g_smallSRV after dropping it
+  // used to let another context resize/release the view before the caller
+  // bound it.
+  bool expected = false;
+  if (!g_passBusy.compare_exchange_strong(expected, true,
+                                           std::memory_order_acquire)) {
+    host->Release();
+    return false;
+  }
+
   const uint64_t frame = g_frame.load(std::memory_order_relaxed);
   bool ready = g_smallHost == host && g_smallFrame == frame;
   if (!ready) {
@@ -998,13 +1032,7 @@ bool ssaaSubstituteShaderResources(ID3D11DeviceContext* context,
         log("SSAA: the composite sampled a second scene colour host in one"
             " frame; it keeps the engine's own resample so the first one's"
             " downscale is not overwritten underneath it");
-      host->Release();
-      return false;
-    }
-    // One thread in the pass at a time; the pass's resources are one shared set.
-    bool expected = false;
-    if (!g_passBusy.compare_exchange_strong(expected, true,
-                                            std::memory_order_acquire)) {
+      g_passBusy.store(false, std::memory_order_release);
       host->Release();
       return false;
     }
@@ -1015,17 +1043,21 @@ bool ssaaSubstituteShaderResources(ID3D11DeviceContext* context,
       g_smallHost = host;
       g_smallFrame = frame;
     }
-    g_passBusy.store(false, std::memory_order_release);
   }
-  host->Release();
-  if (!ready || !g_smallSRV)
+  if (!ready || !g_smallSRV) {
+    g_passBusy.store(false, std::memory_order_release);
+    host->Release();
     return false;
+  }
 
   for (unsigned int i = 0; i < numViews; ++i)
     substituted[i] = views[i];
-  // Borrowed, not addrefed: this module holds the only reference and keeps it
-  // for the session, and D3D11 takes its own the moment the view is bound.
+  // Retained across the guard boundary. The caller releases after
+  // PSSetShaderResources has synchronously taken the context's own reference.
+  g_smallSRV->AddRef();
   substituted[slot] = g_smallSRV;
+  g_passBusy.store(false, std::memory_order_release);
+  host->Release();
 
   if (g_substitutions.fetch_add(1, std::memory_order_relaxed) == 0)
     log("SSAA: engaged -- ", std::dec, hostDesc.Width, "x", hostDesc.Height,

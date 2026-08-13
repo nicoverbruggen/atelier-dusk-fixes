@@ -15,12 +15,14 @@ bool ktglAtFirstDraw() { return true; }
 // stream and never asks what size the game renders at.
 bool ktglNeedsMainRenderSize() { return false; }
 
-void ktglNoteTargets(ID3D11DeviceContext*, unsigned int numViews,
+void ktglNoteTargets(ID3D11DeviceContext* context, unsigned int numViews,
                      ID3D11RenderTargetView* const* views) {
-  ktglPreUiNoteTargets(numViews, views);
+  ktglPreUiNoteTargets(context, numViews, views);
 }
 
-ID3D11Texture2D* ktglNoteDraw() { return ktglPreUiNoteDraw(); }
+ID3D11Texture2D* ktglNoteDraw(ID3D11DeviceContext* context) {
+  return ktglPreUiNoteDraw(context);
+}
 
 void ktglTick() { ktglPreUiFrameTick(); }
 

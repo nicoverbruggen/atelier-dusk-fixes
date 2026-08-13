@@ -9,7 +9,7 @@ namespace {
 bool sceneNo() { return false; }
 void sceneNoTargets(ID3D11DeviceContext*, unsigned int,
                     ID3D11RenderTargetView* const*) {}
-ID3D11Texture2D* sceneNoDraw() { return nullptr; }
+ID3D11Texture2D* sceneNoDraw(ID3D11DeviceContext*) { return nullptr; }
 void sceneNoAfterDraw(ID3D11DeviceContext*) {}
 void sceneNoTick() {}
 

@@ -40,6 +40,12 @@
 // mid-chain. "The first draw into the back buffer" fired on whatever the engine
 // draws there before the composite: the log line printed and the picture was
 // unchanged.
+//
+// OWNERSHIP FOLLOWS THE RECORDING CONTEXT. Ayesha records through a deferred
+// context, and the hook surface accepts replacements. The current target and
+// its draw count therefore live in an IUnknown stored as that context's private
+// data; it retains the texture and dies with the context. Present advances an
+// epoch, and each context drops its prior-frame target lazily on its next call.
 namespace atfix {
 
 // Called from the render-target bind, before it is forwarded. Fires the passes
@@ -51,8 +57,8 @@ void phyrePreUiNoteTargets(ID3D11DeviceContext* context, unsigned int numViews,
 // currently bound target, which is all the identification the anchor needs.
 void phyrePreUiAfterDraw(ID3D11DeviceContext* context);
 
-// Called at Present. Drops the tracked target, so the next frame's first
-// surface is not credited with this frame's draws.
+// Called at Present. Advances the frame epoch, so the next call on each context
+// drops its tracked target and cannot credit this frame's draws to the next.
 void phyrePreUiFrameTick();
 
 }  // namespace atfix

@@ -44,6 +44,7 @@ HMODULE g_compiler = nullptr;
 thread_local bool t_inSharpen = false;
 bool g_ready = false;
 bool g_broken = false;
+ID3D11Device* g_ownerDevice = nullptr;
 ID3D11VertexShader* g_vs = nullptr;
 ID3D11PixelShader* g_ps = nullptr;
 ID3D11SamplerState* g_sampler = nullptr;
@@ -60,6 +61,21 @@ UINT g_scratchWidth = 0, g_scratchHeight = 0;
 DXGI_FORMAT g_scratchFormat = DXGI_FORMAT_UNKNOWN;
 
 struct Params { float peak; float pad[3]; };
+
+bool acceptsDevice(ID3D11Device* device) {
+  if (!g_ownerDevice) {
+    g_ownerDevice = device;
+    g_ownerDevice->AddRef();
+    return true;
+  }
+  if (g_ownerDevice == device)
+    return true;
+  static std::atomic<bool> warned{false};
+  if (!warned.exchange(true, std::memory_order_relaxed))
+    log("SHARPEN: a second D3D11 device reached the shared pass; refusing it"
+        " so resources from the first device are never bound across devices");
+  return false;
+}
 
 // HOW HARD 100% IS ALLOWED TO BE. The shader multiplies its headroom weight by
 // this, so it is the strongest the filter can ever pull a neighbour.
@@ -186,7 +202,16 @@ bool init(ID3D11Device* device) {
   if (FAILED(device->CreateBuffer(&cb, nullptr, &g_cb))) return false;
 
   D3D11_BLEND_DESC bd = {};
-  bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+  // Sharpen colour only. KTGL continues to consume the interface target's
+  // alpha after this pre-UI pass; the original shader returned alpha=1 and an
+  // ALL write mask replaced that channel across the target, producing large
+  // intermittent black polygons in later composition on Shallie. An RGB write
+  // mask preserves alpha independently of shader output, which is the actual
+  // contract of a sharpening filter.
+  bd.RenderTarget[0].RenderTargetWriteMask =
+    D3D11_COLOR_WRITE_ENABLE_RED |
+    D3D11_COLOR_WRITE_ENABLE_GREEN |
+    D3D11_COLOR_WRITE_ENABLE_BLUE;
   if (FAILED(device->CreateBlendState(&bd, &g_blend))) return false;
 
   D3D11_DEPTH_STENCIL_DESC dd = {};
@@ -356,6 +381,10 @@ bool sharpenApply(ID3D11DeviceContext* ctx, ID3D11Texture2D* target) {
     return false;
 
   std::lock_guard<atfix::mutex> guard(g_mutex);
+  if (!acceptsDevice(device)) {
+    release(device);
+    return false;
+  }
   t_inSharpen = true;
   bool ran = false;
   if (init(device) && ensureScratch(device, td)) {

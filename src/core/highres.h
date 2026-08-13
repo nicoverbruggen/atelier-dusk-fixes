@@ -45,8 +45,9 @@ struct HighResWants {
 };
 HighResWants highResResolveWants();
 
-// Which context is the immediate one. The raster correction keeps its state per
-// context and decides by pointer compare, so it has to be told.
+// Publish that central hook installation completed. The raster correction now
+// keeps its dirty bit on each D3D context itself, so the context argument is no
+// longer retained; this call gates census summaries after a successful install.
 void highResNoteImmediateContext(ID3D11DeviceContext* context);
 
 HRESULT STDMETHODCALLTYPE hookedCreateTexture2D(
@@ -70,7 +71,8 @@ void STDMETHODCALLTYPE hookedDrawIndexedInstanced(
 void highResFrameTick();
 
 // The size the scene renders at, learned from the first main target the game
-// creates. False until it has created one.
+// creates. False until it has created one. Width and height are published as
+// one packed atomic fact so no reader can combine different generations.
 //
 // Exposed because the scene-target test needs it, and that test lives in the
 // engine module rather than in core (see scene_pass.h on SceneTargetTest).
@@ -103,5 +105,12 @@ bool highResSwapChainSize(unsigned int* width, unsigned int* height);
 void noteSwapChainSize(unsigned int width, unsigned int height,
                        unsigned int format, unsigned int refreshNumerator,
                        unsigned int refreshDenominator, bool windowed);
+
+// A refused transformed texture allocation is returned to the engine. The hook
+// cannot roll back related targets already created at the enlarged size, so it
+// never hides the failure by substituting one original-size member. A forced
+// failure of Ayesha's second enlarged allocation showed that the old fallback
+// could survive that particular position through extended play, but could not
+// prove every other family member safe; the fail-closed rule matches Arland.
 
 }  // namespace atfix

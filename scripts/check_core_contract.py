@@ -15,6 +15,12 @@ ROOT = Path(__file__).resolve().parent.parent
 MAIN = (ROOT / "src" / "core" / "main.cpp").read_text()
 KTGL = (ROOT / "src" / "engines" / "ktgl" / "ktgl.cpp").read_text()
 PHYRE = (ROOT / "src" / "engines" / "phyre" / "phyre.cpp").read_text()
+SHARPEN = (ROOT / "src" / "core" / "sharpen.cpp").read_text()
+SMAA = (ROOT / "src" / "core" / "smaa.cpp").read_text()
+SSAA = (ROOT / "src" / "core" / "supersample.cpp").read_text()
+PRESENT_CLAMP = (
+    ROOT / "src" / "engines" / "ktgl" / "present_clamp.cpp"
+).read_text()
 
 
 def fail(message):
@@ -166,12 +172,63 @@ def main():
         if registration < recognition.end():
             raise ValueError("Phyre scene policy is registered before exact recognition")
 
+        # Fullscreen passes run inside the engine's frame. Sharpening must put
+        # back every render target it can displace, while every pass must skip
+        # rather than draw with stale constants after a failed WRITE_DISCARD.
+        for fragment in (
+            "OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs",
+            "D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs, dsv",
+            "for (auto*& rtv : rtvs) release(rtv)",
+        ):
+            if fragment not in SHARPEN:
+                raise ValueError(
+                    "sharpening no longer preserves every render target: "
+                    + fragment
+                )
+        for label, source in (
+            ("sharpening", SHARPEN),
+            ("SMAA", SMAA),
+            ("supersampling", SSAA),
+        ):
+            if "if (FAILED(mapResult))" not in source:
+                raise ValueError(
+                    f"{label} no longer skips the pass after a failed map"
+                )
+
+        # SMAA clears and binds through t9, so all ten slots belong to the state
+        # bracket. Its reusable targets are keyed by concrete format as well as
+        # size, and every pre-UI caller goes through the shared mode switch.
+        for fragment in (
+            "ID3D11ShaderResourceView* srvs[10]",
+            "PSGetShaderResources(0, 10, srvs)",
+            "PSSetShaderResources(0, 10, srvs)",
+            "viewFormat != g_format",
+            "if (!smaaPreUiEnabled() || !ctx || !scene || g_broken)",
+        ):
+            if fragment not in SMAA:
+                raise ValueError("SMAA render-state contract is missing: " + fragment)
+
+        # Editable ini values are untrusted at the DLL boundary. They remain
+        # inside the launcher's ceiling and may only reduce either requested
+        # swap-chain component, never enlarge its partner.
+        for fragment in (
+            "kMaxConfiguredWidth = 7680",
+            "kMaxConfiguredHeight = 4320",
+            "std::min(wasWidth, UINT(displayWidth))",
+            "std::min(wasHeight, UINT(displayHeight))",
+        ):
+            if fragment not in PRESENT_CLAMP:
+                raise ValueError(
+                    "KTGL present clamp no longer enforces its final bound: "
+                    + fragment
+                )
+
     except (OSError, ValueError) as exc:
         return fail(str(exc))
 
     print(
         "core contract ok: atomic proxy publication, bounded system path, "
-        "On12 forwarding, and exact-build D3D gating agree"
+        "On12 forwarding, exact-build D3D gating, and render-pass safety agree"
     )
     return 0
 

@@ -727,10 +727,19 @@ bool runDownscale(ID3D11DeviceContext* context, ID3D11Texture2D* host,
   params.samples = downscaleSamples(sourceDesc.Height, destHeight);
   params.sharpen = ssaaSharpen();
   D3D11_MAPPED_SUBRESOURCE mapped = {};
-  if (SUCCEEDED(context->Map(g_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
-    std::memcpy(mapped.pData, &params, sizeof(params));
-    context->Unmap(g_cb, 0);
+  const HRESULT mapResult =
+    context->Map(g_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+  if (FAILED(mapResult)) {
+    if (g_passFailures.fetch_add(1, std::memory_order_relaxed) == 0)
+      log("SSAA: constant-buffer update failed (hr=0x", std::hex,
+          uint32_t(mapResult), std::dec,
+          "); the downscale was skipped rather than using stale parameters");
+    release(source);
+    device->Release();
+    return false;
   }
+  std::memcpy(mapped.pData, &params, sizeof(params));
+  context->Unmap(g_cb, 0);
 
   const PassBinder bind(context);
   {
@@ -766,8 +775,10 @@ bool runDownscale(ID3D11DeviceContext* context, ID3D11Texture2D* host,
     bind.draw(3, 0);
     bind.shaderResources(0, kSavedSrvs, none);
 
-    // SMAA runs HERE, on the downscaled result, rather than as its own
-    // injection on the supersampled scene target.
+    // With pre-UI SMAA selected, it runs HERE on the downscaled result rather
+    // than as its own injection on the supersampled scene target. The shared
+    // entry point also owns the DUSK_SMAA_PREUI switch, so the diagnostic
+    // Present-time mode remains authoritative on this route too.
     //
     // Three reasons, and the first is the one that matters. SMAA is a
     // morphological filter whose search distances are counted in pixels, so it

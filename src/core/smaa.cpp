@@ -163,6 +163,7 @@ bool g_broken = false;
 std::atomic<bool> g_preUiProven{false};
 std::atomic<bool> g_doneThisFrame{false};
 UINT g_width = 0, g_height = 0;
+DXGI_FORMAT g_format = DXGI_FORMAT_UNKNOWN;
 
 ID3D11VertexShader* g_edgeVS = nullptr;
 ID3D11VertexShader* g_weightVS = nullptr;
@@ -184,7 +185,8 @@ ID3D11RasterizerState*   g_raster = nullptr;
 ID3D11ShaderResourceView* g_areaSRV = nullptr;
 ID3D11ShaderResourceView* g_searchSRV = nullptr;
 
-// Per-size targets, recreated if the back buffer size changes.
+// Per-target targets, recreated if the incoming size or concrete format
+// changes.
 ID3D11Texture2D* g_sceneTex = nullptr;
 ID3D11ShaderResourceView* g_sceneSRV = nullptr;
 ID3D11Texture2D* g_edgesTex = nullptr;
@@ -357,6 +359,8 @@ void releaseSized() {
   release(g_sceneSRV); release(g_sceneTex);
   release(g_edgesSRV); release(g_edgesRTV); release(g_edgesTex);
   release(g_weightSRV); release(g_weightRTV); release(g_weightTex);
+  g_width = g_height = 0;
+  g_format = DXGI_FORMAT_UNKNOWN;
 }
 
 // The scene target is TYPELESS on this engine, which is how it carries both a
@@ -405,7 +409,7 @@ struct ScopedSmaaState {
   ID3D11Buffer* vsCb = nullptr;
   ID3D11Buffer* psCb = nullptr;
   ID3D11SamplerState* samplers[2] = {};
-  ID3D11ShaderResourceView* srvs[4] = {};
+  ID3D11ShaderResourceView* srvs[10] = {};
 
   explicit ScopedSmaaState(ID3D11DeviceContext* c) : ctx(c) {
     ctx->IAGetInputLayout(&layout);
@@ -422,7 +426,7 @@ struct ScopedSmaaState {
     ctx->VSGetConstantBuffers(0, 1, &vsCb);
     ctx->PSGetConstantBuffers(0, 1, &psCb);
     ctx->PSGetSamplers(0, 2, samplers);
-    ctx->PSGetShaderResources(0, 4, srvs);
+    ctx->PSGetShaderResources(0, 10, srvs);
   }
 
   ~ScopedSmaaState() {
@@ -443,7 +447,7 @@ struct ScopedSmaaState {
     ctx->VSSetConstantBuffers(0, 1, &vsCb);
     ctx->PSSetConstantBuffers(0, 1, &psCb);
     ctx->PSSetSamplers(0, 2, samplers);
-    ctx->PSSetShaderResources(0, 4, srvs);
+    ctx->PSSetShaderResources(0, 10, srvs);
     release(layout); release(vb); release(raster); release(blend);
     release(depthState); release(dsv); release(vs); release(ps);
     release(vsCb); release(psCb);
@@ -455,7 +459,6 @@ struct ScopedSmaaState {
 
 bool initSized(ID3D11Device* dev, UINT w, UINT h, DXGI_FORMAT fmt) {
   releaseSized();
-  g_width = w; g_height = h;
   auto make = [&](DXGI_FORMAT format, UINT bind, ID3D11Texture2D** tex,
                   ID3D11RenderTargetView** rtv, ID3D11ShaderResourceView** srv) {
     D3D11_TEXTURE2D_DESC td = {};
@@ -484,6 +487,10 @@ bool initSized(ID3D11Device* dev, UINT w, UINT h, DXGI_FORMAT fmt) {
   if (!ok) {
     log("SMAA: size ", std::dec, w, "x", h, " target init failed");
     releaseSized();
+  } else {
+    g_width = w;
+    g_height = h;
+    g_format = fmt;
   }
   return ok;
 }
@@ -505,7 +512,8 @@ bool smaaRunPasses(ID3D11Device* dev, ID3D11DeviceContext* ctx,
   }
   if (g_broken)
     return false;
-  if (cd.Width != g_width || cd.Height != g_height)
+  if (cd.Width != g_width || cd.Height != g_height ||
+      viewFormat != g_format)
     if (!initSized(dev, cd.Width, cd.Height, viewFormat)) {
       g_broken = true;
       return false;
@@ -519,10 +527,17 @@ bool smaaRunPasses(ID3D11Device* dev, ID3D11DeviceContext* ctx,
   cb.rtMetrics[2] = float(cd.Width);
   cb.rtMetrics[3] = float(cd.Height);
   D3D11_MAPPED_SUBRESOURCE map = {};
-  if (SUCCEEDED(ctx->Map(g_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &map))) {
-    std::memcpy(map.pData, &cb, sizeof(cb));
-    ctx->Unmap(g_cb, 0);
+  const HRESULT mapResult =
+    ctx->Map(g_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &map);
+  if (FAILED(mapResult)) {
+    static std::atomic<bool> warned{false};
+    if (!warned.exchange(true, std::memory_order_relaxed))
+      log("SMAA: constant-buffer update failed (hr=0x", std::hex,
+          uint32_t(mapResult), std::dec, "); pass skipped");
+    return false;
   }
+  std::memcpy(map.pData, &cb, sizeof(cb));
+  ctx->Unmap(g_cb, 0);
 
   const UINT stride = 16, offset = 0;
   const float black[4] = {0, 0, 0, 0};
@@ -620,7 +635,7 @@ bool smaaEnabled() {
 }
 
 bool smaaApplySceneColor(ID3D11DeviceContext* ctx, ID3D11Texture2D* scene) {
-  if (!smaaEnabled() || !ctx || !scene || g_broken)
+  if (!smaaPreUiEnabled() || !ctx || !scene || g_broken)
     return false;
   if (g_doneThisFrame.load(std::memory_order_relaxed))
     return false;

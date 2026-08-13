@@ -6,6 +6,7 @@
 
 #include "present_clamp.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdlib>
 
@@ -26,6 +27,12 @@ namespace {
 unsigned int g_clampWidth = 0;
 unsigned int g_clampHeight = 0;
 
+// Keep this final consumer inside the same ceiling as the launcher and the
+// shared supersampling policy. The launcher normally guarantees it, but the
+// ini remains an editable input at DLL load time.
+constexpr unsigned int kMaxConfiguredWidth = 7680;
+constexpr unsigned int kMaxConfiguredHeight = 4320;
+
 // What the engine asked for before being clamped. Read by window_size.cpp, which
 // has to recognise the window the engine sizes from this same number.
 std::atomic<UINT> g_clampedRenderWidth{0};
@@ -33,10 +40,11 @@ std::atomic<UINT> g_clampedRenderHeight{0};
 
 // TOLD, NOT GUESSED. The launcher writes the base resolution the user chose into
 // `[Rendering] DisplayWidth`/`DisplayHeight` and multiplies the game's own
-// Setting.ini by the supersampling factor, so the two numbers are produced
-// together by one control pair and cannot disagree. That is the same split the
-// Arland launcher has -- base resolution plus a multiplier -- and the same key
-// names, so a reader moving between the two mods finds the same file.
+// Setting.ini by the supersampling factor. The launcher produces the pair
+// together, while this final consumer still validates it because the ini can be
+// edited independently. That is the same split the Arland launcher has -- base
+// resolution plus a multiplier -- and the same key names, so a reader moving
+// between the two mods finds the same file.
 //
 // Deriving the base by dividing the requested size by the factor would look
 // simpler and is not: the launcher truncates and masks to an even size, so the
@@ -51,11 +59,18 @@ bool displaySize(unsigned int* width, unsigned int* height) {
   static const bool have = [] {
     const int configuredWidth = duskConfigInt("Rendering", "DisplayWidth", 0);
     const int configuredHeight = duskConfigInt("Rendering", "DisplayHeight", 0);
-    if (configuredWidth > 0 && configuredHeight > 0) {
+    if (configuredWidth > 0 && configuredHeight > 0 &&
+        unsigned(configuredWidth) <= kMaxConfiguredWidth &&
+        unsigned(configuredHeight) <= kMaxConfiguredHeight) {
       g_clampWidth = unsigned(configuredWidth);
       g_clampHeight = unsigned(configuredHeight);
       return true;
     }
+    if (configuredWidth || configuredHeight)
+      log("SSAA present clamp: invalid [Rendering] DisplayWidth/DisplayHeight ",
+          std::dec, configuredWidth, "x", configuredHeight,
+          " ignored (both must be positive and at most ",
+          kMaxConfiguredWidth, "x", kMaxConfiguredHeight, ")");
     const int cx = GetSystemMetrics(SM_CXSCREEN);
     const int cy = GetSystemMetrics(SM_CYSCREEN);
     if (cx <= 0 || cy <= 0)
@@ -89,15 +104,17 @@ void clampPresentSize(UINT* width, UINT* height, const char* where) {
   const UINT wasHeight = *height;
   g_clampedRenderWidth.store(wasWidth, std::memory_order_relaxed);
   g_clampedRenderHeight.store(wasHeight, std::memory_order_relaxed);
-  *width = displayWidth;
-  *height = displayHeight;
+  // Clamp each component independently. A hand-edited mismatched pair must
+  // never make the other component larger than the game requested.
+  *width = std::min(wasWidth, UINT(displayWidth));
+  *height = std::min(wasHeight, UINT(displayHeight));
   // Once per distinct call site and size, so a per-frame resize cannot flood the
   // log while a one-off still gets recorded.
   static std::atomic<uint64_t> reported{0};
   const uint64_t key = (uint64_t(wasWidth) << 32) | wasHeight;
   if (reported.exchange(key, std::memory_order_relaxed) != key)
     log("SSAA present clamp: ", where, " ", std::dec, wasWidth, "x", wasHeight,
-        " -> ", displayWidth, "x", displayHeight,
+        " -> ", *width, "x", *height,
         " (the engine keeps rendering at the larger size; its own device init"
         " should now take the offscreen branch)");
 }

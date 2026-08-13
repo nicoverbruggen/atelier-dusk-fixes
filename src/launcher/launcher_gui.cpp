@@ -1051,8 +1051,12 @@ void loadFromIni() {
     iniBool(g_iniPath, "Launcher", "AutoResolution", !(width && height)));
 
   char value[16] = {};
-  iniString(g_settingsPath, "Window", "FullScreen", value, sizeof(value), "0");
-  comboSelectByValue(g_hWinMode, kWindowModeItems, kWindowModeCount, value, 0);
+  // Fullscreen when the game's own file has not been written yet. Exclusive
+  // fullscreen flips straight to the display instead of asking the compositor
+  // for anything, and every resolution offered above is one the display itself
+  // reported, so the mode a fresh install lands in is always one it can show.
+  iniString(g_settingsPath, "Window", "FullScreen", value, sizeof(value), "1");
+  comboSelectByValue(g_hWinMode, kWindowModeItems, kWindowModeCount, value, 1);
 
   iniString(g_settingsPath, "Lang", "Language", value, sizeof(value), "2");
   comboSelectByValue(g_hLang, kLangItems, kLangCount, value, 1);
@@ -1239,7 +1243,7 @@ void resetToDefaults() {
     addResolution(width, height);
   refillResolutions(width, height, true);
 
-  SendMessageW(g_hWinMode, CB_SETCURSEL, 0, 0);   // windowed
+  SendMessageW(g_hWinMode, CB_SETCURSEL, 1, 0);   // fullscreen, as it defaults
   setChecked(g_hOutline, true);                   // on as the game shipped
 
   // Supersampling goes off rather than to a recommended setting: reset is for

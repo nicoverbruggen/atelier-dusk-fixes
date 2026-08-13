@@ -130,9 +130,7 @@ void logConfiguration() {
   if (featureSupport(Feature::Supersampling) == Support::Unsupported) {
     log("Config:   Supersampling = unsupported on this game");
   } else {
-    log("Config:   Supersampling = ", ssaaPercent(),
-        "%; downscale sharpen = ",
-        static_cast<unsigned int>(ssaaSharpen() * 100.0f + 0.5f), "%");
+    log("Config:   Supersampling = ", ssaaPercent(), "%");
   }
 
   if (featureSupport(Feature::AnisotropicFiltering) == Support::Unsupported)

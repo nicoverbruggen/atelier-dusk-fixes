@@ -30,7 +30,7 @@ If the game crashes, the mod appends a report to `dusk-fix.log` that helps pinpo
 
 ### List of graphics enhancements
 
-These things were not part of the original games, but were added with the mod. These can be turned off.
+These things were not part of the original games, but were added with the mod. Each one can be turned on or off in the launcher. Edge smoothing is on to begin with, as is anisotropic filtering where the game supports it; supersampling and sharpening are optional.
 
 | Enhancement                                | Ayesha | Escha & Logy | Shallie |
 |--------------------------------------------|:------:|:------------:|:-------:|
@@ -105,6 +105,6 @@ The bundled SMAA anti-aliasing is by Jorge Jimenez, Jose I. Echevarria, Belen Ma
 
 ## License
 
-See [LICENSE](LICENSE) for the MIT and zlib license terms applying to the respective source files. 
+See [LICENSE](LICENSE) for the MIT and zlib license terms applying to the respective source files.
 
-Since Ayesha's game engine is quite similar, see [arland-atelier-fix](https://github.com/nicoverbruggen/atelier-arland-fixes) for a version compatible with the Arland games, as this mod is a spin-off of the Arland trilogy one.
+Since Ayesha's game engine is quite similar, see [atelier-arland-fixes](https://github.com/nicoverbruggen/atelier-arland-fixes) for a version compatible with the Arland games, as this mod is a spin-off of the Arland trilogy one.

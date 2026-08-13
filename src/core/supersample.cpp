@@ -94,21 +94,17 @@ bool ssaaConfigured() {
   return ssaaPercent() > 100;
 }
 
-float ssaaSharpen() {
-  static const float amount = [] () -> float {
-    // Percent, so the ini and the environment carry no decimal point -- the
-    // same locale trap the supersampling factor avoids.
-    int v = 35;
-    if (const char* env = std::getenv("DUSK_SSAA_SHARPEN"))
-      v = std::atoi(env);
-    else
-      v = duskConfigInt("Rendering", "SupersamplingSharpen", 35);
-    if (v < 0) v = 0;
-    if (v > 100) v = 100;
-    return float(v) / 100.0f;
-  }();
-  return amount;
-}
+// Fixed, and not a setting. This compensates for a blur THIS pass introduces:
+// the box filter below averages, an average is softer than its source, and the
+// four extra taps that undo it are already in cache. That makes it a correction
+// rather than a preference, and nobody has a considered opinion about the right
+// percentage to cancel a box filter. `[Rendering] Sharpen` is the sharpening
+// control a player has, and it runs afterwards as its own CAS pass.
+//
+// It was configurable through `[Rendering] SupersamplingSharpen` and
+// DUSK_SSAA_SHARPEN. Both were removed once the separate sharpening pass
+// shipped, because two sharpening numbers invited tuning one against the other.
+constexpr float kDownscaleSharpen = 0.35f;
 
 bool ssaaSceneSize(unsigned int mainWidth, unsigned int mainHeight,
                    unsigned int* sceneWidth, unsigned int* sceneHeight) {
@@ -748,7 +744,7 @@ bool runDownscale(ID3D11DeviceContext* context, ID3D11Texture2D* host,
   params.ratio[0] = float(sourceDesc.Width) / float(destWidth);
   params.ratio[1] = float(sourceDesc.Height) / float(destHeight);
   params.samples = downscaleSamples(sourceDesc.Height, destHeight);
-  params.sharpen = ssaaSharpen();
+  params.sharpen = kDownscaleSharpen;
   D3D11_MAPPED_SUBRESOURCE mapped = {};
   const HRESULT mapResult =
     context->Map(g_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
@@ -1268,7 +1264,7 @@ void ssaaFrameTick(IDXGISwapChain* swapChain) {
         !announced.exchange(true, std::memory_order_relaxed))
       log("FIXES ssaa=", std::dec, ssaaPercent(), "% scene=", sceneWidth, "x",
           sceneHeight, " display=", mainWidth, "x", mainHeight,
-          " sharpen=", int(ssaaSharpen() * 100.0f + 0.5f),
+          " sharpen=", int(kDownscaleSharpen * 100.0f + 0.5f),
           "% ('SSAA: composite identified' confirms attachment)");
   }
 

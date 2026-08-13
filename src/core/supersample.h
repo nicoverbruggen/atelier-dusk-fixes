@@ -96,14 +96,6 @@ bool ssaaConfigured();
 // something else down must ask the second one. See scene_pass.cpp's boundary.
 bool ssaaEngaged();
 
-// How hard to sharpen after the downscale, 0 to 1. A box filter is an average
-// and an average is a blur, so a correct downscale is softer than its source --
-// which is why resampling is normally paired with a sharpen (FSR does exactly
-// this with RCAS). Folded into the downscale shader rather than run as its own
-// pass. `[Rendering] SupersamplingSharpen` or DUSK_SSAA_SHARPEN, as a
-// percentage; 0 disables it.
-float ssaaSharpen();
-
 // The scene render size for a given main render size, with the factor applied
 // and clamped so an over-ambitious setting cannot ask for a target no driver
 // will allocate. Returns false and leaves the outputs alone when supersampling

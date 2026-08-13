@@ -69,10 +69,7 @@ struct Descriptor {
 
 const Descriptor& descriptor(Feature f) {
   static const Descriptor table[static_cast<int>(Feature::Count)] = {
-    /* AtlasStats      */ { "DUSK_ATLAS_STATS",       nullptr, nullptr },
-    /* AtlasTrace      */ { "DUSK_ATLAS_TRACE",       nullptr, nullptr },
     /* AtlasVerify     */ { "DUSK_ATLAS_VERIFY",      nullptr, nullptr },
-    /* AtlasCensus     */ { "DUSK_ATLAS_CENSUS",      nullptr, nullptr },
     /* TargetCensus    */ { "DUSK_TARGET_CENSUS",     nullptr, nullptr },
     /* HighRes         */ { "DUSK_HIGHRES",           nullptr, nullptr },
     /* AtlasCache      */ { "DUSK_ATLAS_CACHE",       nullptr, nullptr },
@@ -118,28 +115,11 @@ constexpr Support X = Support::OnByDefault;
 // The capability matrix. Rows are Ayesha / Escha & Logy / Shallie, columns
 // follow the Feature enum. KEEP IN SYNC with README.md's feature table.
 //
-// AtlasStats is Ayesha-only and OptIn: it is a diagnostic, so it must never be
-// on by default, and it is meaningless on the other two games because their
-// text-rendering layer has no homolog of the hooked entry points.
-//
-// AtlasTrace is the same, and additionally implies AtlasStats: it records the
-// raw atlas lock/unlock sequence of one steady-state frame and prints it, which
-// is how the write-to-read pairing gets settled rather than guessed. It costs
-// a mutex acquisition per lock, so it is strictly a bring-your-own-question
-// switch.
-//
 // AtlasVerify is the correctness check for the cache, and is Ayesha-only and
 // OptIn for a stronger reason than the others: it makes the game slow on purpose
 // (a real atlas lock plus a ~1 MB comparison per verified read). It answers the
 // one question a playthrough cannot, since a stale glyph in Japanese is not
 // something a reader can reliably spot.
-//
-// AtlasCensus is an enumeration diagnostic rather than a sampling one: it
-// closes the question of who can write a font atlas by listing every engine
-// writer, which is a stronger result than any playthrough can give. It is
-// Ayesha-only and OptIn. The spent D3D11-level probe was removed after it
-// answered its one investigation question; a diagnostic must not remain as a
-// second permanent owner of the device-context vtables.
 //
 // AtlasCache is Ayesha-only and ships ON BY DEFAULT: it is the shipping fix.
 // The pattern it addresses is measured, not assumed -- 2385 candidate locks onto
@@ -356,10 +336,10 @@ constexpr Support X = Support::OnByDefault;
 // so an incomplete row reads as a deliberate "this game does not get it". Let
 // the extent come from the initializer instead and each static_assert below
 // fails loudly the next time a Feature is added without extending every row.
-//                               Stats Trace Verfy Censu Targt HiRes Cache Field Stabl Smaa  Ssaa  Aniso WMap  Logo  Movi  Typo  SysSv Promt PadRe Synth
-constexpr Support kAyesha[]  = { O,    O,    O,    O,    O,    X,    X,    X,    X,    X,    O,    X,    X,    O,    O,    U,    U,    U,    X,    U };
-constexpr Support kEscha[]   = { U,    U,    U,    U,    O,    U,    U,    U,    U,    X,    O,    U,    X,    O,    O,    X,    X,    U,    X,    X };
-constexpr Support kShallie[] = { U,    U,    U,    U,    O,    U,    U,    U,    U,    X,    O,    U,    U,    O,    O,    X,    X,    O,    X,    X };
+//                               Verfy Targt HiRes Cache Field Stabl Smaa  Ssaa  Aniso WMap  Logo  Movi  Typo  SysSv Promt PadRe Synth
+constexpr Support kAyesha[]  = { O,    O,    X,    X,    X,    X,    X,    O,    X,    X,    O,    O,    U,    U,    U,    X,    U };
+constexpr Support kEscha[]   = { U,    O,    U,    U,    U,    U,    X,    O,    U,    X,    O,    O,    X,    X,    U,    X,    X };
+constexpr Support kShallie[] = { U,    O,    U,    U,    U,    U,    X,    O,    U,    U,    O,    O,    X,    X,    O,    X,    X };
 
 constexpr std::size_t kColumns = static_cast<std::size_t>(Feature::Count);
 static_assert(std::size(kAyesha) == kColumns,  "Ayesha row is not one entry per Feature");

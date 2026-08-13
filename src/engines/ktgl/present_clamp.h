@@ -42,10 +42,8 @@ const SsaaPolicy& ktglSsaaPolicy();
 // sizes the game's window to the clamped client area at the call that sets it.
 bool ktglPresentClampEnabled();
 
-// The two sizes the clamp works between: what the display gets, and what the
-// engine asked for before being clamped. Both false when the clamp is not
-// engaged or nothing has been clamped yet.
+// The size the clamp presents at. False when the clamp is not engaged or no
+// valid display size can be resolved.
 bool ktglClampedDisplaySize(unsigned int* width, unsigned int* height);
-bool ktglClampedRenderSize(unsigned int* width, unsigned int* height);
 
 }  // namespace atfix

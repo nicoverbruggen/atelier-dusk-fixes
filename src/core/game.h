@@ -36,23 +36,20 @@ const char* engineName(Engine e);
 // descriptor rows in game.cpp.
 //
 // AtlasCache, HighResRendering, and both field-jitter halves ship on by
-// default for Ayesha. The first six rows are diagnostics. Everything from
-// LoadingTextTypo down belongs to the two KTGL games, and only TargetCensus,
-// PadRescanBackoff applies to all three. AnisotropicFiltering is Ayesha-only;
+// default for Ayesha. AtlasVerify and TargetCensus are diagnostics. Several
+// later fixes are shared, while LoadingTextTypo and SystemSaveGuard begin the
+// KTGL-specific group. AnisotropicFiltering is Ayesha-only;
 // the implementation is generic D3D11, but the KTGL rows deliberately reject
 // it so configuration cannot activate an unvalidated sampler rewrite there.
 enum class Feature : uint8_t {
-  AtlasStats,       // Ayesha font-atlas diagnostic counters (measurement only)
-  AtlasTrace,       // Ayesha font-atlas lock/unlock sequence trace (one frame)
   AtlasVerify,      // Ayesha font-atlas snapshot-vs-real comparison (slow)
-  AtlasCensus,      // Ayesha font-atlas writer census (enumerates every caller)
   TargetCensus,     // any game: sizes of the render/depth targets it creates
   HighResRendering, // Ayesha: scene targets follow the resolution, not 1080p
   AtlasCache,       // Ayesha atlas read caching (frame-scoped)
   FieldEngineFix,   // Ayesha high-refresh field jitter: rescale the move threshold
   FieldStabilizer,  // Ayesha high-refresh field jitter: hold the character at rest
-  Smaa,             // Ayesha: SMAA post-process antialiasing
-  Supersampling,    // Ayesha: render above the display size, downscale to it
+  Smaa,             // any game: SMAA scene antialiasing before UI composition
+  Supersampling,    // any game: render above display size, downscale to it
   AnisotropicFiltering, // Ayesha: upgrade basic samplers (sampler.h)
   WorldMapCursor,   // Ayesha + Escha: travel-map cursor per second, not per frame
   SkipStartupLogos, // any game: skip the publisher/developer logos shown at boot

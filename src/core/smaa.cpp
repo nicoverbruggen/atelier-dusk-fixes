@@ -12,14 +12,9 @@
 // Gutierrez; MIT) and compiled at runtime through d3dcompiler, which is the
 // same arrangement Arland uses.
 //
-// What is deliberately NOT ported yet:
-//
-//   - Pre-UI injection. Arland runs these passes on the scene target before the
-//     game composites its interface, so menus and text are not softened. Which
-//     draw is that boundary is engine knowledge, and it was established
-//     separately for each Arland title. Nothing equivalent is known for
-//     PhyreEngine yet, so this file offers only the full-frame path at
-//     Present.
+// Each engine supplies a measured pre-UI boundary so the passes run over the
+// scene before the interface is composited. Present remains a fallback when a
+// pre-UI pass cannot run.
 // Atelier Graphics Tweak also ships SMAA for these games, and confirmed two
 // useful facts by inspection: the same MIT reference shader at
 // SMAA_PRESET_ULTRA, and an injection point on the DEFERRED context. None of
@@ -120,28 +115,6 @@ float4 BlendPS(float4 position : SV_POSITION,
                float4 offset : TEXCOORD1) : SV_TARGET {
   return SMAANeighborhoodBlendingPS(texcoord, offset, colorTex, blendTex);
 }
-
-// Debug: the edge-detection output (red = horizontal, green = vertical) over a
-// dimmed scene. Answers "is SMAA finding anything at all", which is the first
-// question when the result looks unchanged.
-float4 DebugEdgesPS(float4 position : SV_POSITION,
-                    float2 texcoord : TEXCOORD0,
-                    float4 offset[3] : TEXCOORD1) : SV_TARGET {
-  float2 e = edgesTex.Sample(LinearSampler, texcoord).rg;
-  float3 scene = colorTex.Sample(LinearSampler, texcoord).rgb * 0.25;
-  return float4(scene + float3(e, 0.0), 1.0);
-}
-
-// Debug: the blend weights, amplified. Black means the weight calculation
-// produced nothing (an area/search lookup problem); colour along edges means
-// weights exist and pass 3 is where to look instead.
-float4 DebugWeightsPS(float4 position : SV_POSITION,
-                      float2 texcoord : TEXCOORD0,
-                      float4 offset[3] : TEXCOORD1) : SV_TARGET {
-  float4 w = blendTex.Sample(LinearSampler, texcoord);
-  float3 scene = colorTex.Sample(LinearSampler, texcoord).rgb * 0.15;
-  return float4(scene + saturate(w.rgb + w.a) * 3.0, 1.0);
-}
 )WRAP";
 
 // SMAA.hlsl (HLSL_4 path) declares LinearSampler/PointSampler itself, so this
@@ -179,8 +152,6 @@ ID3D11VertexShader* g_blendVS = nullptr;
 ID3D11PixelShader*  g_edgePS = nullptr;
 ID3D11PixelShader*  g_weightPS = nullptr;
 ID3D11PixelShader*  g_blendPS = nullptr;
-ID3D11PixelShader*  g_debugPS = nullptr;        // edges
-ID3D11PixelShader*  g_debugWeightPS = nullptr;  // weights
 
 ID3D11InputLayout*  g_layout = nullptr;
 ID3D11Buffer*       g_quad = nullptr;
@@ -221,18 +192,6 @@ bool acceptsDevice(ID3D11Device* device) {
   return false;
 }
 
-// DUSK_SMAA_DEBUG=1 shows the detected edges, =2 the blend weights, instead of
-// the antialiased frame. A diagnostic, so it is environment-only.
-int smaaDebugLevel() {
-  static const int level = [] {
-    const char* v = std::getenv("DUSK_SMAA_DEBUG");
-    if (!v) return 0;
-    const int n = std::atoi(v);
-    return (n >= 0 && n <= 2) ? n : 0;
-  }();
-  return level;
-}
-
 bool compile(PFN_D3DCompile D3DCompile, const char* entry, const char* target,
              ID3DBlob** blob) {
   std::string src;
@@ -270,18 +229,6 @@ bool initShared(ID3D11Device* dev) {
     compile(D3DCompile, "EdgePS", "ps_4_1", &eps) &&
     compile(D3DCompile, "WeightPS", "ps_4_1", &wps) &&
     compile(D3DCompile, "BlendPS", "ps_4_1", &bps);
-  if (ok && smaaDebugLevel() > 0) {
-    ID3DBlob* dps = nullptr;
-    if (compile(D3DCompile, "DebugEdgesPS", "ps_4_1", &dps))
-      dev->CreatePixelShader(dps->GetBufferPointer(), dps->GetBufferSize(),
-        nullptr, &g_debugPS);
-    release(dps);
-    ID3DBlob* dwp = nullptr;
-    if (compile(D3DCompile, "DebugWeightsPS", "ps_4_1", &dwp))
-      dev->CreatePixelShader(dwp->GetBufferPointer(), dwp->GetBufferSize(),
-        nullptr, &g_debugWeightPS);
-    release(dwp);
-  }
   if (ok)
     ok = SUCCEEDED(dev->CreateVertexShader(evs->GetBufferPointer(),
           evs->GetBufferSize(), nullptr, &g_edgeVS)) &&
@@ -531,7 +478,7 @@ bool smaaRunPasses(ID3D11Device* dev, ID3D11DeviceContext* ctx,
   if (!g_init.exchange(true)) {
     if (!initShared(dev)) g_broken = true;
     else log("FIXES smaa=active size=", std::dec, cd.Width, "x", cd.Height,
-      " debug=", smaaDebugLevel());
+      " (Ultra preset)");
   }
   if (g_broken)
     return false;
@@ -578,8 +525,6 @@ bool smaaRunPasses(ID3D11Device* dev, ID3D11DeviceContext* ctx,
   ctx->PSSetConstantBuffers(0, 1, &g_cb);
   ID3D11ShaderResourceView* nullSRV[10] = {};
 
-  const int debug = smaaDebugLevel();
-
   // Pass 1: edge detection (colour at t3) -> edges.
   ctx->PSSetShaderResources(0, 10, nullSRV);
   ctx->ClearRenderTargetView(g_edgesRTV, black);
@@ -591,19 +536,6 @@ bool smaaRunPasses(ID3D11Device* dev, ID3D11DeviceContext* ctx,
   ctx->PSSetShader(g_edgePS, nullptr, 0);
   ctx->Draw(4, 0);
 
-  if (debug == 1 && g_debugPS) {
-    ctx->PSSetShaderResources(0, 10, nullSRV);
-    d3d11SetRenderTargets(ctx, 1, &colorRTV, nullptr);
-    ID3D11ShaderResourceView* dbg[9] = {g_areaSRV, g_searchSRV, g_sceneSRV,
-      nullptr, nullptr, nullptr, nullptr, nullptr, g_edgesSRV};
-    ctx->PSSetShaderResources(0, 9, dbg);
-    ctx->VSSetShader(g_edgeVS, nullptr, 0);
-    ctx->PSSetShader(g_debugPS, nullptr, 0);
-    ctx->Draw(4, 0);
-    ctx->PSSetShaderResources(0, 10, nullSRV);
-    return true;
-  }
-
   // Pass 2: blending-weight calculation (edges at t8) -> weights.
   ctx->PSSetShaderResources(0, 10, nullSRV);
   ctx->ClearRenderTargetView(g_weightRTV, black);
@@ -614,19 +546,6 @@ bool smaaRunPasses(ID3D11Device* dev, ID3D11DeviceContext* ctx,
   ctx->VSSetShader(g_weightVS, nullptr, 0);
   ctx->PSSetShader(g_weightPS, nullptr, 0);
   ctx->Draw(4, 0);
-
-  if (debug == 2 && g_debugWeightPS) {
-    ctx->PSSetShaderResources(0, 10, nullSRV);
-    d3d11SetRenderTargets(ctx, 1, &colorRTV, nullptr);
-    ID3D11ShaderResourceView* dbg[10] = {g_areaSRV, g_searchSRV, g_sceneSRV,
-      nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, g_weightSRV};
-    ctx->PSSetShaderResources(0, 10, dbg);
-    ctx->VSSetShader(g_edgeVS, nullptr, 0);
-    ctx->PSSetShader(g_debugWeightPS, nullptr, 0);
-    ctx->Draw(4, 0);
-    ctx->PSSetShaderResources(0, 10, nullSRV);
-    return true;
-  }
 
   // Pass 3: neighborhood blending (colour t2 + weights t9) -> the colour target.
   ctx->PSSetShaderResources(0, 10, nullSRV);

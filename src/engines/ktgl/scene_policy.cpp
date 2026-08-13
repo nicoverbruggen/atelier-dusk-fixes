@@ -20,10 +20,6 @@ void ktglNoteTargets(ID3D11DeviceContext* context, unsigned int numViews,
   ktglPreUiNoteTargets(context, numViews, views);
 }
 
-ID3D11Texture2D* ktglNoteDraw(ID3D11DeviceContext* context) {
-  return ktglPreUiNoteDraw(context);
-}
-
 void ktglTick() { ktglPreUiFrameTick(); }
 
 }  // namespace
@@ -32,7 +28,6 @@ const ScenePolicy& ktglScenePolicy() {
   static const ScenePolicy policy = {
     ktglAtFirstDraw,
     ktglNoteTargets,
-    ktglNoteDraw,
     ktglTick,
     // Its own detours call this directly; this pointer is how the RASTER
     // correction's detours reach it, which is the only way the pass runs at all

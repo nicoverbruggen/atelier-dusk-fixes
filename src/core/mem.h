@@ -5,10 +5,8 @@
 // at reverse-engineered offsets, so every dereference must first prove the address
 // is mapped -- a wild, stale, or freed pointer would otherwise fault. readableRange
 // is the primitive; tryRead wraps the guard and the copy together so a multi-level
-// pointer walk cannot forget a level. Forgetting a level on a freed battle object
-// is exactly the class of bug behind the battle-exit crash fixed in menu_fix.cpp:
-// prefer tryRead over a bare `*reinterpret_cast<T*>(addr)` for anything that reads
-// engine memory.
+// pointer walk cannot forget a level. Prefer tryRead over a bare
+// `*reinterpret_cast<T*>(addr)` for anything that reads engine memory.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
@@ -38,8 +36,7 @@ inline bool readableRange(uintptr_t p, size_t n) {
 
 // Read a trivially-copyable T from `addr` into `out`, but only if the whole object
 // is mapped. Returns false and leaves `out` untouched otherwise. A guarded walk
-// then reads as a chain that cannot skip a guard, e.g. the two-level *(*(slot))
-// that faulted in trackBattleStateTick:
+// then reads as a chain that cannot skip a guard, e.g. a two-level *(*(slot)):
 //   uintptr_t stateObj = 0, vt = 0;
 //   if (!tryRead(slot, stateObj) || !stateObj || !tryRead(stateObj, vt)) return;
 template<class T>

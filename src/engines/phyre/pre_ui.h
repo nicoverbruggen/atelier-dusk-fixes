@@ -18,10 +18,10 @@
 //
 // The symptom was a working log and an unchanged picture: "SMAA: pre-UI active"
 // every session, no visible smoothing in game, and -- the observation that
-// settled it -- DUSK_SMAA_DEBUG=1 drawing its edge map on the title screen,
-// where the Present path runs, and nothing at all in gameplay, where this path
-// runs. An edge map written into a surface that reached the screen could not
-// have been missed.
+// settled it -- an instrumented edge-map build drew the map on the title
+// screen, where the Present path runs, and nothing at all in gameplay, where
+// this path runs. An edge map written into a surface that reached the screen
+// could not have been missed.
 //
 // WHY THE TRANSITION CANNOT BE IT, recorded in scene_pass.cpp before this file
 // existed and removed from there with the dead branch: the scene-to-not-scene

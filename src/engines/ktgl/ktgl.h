@@ -7,17 +7,11 @@
 // hitch -- the Arland/Ayesha text renderer has no homolog in either binary and
 // their queue drain mismatches on both vote and prologue shape -- so nothing in
 // `src/engines/phyre/` applies to them and none of it is reachable here. Their
-// own open defects are different problems entirely:
-//
-//   * Escha & Logy: the shadow-texture bug AGT worked around by replacing the
-//     SRV at init, and the system-save-data wipe on quit.
-//   * Shallie: the CreateSamplerState bug AGT patched.
-//
-// Neither of those is implemented yet. What this module does install is the
-// "Loadning system data." correction (loading_text_fix.h), the system-save
-// guard, Shallie's control-prompt hold, the intro movie skip and the startup
-// logo skip. The four executable identities are verified; that check is the
-// gate this and every fix here installs behind.
+// Their fixes are therefore native KTGL implementations: save-load guarding,
+// loading-text correction, startup skips, world-map cadence, synthesis cadence,
+// Shallie's control prompt, and the engine's pre-UI render boundary. The four
+// executable identities are verified; that check gates every address-based and
+// Direct3D fix installed here.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
@@ -55,16 +49,6 @@ struct KtglGame {
   // forwarded because the gallery seen-bit is set inside it.
   uintptr_t moviePlayRva;
   uintptr_t movieOpenRva;
-  // The DUSK_IPU_TRACE diagnostic (ipu_trace.h): the 2D-image loader and the
-  // table it indexes, whose rows name their own files. Both were taken from the
-  // build's own RTTI -- the `Ipu` vtable, then the slot whose prologue matches
-  // -- rather than by searching for a shape, which matters because the slot
-  // differs between the games (Escha 3, Shallie 14). `Rows` is cross-checked at
-  // install against the bound the loader itself carries; the counts differ
-  // because Shallie's table is shorter.
-  uintptr_t ipuLoadRva;
-  uintptr_t ipuTableRva;
-  uint32_t ipuTableRows;
   // The startup logo skip (logo_skip.h): the body all three logo states call,
   // and the byte offset of the elapsed-seconds float inside `Title` that the
   // body zeroes and the sequence's advance check reads. The offset differs
@@ -88,20 +72,6 @@ struct KtglGame {
   // -- the -1 is what crashed the first attempt. Escha keeps it at 0xc0 and
   // Shallie at 0x40.
   uint32_t ipuHideOffset;
-
-  // WinParts::update, the shared update for the six WinParts* UI classes, and
-  // the two offsets the trace reads through it: the node at `this+0x10`, and
-  // that node's translation in the 1920x1080 interface canvas.
-  //
-  // The translate offset differs between the games and is not a guess: it is the
-  // field each game's own transform composer reads back. Escha keeps it at 0xd8
-  // and Shallie at 0xe0.
-  //
-  // Zero on both multilingual builds -- the addresses were derived on the
-  // English executables only and nobody has run the homolog for the others.
-  uintptr_t winPartsUpdateRva;
-  uint32_t winPartsNodeOffset;
-  uint32_t winPartsTranslateOffset;
 
   uint8_t exeBuild;
 };

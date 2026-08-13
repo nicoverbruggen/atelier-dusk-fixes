@@ -33,11 +33,6 @@ unsigned int g_clampHeight = 0;
 constexpr unsigned int kMaxConfiguredWidth = 7680;
 constexpr unsigned int kMaxConfiguredHeight = 4320;
 
-// What the engine asked for before being clamped. Read by window_size.cpp, which
-// has to recognise the window the engine sizes from this same number.
-std::atomic<UINT> g_clampedRenderWidth{0};
-std::atomic<UINT> g_clampedRenderHeight{0};
-
 // TOLD, NOT GUESSED. The launcher writes the base resolution the user chose into
 // `[Rendering] DisplayWidth`/`DisplayHeight` and multiplies the game's own
 // Setting.ini by the supersampling factor. The launcher produces the pair
@@ -102,14 +97,13 @@ void clampPresentSize(UINT* width, UINT* height, const char* where) {
     return;
   const UINT wasWidth = *width;
   const UINT wasHeight = *height;
-  g_clampedRenderWidth.store(wasWidth, std::memory_order_relaxed);
-  g_clampedRenderHeight.store(wasHeight, std::memory_order_relaxed);
   // Clamp each component independently. A hand-edited mismatched pair must
   // never make the other component larger than the game requested.
   *width = std::min(wasWidth, UINT(displayWidth));
   *height = std::min(wasHeight, UINT(displayHeight));
-  // Once per distinct call site and size, so a per-frame resize cannot flood the
-  // log while a one-off still gets recorded.
+  // Once per distinct requested size, so a per-frame resize cannot flood the
+  // log while a one-off still gets recorded. The key deliberately does not
+  // distinguish CreateSwapChain from either resize method.
   static std::atomic<uint64_t> reported{0};
   const uint64_t key = (uint64_t(wasWidth) << 32) | wasHeight;
   if (reported.exchange(key, std::memory_order_relaxed) != key)
@@ -208,16 +202,6 @@ bool ktglClampedDisplaySize(unsigned int* width, unsigned int* height) {
   if (!ktglPresentClampEnabled())
     return false;
   return displaySize(width, height);
-}
-
-bool ktglClampedRenderSize(unsigned int* width, unsigned int* height) {
-  const UINT w = g_clampedRenderWidth.load(std::memory_order_relaxed);
-  const UINT h = g_clampedRenderHeight.load(std::memory_order_relaxed);
-  if (!w || !h)
-    return false;
-  *width = w;
-  *height = h;
-  return true;
 }
 
 const SsaaPolicy& ktglSsaaPolicy() {

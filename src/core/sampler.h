@@ -26,17 +26,15 @@
 // operation. The bound is therefore the basic point/linear block, 0x00..0x15,
 // exactly as Arland has it.
 //
-// THE POINT-SAMPLER QUESTION. That bound includes
+// POINT SAMPLERS. That bound includes
 // D3D11_FILTER_MIN_MAG_MIP_POINT, which is enum zero -- so every point sampler
-// is upgraded too. Ayesha is runtime-validated and reported `fromPoint=0`, so
-// the question is moot there. It remains unresolved on both KTGL games: point
-// sampling is *correct* for lookup textures, and filtering a colour-grading
-// LUT, a gradient ramp or a dither table smears the very thing it encodes. That
-// is one reason Escha & Logy and Shallie mark this feature Unsupported.
+// is upgraded too. Point sampling can be correct for lookup textures, and
+// filtering a colour-grading LUT, gradient ramp or dither table would smear
+// what it encodes. That unresolved engine-wide risk is one reason Escha & Logy
+// and Shallie mark this feature Unsupported.
 //
-// The Ayesha path still counts what it upgrades, by kind, and says so. Its
-// validated run found no point samplers; `DUSK_ANISO_KEEP_POINT=1` remains a
-// narrow comparison switch if that ever changes.
+// The validated Ayesha path still counts what it upgrades by kind and reports
+// the totals, so a future content-specific problem has an observable cause.
 namespace atfix {
 
 // The anisotropy level: 0 or 1 means off, otherwise 2, 4, 8 or 16. Resolved

@@ -22,7 +22,7 @@
 namespace atfix {
 
 // Per-executable descriptor for the Phyre text path: the executable identity
-// plus the RVAs of the four hooked entry points. Every row was derived
+// plus the RVAs of the three hooked entry points. Every row was derived
 // separately; do not change an RVA here without re-deriving it.
 //
 // atlasUnlockRva names the two-instruction *stub* at lock+0x40, not the
@@ -34,7 +34,6 @@ namespace atfix {
 struct PhyreGame {
   const char* executable;
   DWORD textSize;
-  uintptr_t queueDrainRva;
   uintptr_t renderTextRva;
   uintptr_t atlasLockRva;
   uintptr_t atlasUnlockRva;

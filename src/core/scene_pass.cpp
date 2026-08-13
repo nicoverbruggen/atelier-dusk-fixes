@@ -11,7 +11,6 @@
 
 #include "log.h"
 #include "d3d11_hooks.h"
-#include "frame_map.h"
 #include "smaa.h"
 #include "scene_policy.h"
 #include "scene_pass.h"
@@ -155,7 +154,6 @@ void scenePassNoteBoundary(ID3D11DeviceContext* context, unsigned int numViews,
 void STDMETHODCALLTYPE hookedOMSetRenderTargets(
     ID3D11DeviceContext* self, UINT numViews,
     ID3D11RenderTargetView* const* views, ID3D11DepthStencilView* depth) {
-  frameMapNoteTargets(self, numViews, views);
   // AFTER the boundary, not before. scenePassNoteBoundary is what tags the
   // arriving surface as a scene colour host, and an anchor that runs first sees
   // every surface untagged on its first bind -- which is exactly what a
@@ -221,7 +219,6 @@ void STDMETHODCALLTYPE hookedOMSetRenderTargetsAndUnorderedAccessViews(
   // as a count would be a wild read, and clearing the marker on it would drop
   // the composite half way through.
   if (numViews != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) {
-    frameMapNoteTargets(self, numViews, views);
     scenePassNoteBoundary(self, numViews, views, depth);
     ssaaNoteTargetsBound(self, numViews, views);
   }

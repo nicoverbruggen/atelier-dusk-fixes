@@ -38,6 +38,8 @@ jobs:
         run: python scripts/check_core_contract.py
       - name: Check asynchronous lifecycle contract
         run: python scripts/check_lifecycle_contract.py
+      - name: Check release attribution contract
+        run: python scripts/check_release_contract.py
       - uses: actions/upload-artifact@v7
         with:
           name: d3d11
@@ -99,6 +101,7 @@ jobs:
           cp README.md LICENSE dist/dusk-fix/
           mkdir -p dist/dusk-fix/LICENSES
           cp vendor/minhook/LICENSE.txt dist/dusk-fix/LICENSES/MinHook.txt
+          cp vendor/smaa/LICENSE.txt dist/dusk-fix/LICENSES/SMAA.txt
           # Shipped under its final name so the archive extracts straight into
           # the game directory with nothing to rename.
           cp default.ini dist/dusk-fix.ini

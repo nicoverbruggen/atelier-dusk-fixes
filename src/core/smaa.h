@@ -21,12 +21,9 @@ bool smaaPreUiEnabled();
 // Run the SMAA passes over the swap chain's back buffer, in place, just before
 // Present. No-op unless enabled and the resources initialize.
 //
-// This is the full-frame path: it antialiases the composited frame, UI and all,
-// because it runs after everything has been drawn. That is a real cost -- text
-// and HUD edges are softened along with the scene -- and it is why this is the
-// first half of the feature rather than the whole of it. The pre-UI injection
-// that avoids it needs a scene/UI boundary that has not been established for
-// this engine yet.
+// This is the fallback full-frame path: it antialiases the composited frame, UI
+// and all, because it runs after everything has been drawn. The normal route is
+// each engine's measured pre-UI boundary, which leaves text and HUD art alone.
 //
 // Best-effort: any failure disables SMAA for the rest of the session and leaves
 // the rest of the mod alone.

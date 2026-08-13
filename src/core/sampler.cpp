@@ -25,17 +25,6 @@ std::atomic<uint64_t> g_upgradedFromLinear{0};
 std::atomic<uint64_t> g_upgradedFromPoint{0};
 std::atomic<uint64_t> g_leftAlone{0};
 
-// Whether point samplers keep their filter. Off by default, matching Arland --
-// but reachable, because the reason to doubt the blanket upgrade is specific
-// and this is cheaper than reasoning about it. See sampler.h.
-bool keepPointSamplers() {
-  static const bool keep = [] {
-    const char* env = std::getenv("DUSK_ANISO_KEEP_POINT");
-    return env && env[0] != '0';
-  }();
-  return keep;
-}
-
 }  // namespace
 
 unsigned int anisotropyLevel() {
@@ -73,11 +62,6 @@ bool samplerUpgrade(D3D11_SAMPLER_DESC* desc) {
   }
 
   const bool isPoint = desc->Filter == D3D11_FILTER_MIN_MAG_MIP_POINT;
-  if (isPoint && keepPointSamplers()) {
-    g_leftAlone.fetch_add(1, std::memory_order_relaxed);
-    return false;
-  }
-
   desc->Filter = D3D11_FILTER_ANISOTROPIC;
   desc->MaxAnisotropy = aniso;
   if (isPoint)
@@ -114,8 +98,7 @@ void samplerReport() {
   log("FIXES anisotropic=", std::dec, anisotropyLevel(),
       "x upgraded fromLinear=", fromLinear,
       " fromPoint=", fromPoint,
-      " leftAlone=", g_leftAlone.load(std::memory_order_relaxed),
-      keepPointSamplers() ? " (point samplers kept)" : "");
+      " leftAlone=", g_leftAlone.load(std::memory_order_relaxed));
 }
 
 HRESULT STDMETHODCALLTYPE hookedCreateSamplerState(

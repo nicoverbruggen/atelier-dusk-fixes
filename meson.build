@@ -26,12 +26,25 @@ version_header = configure_file(
   configuration : version_data)
 resource_includes = include_directories('.')
 
+# A version number cannot distinguish a tagged release from a local build with
+# additional changes. Regenerate the source stamp at build time so a diagnostic
+# log identifies the exact commit and whether the working tree was dirty.
+version_git_header = vcs_tag(
+  input : 'src/core/version_git.h.in',
+  output : 'version_git.h',
+  # Local builds run inside a container whose uid differs from the checkout's.
+  # This one-command override avoids Git's dubious-ownership refusal without
+  # changing either the host or container configuration.
+  command : ['git', '-c', 'safe.directory=*', 'describe', '--always',
+             '--abbrev=8', '--dirty=-dirty'],
+  fallback : 'unknown')
+
 # Two targets, selected by the cross file's CPU family, exactly as the Arland
 # project does it: the 32-bit build produces only the launcher proxy, because
 # the Dusk front-ends are 32-bit while the games themselves are 64-bit.
 if host_machine.cpu_family() == 'x86'
   shared_library('msimg32',
-    ['src/launcher/launcher_proxy.cpp',
+    ['src/launcher/launcher_proxy.cpp', version_git_header,
      windows.compile_resources(
        'src/launcher/msimg32.rc',
        depend_files : version_rc,
@@ -55,8 +68,6 @@ else
     'src/core/crash_log.cpp',
     'src/core/module_lifetime.cpp',
     'src/core/engine.cpp',
-    'src/core/frame_capture.cpp',
-    'src/core/frame_map.cpp',
     'src/core/game.cpp',
     'src/core/hook_util.cpp',
     'src/core/d3d11_hooks.cpp',
@@ -82,7 +93,6 @@ else
     'src/engines/phyre/pre_ui.cpp',
     'src/engines/phyre/worldmap_fix.cpp',
     'src/engines/ktgl/ktgl.cpp',
-    'src/engines/ktgl/ipu_trace.cpp',
     'src/engines/ktgl/loading_text_fix.cpp',
     'src/engines/ktgl/logo_skip.cpp',
     'src/engines/ktgl/movie_skip.cpp',
@@ -90,7 +100,6 @@ else
     'src/engines/ktgl/present_clamp.cpp',
     'src/engines/ktgl/scene_policy.cpp',
     'src/engines/ktgl/worldmap_fix.cpp',
-    'src/engines/ktgl/win_parts_trace.cpp',
     'src/engines/ktgl/system_save_fix.cpp',
     'src/engines/ktgl/window_size.cpp',
     'src/engines/ktgl/control_prompt_fix.cpp',
@@ -101,7 +110,7 @@ else
   )
 
   shared_library('d3d11',
-    [sources,
+    [sources, version_git_header,
      windows.compile_resources(
        'src/core/d3d11.rc',
        depend_files : version_rc,
@@ -120,7 +129,7 @@ else
   # win_subsystem selects the GUI subsystem (WinMain) for both MinGW
   # (-mwindows) and MSVC (/SUBSYSTEM:WINDOWS).
   executable('dusk-fix-launcher',
-    ['src/launcher/launcher_gui.cpp',
+    ['src/launcher/launcher_gui.cpp', version_git_header,
      # Carries the ComCtl32 v6 manifest, which is what gets the themed common
      # controls rather than the flat 5.82 ones. See the manifest for the rest.
      windows.compile_resources(

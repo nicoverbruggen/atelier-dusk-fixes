@@ -1,0 +1,7 @@
+// SPDX-License-Identifier: MIT
+#pragma once
+
+// Exact source revision for diagnostic logs. Meson's vcs_tag regenerates this
+// at build time, appends "-dirty" when tracked files differ, and uses
+// "unknown" only when the source is built without Git metadata.
+#define DUSK_FIX_GIT "@VCS_TAG@"

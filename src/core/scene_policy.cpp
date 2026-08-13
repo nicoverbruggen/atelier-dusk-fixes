@@ -9,7 +9,6 @@ namespace {
 bool sceneNo() { return false; }
 void sceneNoTargets(ID3D11DeviceContext*, unsigned int,
                     ID3D11RenderTargetView* const*) {}
-ID3D11Texture2D* sceneNoDraw(ID3D11DeviceContext*) { return nullptr; }
 void sceneNoAfterDraw(ID3D11DeviceContext*) {}
 void sceneNoTick() {}
 
@@ -19,7 +18,6 @@ const ScenePolicy& sceneNoPolicy() {
   static const ScenePolicy policy = {
     sceneNo,           // preUiAtFirstDraw
     sceneNoTargets,
-    sceneNoDraw,
     sceneNoTick,
     sceneNoAfterDraw,
     sceneNo,           // needsMainRenderSize

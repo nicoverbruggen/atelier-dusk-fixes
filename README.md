@@ -12,7 +12,7 @@ The **included launcher** replaces the standard window for the Dusk games and gi
 
 ### List of fixes and improvements
 
-These are enabled by default, as they are crucial fixes. Some items do not apply to all games, as they differ slightly in terms of engine and functionality.
+Corrective fixes are enabled by default wherever they apply. Options that deliberately suppress the games' startup presentation are marked optional and remain off until selected.
 
 | Fix                                        | Ayesha | Escha & Logy | Shallie |
 |--------------------------------------------|:------:|:------------:|:-------:|

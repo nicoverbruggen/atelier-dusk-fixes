@@ -60,7 +60,6 @@
 #include "../../core/smaa.h"
 #include "../../core/supersample.h"
 #include "../../core/d3d11_hooks.h"
-#include "../../core/frame_map.h"
 
 namespace atfix {
 
@@ -474,7 +473,6 @@ void ktglPreUiAfterDraw(ID3D11DeviceContext* self) {
 
 void STDMETHODCALLTYPE hookedPreUiDraw(ID3D11DeviceContext* self,
                                        UINT vertexCount, UINT startVertex) {
-  frameMapNoteDraw(self);
   d3d11OriginalsFor(self).draw(self, vertexCount, startVertex);
   ktglPreUiAfterDraw(self);
 }
@@ -482,7 +480,6 @@ void STDMETHODCALLTYPE hookedPreUiDraw(ID3D11DeviceContext* self,
 void STDMETHODCALLTYPE hookedPreUiDrawIndexed(ID3D11DeviceContext* self,
                                               UINT indexCount, UINT startIndex,
                                               INT baseVertex) {
-  frameMapNoteDraw(self);
   d3d11OriginalsFor(self).drawIndexed(self, indexCount, startIndex, baseVertex);
   ktglPreUiAfterDraw(self);
 }
@@ -490,7 +487,6 @@ void STDMETHODCALLTYPE hookedPreUiDrawIndexed(ID3D11DeviceContext* self,
 void STDMETHODCALLTYPE hookedPreUiDrawIndexedInstanced(
     ID3D11DeviceContext* self, UINT indexCountPerInstance, UINT instanceCount,
     UINT startIndex, INT baseVertex, UINT startInstance) {
-  frameMapNoteDraw(self);
   d3d11OriginalsFor(self).drawIndexedInstanced(self, indexCountPerInstance,
     instanceCount, startIndex, baseVertex, startInstance);
   ktglPreUiAfterDraw(self);
@@ -499,7 +495,6 @@ void STDMETHODCALLTYPE hookedPreUiDrawIndexedInstanced(
 void STDMETHODCALLTYPE hookedPreUiDrawInstanced(
     ID3D11DeviceContext* self, UINT vertexCountPerInstance, UINT instanceCount,
     UINT startVertex, UINT startInstance) {
-  frameMapNoteDraw(self);
   d3d11OriginalsFor(self).drawInstanced(self, vertexCountPerInstance,
     instanceCount, startVertex, startInstance);
   ktglPreUiAfterDraw(self);

@@ -16,7 +16,6 @@
 #include "scene_pass.h"
 #include "sharpen.h"
 #include "smaa.h"
-#include "frame_map.h"
 #include "scene_policy.h"
 #include "supersample.h"
 #include "util.h"
@@ -85,8 +84,7 @@ const ContextHookSpec kScenePassHooks[] = {
 
 // The pre-UI pass's set: the four draw slots a first-draw anchor fires from.
 // The slots and the originals are this file's business; the detours themselves
-// are the engine's, and arrive through ScenePolicy::drawDetours. The frame map
-// rides the same detours so only one set exists on the vtable.
+// are the engine's, and arrive through ScenePolicy::drawDetours.
 //
 // Built at install time rather than declared, because an engine without a draw
 // anchor supplies four nulls and this set is then not installed at all.
@@ -192,7 +190,7 @@ void d3d11InstallHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
   // off from installing nothing and reporting nothing.
   if (!highRes.createTexture2D && !highRes.rasterCorrection &&
       !anisotropyLevel() && !smaaPreUiEnabled() && !ssaaActive() &&
-      !frameMapEnabled() && !sharpenEnabled())
+      !sharpenEnabled())
     return;
 
   // The Phyre module initializes MinHook for Ayesha, but this subsystem is the
@@ -247,9 +245,6 @@ void d3d11InstallHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
   // same detour and substitutes at PSSetShaderResources. Both live here.
   // The pre-UI anchor fires from the draw detours in this set, so a plain SMAA
   // session needs them too -- not just a trace run.
-  // The draw slots belong to the pre-UI pass; the frame map rides along on the
-  // same detours.
-  //
   // ASKED OF THE ENGINE, not of the resolution fix. This used to decline the
   // set whenever `highRes.rasterCorrection || ssaaConfigured()` was true, and
   // then log the decision in KTGL's words. On Ayesha the raster correction is
@@ -258,7 +253,7 @@ void d3d11InstallHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
   // for a reason that has nothing to do with why it does not want it.
   const bool wantsDrawSet =
     (scenePolicy().preUiAtFirstDraw() &&
-     (smaaPreUiEnabled() || sharpenEnabled())) || frameMapEnabled();
+     (smaaPreUiEnabled() || sharpenEnabled()));
   if (wantsDrawSet && (highRes.rasterCorrection || ssaaConfigured()))
     log("Pre-UI anchor: riding the raster correction's draw detours this run"
         " -- one vtable slot cannot hold two, and the anchor is reached through"
@@ -271,8 +266,7 @@ void d3d11InstallHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
   // Sharpening rides the same bind detour: it needs the pre-UI anchor, and the
   // anchor is fed from OMSetRenderTargets. Leaving it out here is how a
   // sharpening-only session installed nothing and reported nothing.
-  if (smaaPreUiEnabled() || ssaaActive() || frameMapEnabled() ||
-      sharpenEnabled())
+  if (smaaPreUiEnabled() || ssaaActive() || sharpenEnabled())
     append(kScenePassHooks,
            int(sizeof(kScenePassHooks) / sizeof(kScenePassHooks[0])));
 

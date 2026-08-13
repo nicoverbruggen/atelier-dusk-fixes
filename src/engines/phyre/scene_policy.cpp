@@ -26,7 +26,6 @@ const ScenePolicy& phyreScenePolicy() {
   static const ScenePolicy policy = {
     phyreAtFirstDraw,
     phyrePreUiNoteTargets,
-    sceneNoPolicy().noteDraw,      // the anchor fires from afterDraw, not here
     phyrePreUiFrameTick,
     phyrePreUiAfterDraw,
     phyreNeedsMainRenderSize,

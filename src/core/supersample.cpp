@@ -80,8 +80,9 @@ unsigned int ssaaPercent() {
     // its reason by several builds and silently refused the setting the ini
     // actually asked for.
     //
-    // 150% is nevertheless RESTORED-BUT-UNPROVEN on this engine: no fractional
-    // factor has ever been run here.
+    // Fractional factors use this path in all three games. Ayesha's scene route
+    // and both KTGL whole-frame routes have been validated in game, including
+    // 150% on Escha & Logy and Shallie.
     if (v == 125 || v == 150 || v == 200 || v == 300 || v == 400)
       return unsigned(v);
     return 100;

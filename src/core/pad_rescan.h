@@ -57,7 +57,7 @@
 //
 // It has no ini key. A correction is not a setting -- the same rule that gives
 // the travel-map cursor an environment switch and nothing else. `DUSK_PAD_RESCAN=0`
-// stands it down for a comparison, and `DUSK_PAD_RESCAN_PROBE=1` still reports.
+// stands it down for a comparison.
 //
 // Arland shares the mechanism instruction-for-instruction, and this measurement
 // is the evidence its own item was waiting on.

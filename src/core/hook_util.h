@@ -2,13 +2,14 @@
 #pragma once
 //
 // Shared low-level hook-installation infrastructure, mirroring the Arland
-// project's hook_util.h: the prologue-match helper, the two detour installers,
+// project's hook_util.h: the prologue-match helper, transactional MinHook
+// installation,
 // and the loaded-module identity every engine module gates on. Non-inline
 // definitions live in hook_util.cpp.
 //
 // Engine-specific hook descriptors do NOT live here. The Dusk trilogy spans two
 // engines with disjoint address packs, so each engine module owns its own table:
-// see `engine/phyre/phyre.h` (Ayesha) and `engine/ktgl/ktgl.h` (Escha & Logy, Shallie).
+// see `engines/phyre/phyre.h` (Ayesha) and `engines/ktgl/ktgl.h` (Escha & Logy, Shallie).
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
@@ -48,15 +49,6 @@ template <size_t N>
 inline bool matches(const BYTE* target, const std::array<BYTE, N>& expected) {
   return !std::memcmp(target, expected.data(), expected.size());
 }
-
-// Write a 14-byte absolute jmp to `target` at `destination`.
-void writeAbsoluteJump(BYTE* destination, const void* target);
-
-// Byte-patch detour: copies the prologue to a trampoline and writes an absolute
-// jump over `target` (requires patchSize >= 14). Returns the trampoline in
-// `original`. False on failure.
-bool installDetour(BYTE* target, const void* replacement,
-                   size_t patchSize, void** original);
 
 // One all-or-nothing MinHook install. Every target is created before any is
 // enabled; a failed create/enable can therefore be rolled back as one owned
@@ -129,9 +121,8 @@ private:
 };
 
 // MinHook-based detour (MinHook owns the trampoline). False on failure. This is
-// what the atlas hooks use: the hooked unlock is a 14-byte stub, too small for
-// installDetour to patch without clobbering what follows. An enable failure
-// removes the created hook before returning so a later attempt can retry.
+// what every address-based detour uses. An enable failure removes the created
+// hook before returning so a later attempt can retry.
 bool installMinHookDetour(BYTE* target, const void* replacement, void** original);
 
 }  // namespace atfix

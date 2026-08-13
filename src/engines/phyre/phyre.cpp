@@ -37,15 +37,14 @@ using atfix::PhyreGame;
 using atfix::currentModuleIdentity;
 using atfix::log;
 
-// The two Ayesha builds. The SHA-256 and .text size for each, together with how
-// every RVA was derived, are recorded in the project's private technical notes.
-//
-// The unlock prologue is per-row because the hooked unlock is a jmp stub and its
-// 16-byte window carries the rel32 displacement. The other three windows are
-// build-independent and live in atlas_fix.cpp with the hooks that check them.
+// The two Ayesha builds. Each row carries the executable's exact .text size and
+// the RVAs derived from that build. The unlock prologue is per-row because the
+// hooked unlock is a jmp stub whose 16-byte window contains a rel32
+// displacement; the render and lock windows are build-independent and live
+// beside their hooks in atlas_fix.cpp.
 constexpr PhyreGame kGames[] = {
   { "Atelier_Ayesha_EN.exe", 0x984df4,
-    0x078320, 0x74bd90, 0x581420, 0x581460,
+    0x74bd90, 0x581420, 0x581460,
     { 0x44, 0x8b, 0xc2, 0x33, 0xd2, 0xe9, 0x01, 0xff,
       0xa7, 0xff, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc },
     0x584fb0,
@@ -53,7 +52,7 @@ constexpr PhyreGame kGames[] = {
       0xd9, 0x48, 0x8b, 0x0d, 0x80, 0x51, 0x4e, 0x01 },
     BuildEnglish },
   { "Atelier_Ayesha.exe", 0x9a9604,
-    0x07a8d0, 0x76e290, 0x5a3920, 0x5a3960,
+    0x76e290, 0x5a3920, 0x5a3960,
     { 0x44, 0x8b, 0xc2, 0x33, 0xd2, 0xe9, 0x01, 0xda,
       0xa5, 0xff, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc },
     0x5a74b0,
@@ -101,23 +100,19 @@ bool initializePhyreFixes() {
     registerPhyreSceneTarget();
 
     const bool wantCache = atfix::featureEnabled(atfix::Feature::AtlasCache);
-    const bool wantStats = atfix::featureEnabled(atfix::Feature::AtlasStats);
-    const bool wantTrace = atfix::featureEnabled(atfix::Feature::AtlasTrace);
     const bool wantVerify = atfix::featureEnabled(atfix::Feature::AtlasVerify);
-    const bool wantCensus = atfix::featureEnabled(atfix::Feature::AtlasCensus);
     const bool wantWorldMap =
       atfix::featureEnabled(atfix::Feature::WorldMapCursor);
     const bool wantField =
       atfix::featureEnabled(atfix::Feature::FieldEngineFix) ||
-      atfix::featureEnabled(atfix::Feature::FieldStabilizer) ||
-      atfix::fieldTraceEnabled();
+      atfix::featureEnabled(atfix::Feature::FieldStabilizer);
     const bool wantLogoSkip =
       atfix::featureEnabled(atfix::Feature::SkipStartupLogos);
     const bool wantMovieSkip =
       atfix::featureEnabled(atfix::Feature::SkipIntroMovie);
     const bool wantAddressFix =
-      wantCache || wantStats || wantTrace || wantVerify || wantCensus ||
-      wantField || wantWorldMap || wantLogoSkip || wantMovieSkip;
+      wantCache || wantVerify || wantField || wantWorldMap || wantLogoSkip ||
+      wantMovieSkip;
     if (wantAddressFix) {
       // ALREADY_INITIALIZED is a success here. DllMain initializes MinHook for
       // the window-background fix, which has to be in place before the game
@@ -130,9 +125,8 @@ bool initializePhyreFixes() {
       }
     }
 
-    if (wantCache || wantStats || wantTrace || wantVerify || wantCensus)
-      installAtlasFix(g_base, *g_game, wantCache, wantStats, wantTrace,
-                      wantVerify, wantCensus);
+    if (wantCache || wantVerify)
+      installAtlasFix(g_base, *g_game, wantCache, wantVerify);
 
     // Independent of the atlas hooks: the field fix has its own addresses and
     // its own prologue checks, so it installs (or declines) on its own terms.

@@ -39,10 +39,9 @@
 // DLL_PROCESS_ATTACH, before the game's entry point, so it is in place by the
 // time the class is registered.
 //
-// ESCHA & LOGY AND SHALLIE ARE NOT COVERED, and this file needs no per-game
-// gate to express that. Neither executable contains the string "KTGL.A11" at
-// all, so the name test below simply never matches there. If their own class
-// name is ever established, adding it to the test is the whole change.
+// Escha & Logy and Shallie use the same registration path with a different
+// class and brush. Their measured `ElixirFramework`/WHITE_BRUSH pair is the
+// second exact row below.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
@@ -72,9 +71,9 @@ PFN_RegisterClassExA originalRegisterClassExA = nullptr;
 //
 // The brush is part of the row rather than a separate test, so a class is only
 // touched when it is painting the exact colour this fix exists to replace. Read
-// from the game at the moment it registers the class, with
-// DUSK_WINDOW_CLASS_TRACE=1; two rounds of guessing the name out of strings in
-// the image found the wrong candidate in one game and nothing in the other.
+// from the game at the moment it registered the class; two rounds of guessing
+// the name out of strings in the image found the wrong candidate in one game
+// and nothing in the other.
 struct EngineClass {
   const char* name;
   int stockBrush;
@@ -96,50 +95,9 @@ const EngineClass* engineClassFor(const WNDCLASSEXA* wc) {
   return nullptr;
 }
 
-// `DUSK_WINDOW_CLASS_TRACE=1` names every class the executable registers, with
-// the stock brush its background is, if any.
-//
-// WHY IT EXISTS. The substitution below is keyed on a class name read out of
-// Ayesha's executable, and Shallie starts on a WHITE screen -- so its class is
-// named something else, or its brush is a different stock object, or both. The
-// three games all import RegisterClassExA, so the hook is live in all of them
-// and the rule is simply declining. Guessing a second name from strings in the
-// image found `A11R` in Escha and nothing at all in Shallie, which is exactly
-// the kind of resemblance this project has been caught by before. The game
-// states its own class name at the moment it registers it; this reads it there.
-bool classTraceEnabled() {
-  const char* value = std::getenv("DUSK_WINDOW_CLASS_TRACE");
-  return value && value[0] != '0';
-}
-
-const char* stockBrushName(HBRUSH brush) {
-  if (!brush) return "none";
-  struct Entry { int id; const char* name; };
-  static const Entry kStock[] = {
-    { WHITE_BRUSH, "WHITE_BRUSH" }, { LTGRAY_BRUSH, "LTGRAY_BRUSH" },
-    { GRAY_BRUSH, "GRAY_BRUSH" },   { DKGRAY_BRUSH, "DKGRAY_BRUSH" },
-    { BLACK_BRUSH, "BLACK_BRUSH" }, { NULL_BRUSH, "NULL_BRUSH" },
-  };
-  for (const Entry& e : kStock)
-    if (brush == static_cast<HBRUSH>(GetStockObject(e.id)))
-      return e.name;
-  // A system-colour brush is passed as COLOR_x + 1 rather than a handle, which
-  // is why this is worth telling apart from a real brush.
-  if (reinterpret_cast<uintptr_t>(brush) <= 32)
-    return "system colour (COLOR_x + 1)";
-  return "a brush of its own";
-}
-
 ATOM WINAPI hookedRegisterClassExA(const WNDCLASSEXA* wc) {
   if (!wc)
     return originalRegisterClassExA(wc);
-
-  if (classTraceEnabled() && wc->hInstance == GetModuleHandleW(nullptr))
-    log("WINCLASS name=\"",
-        (wc->lpszClassName && !IS_INTRESOURCE(wc->lpszClassName))
-          ? wc->lpszClassName : "(atom)",
-        "\" background=", stockBrushName(wc->hbrBackground),
-        " style=0x", std::hex, wc->style, std::dec);
 
   // Two conditions have to hold together: the class comes from the executable
   // itself rather than from an injected DLL, and it matches one of the rows

@@ -10,6 +10,10 @@
 #include "config.h"
 #include "game.h"
 #include "log.h"
+#include "sampler.h"
+#include "sharpen.h"
+#include "smaa.h"
+#include "supersample.h"
 
 namespace atfix {
 
@@ -89,22 +93,75 @@ void logConfiguration() {
     return;
   }
   log("Config: ", path);
-  // Reported per feature rather than by dumping the file, so the line says what
-  // is in force after the capability matrix has had its say. A feature the
-  // running game does not support is hard off and has no ini key at all, which
-  // is exactly what "unsupported" should look like in a log.
-  static const struct { Feature feature; const char* name; } kReported[] = {
+  // Reported per feature rather than by dumping the file, so these lines say
+  // what is in force after environment overrides and the capability matrix.
+  // Unsupported is distinct from off: an ini key or environment variable
+  // cannot activate that feature for this game.
+  static const struct { Feature feature; const char* name; } kSwitches[] = {
+    { Feature::AtlasVerify,      "AtlasVerify" },
+    { Feature::TargetCensus,     "TargetCensus" },
     { Feature::HighResRendering, "HighResolution" },
-    { Feature::AtlasCache,      "AtlasCache" },
-    { Feature::FieldEngineFix,  "FieldEngineFix" },
-    { Feature::FieldStabilizer, "FieldStabilizer" },
+    { Feature::AtlasCache,       "AtlasCache" },
+    { Feature::FieldEngineFix,   "FieldEngineFix" },
+    { Feature::FieldStabilizer,  "FieldStabilizer" },
+    { Feature::WorldMapCursor,   "WorldMapCursor" },
+    { Feature::SkipStartupLogos, "SkipLogos" },
+    { Feature::SkipIntroMovie,   "SkipIntroMovie" },
+    { Feature::LoadingTextTypo,  "LoadingTextCorrection" },
+    { Feature::SystemSaveGuard,  "SystemSaveGuard" },
+    { Feature::PadRescanBackoff, "PadRescanBackoff" },
+    { Feature::SynthesisAnimationRate, "SynthesisAnimationRate" },
   };
-  for (const auto& row : kReported) {
+  for (const auto& row : kSwitches) {
     if (featureSupport(row.feature) == Support::Unsupported)
       log("Config:   ", row.name, " = unsupported on this game");
     else
       log("Config:   ", row.name, " = ",
         featureEnabled(row.feature) ? "on" : "off");
+  }
+
+  if (featureSupport(Feature::Smaa) == Support::Unsupported) {
+    log("Config:   SMAA = unsupported on this game");
+  } else {
+    log("Config:   SMAA = ", smaaEnabled() ? "on" : "off",
+        "; pre-UI = ", smaaPreUiEnabled() ? "on" : "off");
+  }
+
+  if (featureSupport(Feature::Supersampling) == Support::Unsupported) {
+    log("Config:   Supersampling = unsupported on this game");
+  } else {
+    log("Config:   Supersampling = ", ssaaPercent(),
+        "%; downscale sharpen = ",
+        static_cast<unsigned int>(ssaaSharpen() * 100.0f + 0.5f), "%");
+  }
+
+  if (featureSupport(Feature::AnisotropicFiltering) == Support::Unsupported)
+    log("Config:   AnisotropicFiltering = unsupported on this game");
+  else
+    log("Config:   AnisotropicFiltering = ", anisotropyLevel(), "x");
+
+  log("Config:   Sharpen = ",
+      static_cast<unsigned int>(sharpenAmount() * 100.0f + 0.5f), "%");
+
+  if (featureSupport(Feature::ControlPromptHold) == Support::Unsupported) {
+    log("Config:   ControlPrompt = unsupported on this game");
+  } else if (!featureEnabled(Feature::ControlPromptHold)) {
+    log("Config:   ControlPrompt = original animation");
+  } else {
+    log("Config:   ControlPrompt = ",
+        duskConfigBool("Interface", "HideControlPrompt", false)
+          ? "hidden" : "steady");
+  }
+
+  if (currentEngine() == Engine::Ktgl) {
+    const int width = duskConfigInt("Rendering", "DisplayWidth", 0);
+    const int height = duskConfigInt("Rendering", "DisplayHeight", 0);
+    if (width > 0 && height > 0)
+      log("Config:   DisplaySize = ", width, "x", height);
+    else
+      log("Config:   DisplaySize = automatic desktop size");
+  } else {
+    log("Config:   DisplaySize = managed by the game on this engine");
   }
 }
 

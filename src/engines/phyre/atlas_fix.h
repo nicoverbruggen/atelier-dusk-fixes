@@ -8,17 +8,13 @@
 
 namespace dusk {
 
-// Installs the four Ayesha font-atlas hooks on an already-recognized build, and
-// arms whichever of the two consumers was asked for: `cache` is the shipping fix
-// (DUSK_ATLAS_CACHE), `stats` the diagnostic that justified it
-// (DUSK_ATLAS_STATS). They are independent and can run together, which is how a
-// run shows the collapse rather than asserting it.
+// Installs the three Ayesha font-atlas hooks on an already-recognized build and
+// arms the shipping cache when requested. The render-text hook identifies atlas
+// work, the lock hook serves or creates snapshots, and the unlock hook suppresses
+// synthetic unlocks or invalidates snapshots whose mapping history is unknown.
 //
-// Behaviour arms only if all four hooks install, so a partial install is
+// Behaviour arms only if all three hooks install, so a partial install is
 // pass-through rather than half-caching. Returns that outcome.
-// `trace` additionally records one steady-state frame's raw lock/unlock
-// sequence (DUSK_ATLAS_TRACE) and requires `stats`, which is what supplies the
-// frame accounting it picks its frame from.
 //
 // `verify` (DUSK_ATLAS_VERIFY) compares each snapshot against the real atlas
 // before serving it, for as long as that snapshot is supposed to match. It
@@ -26,20 +22,13 @@ namespace dusk {
 // slow. It is the machine-checked answer to "would this have shown a wrong
 // glyph", which a playthrough cannot give.
 //
-// `census` (DUSK_ATLAS_CENSUS) is independent of all of the above and needs
-// none of them: it enumerates, by (caller RVA, thread, mode) tuple, every
-// call to the atlas lock on a 512x512 texture, regardless of `output`,
-// `renderTextDepth` or drain state -- the whole point is to see the callers
-// the cache's own eligibility rule excludes. It exists to answer "who can
-// write a font atlas, and from how many threads" by listing every caller
-// rather than sampling one.
 bool installAtlasFix(BYTE* base, const atfix::PhyreGame& game,
-                     bool cache, bool stats, bool trace, bool verify,
-                     bool census);
+                     bool cache, bool verify);
 
 // Called from Present. This is the atlas cache's frame boundary: Ayesha measured
 // as the frame-scoped (Rorona-class) case, so every snapshot is discarded here.
-// It also closes out the diagnostic's per-frame counters.
+// It also emits a sparse session-health line for the cache and any enabled
+// verifier report.
 void atlasFixFrameTick();
 
 }  // namespace dusk

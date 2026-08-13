@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// Right-sizing the game window for Escha & Logy and Shallie, at creation.
+// Right-sizing the game window for Escha & Logy and Shallie before D3D starts.
 //
 // WHY THE WINDOW IS WRONG AT ALL. Supersampling on these two works by writing
 // the game's own Setting.ini at base x factor, so the engine renders everything
@@ -9,11 +9,11 @@
 // for a 2880x1620 window to hold a 1920x1080 image. Fullscreen hides this
 // because the display mode decides the size instead.
 //
-// WHY AT CREATION RATHER THAN AFTER. Correcting it once the window exists works,
-// and that is what shipped first, but the player sees the wrong window and then
-// watches it change -- more than once, because more than one thing along the
-// startup path sets a size. Sizing the CreateWindowEx call means the window is
-// never wrong, so there is nothing to correct and nothing to see.
+// WHY BEFORE D3D RATHER THAN AFTER. Correcting it once the swap chain exists
+// works, but the player first sees the oversized window and then watches it
+// change. The measured path creates a placeholder window and assigns its real
+// size through SetWindowPos before touching D3D11, so that call is the primary
+// correction. CreateWindowExA covers a variant that supplies a size directly.
 //
 // WHAT IS SUBSTITUTED. The size handed to CreateWindowEx is the WINDOW rect,
 // frame included, while the size that has to come out right is the CLIENT area.
@@ -22,12 +22,11 @@
 // every theme or under every compositor, and guessing here would trade one
 // wrong size for another.
 //
-// HOW THE WINDOW IS IDENTIFIED. Three things together, because none alone is
-// enough. The call must come from the game's own module; the clamp route must be
-// active, which only happens on these two games with supersampling on; and the
-// requested client area must actually be the render size the mod is clamping
-// away. A window the game opens for anything else does not match the third and
-// is left alone.
+// HOW THE WINDOW IS IDENTIFIED. The hooks change nothing unless the KTGL clamp
+// route is active, which requires one of these games with supersampling on, and
+// the requested client area is larger than the configured display size. The
+// CreateWindowExA route additionally requires a top-level window created by the
+// game module. Smaller utility windows pass through unchanged.
 //
 // The post-creation fit in core stays as it is. It costs nothing once this hook
 // has done its job, since it returns immediately when the client area is already
@@ -36,7 +35,6 @@
 #include <windows.h>
 
 #include <atomic>
-#include <cstdlib>
 
 #include "window_size.h"
 #include "../../core/hook_util.h"
@@ -111,57 +109,12 @@ HWND WINAPI hookedCreateWindowExA(DWORD exStyle, LPCSTR className,
                                  param);
 }
 
-// ---- DUSK_WINDOW_TRACE ------------------------------------------------------
-//
-// Where does the game's window actually get its size? The creation hook above
-// never saw it: the only CreateWindowExA it caught passed CW_USEDEFAULT, while
-// the window that reached the swap chain was 2562x1416. So the size is set
-// somewhere else, and rather than guess between the candidates a third time,
-// this records all of them. Bounded, because SetWindowPos is called freely.
-
-using PFN_CreateWindowExW = HWND (WINAPI*)(DWORD, LPCWSTR, LPCWSTR, DWORD, int,
-                                           int, int, int, HWND, HMENU,
-                                           HINSTANCE, LPVOID);
 using PFN_SetWindowPos = BOOL (WINAPI*)(HWND, HWND, int, int, int, int, UINT);
-using PFN_MoveWindow = BOOL (WINAPI*)(HWND, int, int, int, int, BOOL);
 
-PFN_CreateWindowExW originalCreateWindowExW = nullptr;
 PFN_SetWindowPos originalSetWindowPos = nullptr;
-PFN_MoveWindow originalMoveWindow = nullptr;
 
-std::atomic<bool> tracing{false};
-std::atomic<int> traceLines{0};
-constexpr int kTraceLimit = 24;
-
-bool traceRoom() {
-  if (!tracing.load(std::memory_order_relaxed))
-    return false;
-  const int n = traceLines.fetch_add(1, std::memory_order_relaxed);
-  if (n == kTraceLimit)
-    log("WINDOWTRACE: ", std::dec, kTraceLimit,
-        " lines logged; further window calls are not listed");
-  return n < kTraceLimit;
-}
-
-HWND WINAPI tracedCreateWindowExW(DWORD exStyle, LPCWSTR className,
-                                  LPCWSTR windowName, DWORD style, int x, int y,
-                                  int width, int height, HWND parent,
-                                  HMENU menu, HINSTANCE instance,
-                                  LPVOID param) {
-  if (traceRoom())
-    log("WINDOWTRACE: CreateWindowExW ", std::dec, width, "x", height,
-        " at ", x, ",", y, instance == GetModuleHandleW(nullptr)
-          ? " (game module)" : " (other module)");
-  return originalCreateWindowExW(exStyle, className, windowName, style, x, y,
-                                 width, height, parent, menu, instance, param);
-}
-
-BOOL WINAPI tracedSetWindowPos(HWND hwnd, HWND after, int x, int y, int cx,
+BOOL WINAPI hookedSetWindowPos(HWND hwnd, HWND after, int x, int y, int cx,
                                int cy, UINT flags) {
-  if (!(flags & SWP_NOSIZE) && traceRoom())
-    log("WINDOWTRACE: SetWindowPos ", std::dec, cx, "x", cy, " at ", x, ",", y,
-        (flags & SWP_NOMOVE) ? " (size only)" : "");
-
   // THIS is where the window gets its size, not CreateWindowEx. A trace
   // showed the window created 1x1 by another module and then sized
   // here to 2890x1656 -- a 2880x1620 client plus frame -- before the game ever
@@ -203,42 +156,6 @@ BOOL WINAPI tracedSetWindowPos(HWND hwnd, HWND after, int x, int y, int cx,
   return originalSetWindowPos(hwnd, after, x, y, cx, cy, flags);
 }
 
-BOOL WINAPI tracedMoveWindow(HWND hwnd, int x, int y, int width, int height,
-                             BOOL repaint) {
-  if (traceRoom())
-    log("WINDOWTRACE: MoveWindow ", std::dec, width, "x", height, " at ", x,
-        ",", y);
-  return originalMoveWindow(hwnd, x, y, width, height, repaint);
-}
-
-void installWindowTrace(HMODULE user32) {
-  // The SetWindowPos detour is the FIX, so it goes in whether or not the trace
-  // is on; DUSK_WINDOW_TRACE only decides whether these three also narrate.
-  const char* on = std::getenv("DUSK_WINDOW_TRACE");
-  tracing.store(on && on[0] != '0', std::memory_order_relaxed);
-  struct Hook { const char* name; void* replacement; void** original; };
-  const Hook kHooks[] = {
-    { "CreateWindowExW", reinterpret_cast<void*>(&tracedCreateWindowExW),
-      reinterpret_cast<void**>(&originalCreateWindowExW) },
-    { "SetWindowPos", reinterpret_cast<void*>(&tracedSetWindowPos),
-      reinterpret_cast<void**>(&originalSetWindowPos) },
-    { "MoveWindow", reinterpret_cast<void*>(&tracedMoveWindow),
-      reinterpret_cast<void**>(&originalMoveWindow) },
-  };
-  int live = 0;
-  for (const Hook& hook : kHooks) {
-    void* target = reinterpret_cast<void*>(GetProcAddress(user32, hook.name));
-    if (target && installMinHookDetour(static_cast<BYTE*>(target),
-                                       hook.replacement, hook.original))
-      ++live;
-    else
-      log("WINDOWTRACE: could not hook ", hook.name);
-  }
-  if (tracing.load(std::memory_order_relaxed))
-    log("WINDOWTRACE: active, ", std::dec, live,
-        " of 3 entry points (nothing is changed)");
-}
-
 }  // namespace
 
 bool installKtglWindowSize() {
@@ -253,7 +170,19 @@ bool installKtglWindowSize() {
   HMODULE user32 = GetModuleHandleA("user32.dll");
   if (!user32)
     return false;
-  installWindowTrace(user32);
+
+  // The engine creates its window at a placeholder size and assigns the real
+  // one here before touching D3D11, so this hook is the primary correction.
+  void* setWindowPos = reinterpret_cast<void*>(
+    GetProcAddress(user32, "SetWindowPos"));
+  if (!setWindowPos ||
+      !installMinHookDetour(static_cast<BYTE*>(setWindowPos),
+                            reinterpret_cast<void*>(&hookedSetWindowPos),
+                            reinterpret_cast<void**>(&originalSetWindowPos))) {
+    log("SSAA present clamp: could not hook SetWindowPos; the window is"
+        " corrected after creation instead");
+  }
+
   void* target = reinterpret_cast<void*>(
     GetProcAddress(user32, "CreateWindowExA"));
   if (!target) {

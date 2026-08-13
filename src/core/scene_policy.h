@@ -34,14 +34,10 @@ struct ScenePolicy {
   bool (*preUiAtFirstDraw)();
 
   // The draw-stream anchor, when there is one. noteTargets watches the binds
-  // and arms; noteDraw returns the surface to run the pass on, or null on every
-  // draw that is not the moment. Never null pointers -- an engine without a
-  // draw anchor supplies the empty pair, so no caller has to test first. A
-  // non-null noteDraw result is an owned COM reference; the engine callback
-  // that consumes it must release it after the pass.
+  // and arms. Never null: an engine without that anchor supplies the empty
+  // callback, so no caller has to test first.
   void (*noteTargets)(ID3D11DeviceContext* context, unsigned int numViews,
                       ID3D11RenderTargetView* const* views);
-  ID3D11Texture2D* (*noteDraw)(ID3D11DeviceContext* context);
   void (*frameTick)();
 
   // Called from WHICHEVER draw detour is installed, after the draw is

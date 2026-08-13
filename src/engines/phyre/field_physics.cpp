@@ -15,10 +15,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-#include <atomic>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 
 #include "field_physics.h"
@@ -54,10 +52,7 @@ constexpr uintptr_t kGroundedOffset = 0x38;   // see above: really byte +0x39
 constexpr uintptr_t kVelOffset = 0x50;        // three contiguous floats
 constexpr uintptr_t kVelYOffset = 0x54;
 constexpr uintptr_t kPosOffset = 0x60;
-constexpr uintptr_t kPosYOffset = 0x64;
 constexpr uintptr_t kEntryPosOffset = 0x70;   // pos is copied here at entry
-constexpr uintptr_t kEntryPosYOffset = 0x74;
-constexpr uintptr_t kFootYOffset = 0xb0;
 constexpr uintptr_t kAirTimerOffset = 0xb8;
 constexpr uint32_t kGroundedBit = 0x100;
 
@@ -138,7 +133,6 @@ void applyThreshold(float dt) {
 }
 
 bool g_stabilizerActive = false;   // false unless requested and verified
-bool g_stabilizerHeld = false;     // whether the last frame was actually held
 
 // A speed low enough that nothing the player is doing produces it, but not
 // exactly zero, since these components come out of float arithmetic. For scale,
@@ -207,7 +201,6 @@ bool controllerWritable(uintptr_t self) {
 // entry-position copy on the way in, so the same test applied after the call
 // compares a value against itself, always passes, and describes nothing.
 void applyRestingStabilizer(uintptr_t self, float dt) {
-  g_stabilizerHeld = false;
   if (!g_stabilizerActive || !(dt > 0.0f) || !controllerWritable(self))
     return;
 
@@ -236,104 +229,9 @@ void applyRestingStabilizer(uintptr_t self, float dt) {
   std::memcpy(reinterpret_cast<void*>(self + kVelYOffset), &zero, sizeof(zero));
   std::memcpy(reinterpret_cast<void*>(self + kAirTimerOffset), &zero,
               sizeof(zero));
-  g_stabilizerHeld = true;
-}
-
-struct ControllerState {
-  float posY = 0.0f;
-  float velY = 0.0f;
-  float entryPosY = 0.0f;
-  float footY = 0.0f;
-  uint32_t grounded = 0;
-  bool valid = false;
-};
-
-ControllerState readState(uintptr_t self) {
-  ControllerState state;
-  state.valid = tryRead(self + kPosYOffset, state.posY) &&
-                tryRead(self + kVelYOffset, state.velY) &&
-                tryRead(self + kGroundedOffset, state.grounded);
-  if (!state.valid)
-    return state;
-  tryRead(self + kEntryPosYOffset, state.entryPosY);
-  tryRead(self + kFootYOffset, state.footY);
-  return state;
-}
-
-// A short ring of recent frames, dumped around each contact change so the event
-// is readable instead of buried in per-frame noise.
-struct Frame {
-  float dt = 0.0f;
-  ControllerState before;
-  ControllerState after;
-  bool stabilized = false;
-  bool used = false;
-};
-
-constexpr size_t kRing = 6;
-constexpr uint32_t kMaxWindows = 8;
-Frame g_ring[kRing];
-size_t g_ringHead = 0;
-uint32_t g_windows = 0;
-uint32_t g_pendingAfter = 0;
-uint32_t g_frameIndex = 0;
-
-void emitFrame(const Frame& f, const char* tag, uint32_t index) {
-  log("FIELDPHYS ", tag, " n=", std::dec, index,
-      " dt=", f.dt,
-      " y=", f.before.posY, "->", f.after.posY,
-      " entry_y=", f.after.entryPosY,
-      " vy=", f.before.velY, "->", f.after.velY,
-      " flags=0x", std::hex, f.before.grounded, "->0x", f.after.grounded,
-      std::dec,
-      " foot=", f.after.footY,
-      " threshold=", g_moveThreshold ? *g_moveThreshold : kShippedThreshold,
-      " held=", f.stabilized ? 1 : 0);
-}
-
-void traceFrame(float dt, const ControllerState& before,
-                const ControllerState& after) {
-  if (!before.valid || !after.valid)
-    return;
-  const uint32_t index = ++g_frameIndex;
-  Frame frame;
-  frame.dt = dt;
-  frame.before = before;
-  frame.after = after;
-  frame.stabilized = g_stabilizerHeld;
-  frame.used = true;
-
-  if (g_pendingAfter) {
-    --g_pendingAfter;
-    emitFrame(frame, "post ", index);
-    return;
-  }
-  const bool contactChanged =
-    ((before.grounded ^ after.grounded) & kGroundedBit) != 0;
-  if (contactChanged && g_windows < kMaxWindows) {
-    ++g_windows;
-    log("FIELDPHYS --- contact ",
-        (after.grounded & kGroundedBit) ? "GAINED" : "LOST",
-        " (window ", std::dec, g_windows, " of ", kMaxWindows, ") ---");
-    for (size_t i = 0; i < kRing; ++i) {
-      const Frame& past = g_ring[(g_ringHead + i) % kRing];
-      if (past.used)
-        emitFrame(past, "pre  ", 0);
-    }
-    emitFrame(frame, "AT   ", index);
-    g_pendingAfter = kRing;
-    return;
-  }
-  g_ring[g_ringHead] = frame;
-  g_ringHead = (g_ringHead + 1) % kRing;
 }
 
 void STDMETHODCALLTYPE tracedFieldUpdate(uintptr_t self, float dt) {
-  const bool tracing = fieldTraceEnabled();
-  // Snapshot first, so the trace shows the state the stabilizer judged rather
-  // than the state it left behind.
-  const ControllerState before = tracing ? readState(self) : ControllerState{};
-
   // Both of these belong before the update, for different reasons: the threshold
   // so the resolver this call drives reads the value meant for this frame, the
   // stabilizer because Update overwrites the entry-position copy it tests.
@@ -341,8 +239,6 @@ void STDMETHODCALLTYPE tracedFieldUpdate(uintptr_t self, float dt) {
   applyRestingStabilizer(self, dt);
 
   originalFieldUpdate(self, dt);
-  if (tracing)
-    traceFrame(dt, before, readState(self));
 }
 
 // Confirm the threshold really holds the shipped value, and make its page
@@ -372,14 +268,6 @@ bool prepareThreshold(BYTE* base, const FieldPhysicsAddrs& addrs,
 
 }  // namespace
 
-bool fieldTraceEnabled() {
-  static const bool enabled = [] {
-    const char* value = std::getenv("DUSK_FIELD_TRACE");
-    return value && value[0] != '0';
-  }();
-  return enabled;
-}
-
 bool installFieldPhysics(BYTE* base, uint8_t exeBuild) {
   const bool wantFix = engineFixEnabled();
   // The stabilizer holds the character only while it is grounded, and without
@@ -393,7 +281,7 @@ bool installFieldPhysics(BYTE* base, uint8_t exeBuild) {
     log("FIELDPHYS stabilizer needs the threshold rescale; leaving it off");
     wantStabilizer = false;
   }
-  if (!wantFix && !wantStabilizer && !fieldTraceEnabled()) {
+  if (!wantFix && !wantStabilizer) {
     log("FIXES field_physics=off");
     return false;
   }
@@ -449,7 +337,6 @@ bool installFieldPhysics(BYTE* base, uint8_t exeBuild) {
   log("FIXES field_physics=", installed ? "active" : "failed",
       " engine_fix=", installed && g_moveThreshold ? 1 : 0,
       " stabilizer=", g_stabilizerActive ? 1 : 0);
-  log("DIAGNOSTICS field_trace=", fieldTraceEnabled() ? 1 : 0);
   return installed;
 }
 

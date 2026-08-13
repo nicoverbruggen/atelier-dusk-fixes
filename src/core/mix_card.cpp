@@ -4,9 +4,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-#include <atomic>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 
 #include "mix_card.h"
@@ -52,18 +50,8 @@ const float kRate = bitsToFloat(0x426FC28Fu);
 // of zero; anything a whole second in the past is not recoverable state.
 constexpr float kDriftFloor = -1.0f;
 
-std::atomic<uint64_t> g_calls{0};
-std::atomic<uint64_t> g_ticked{0};
-std::atomic<uint64_t> g_skipped{0};
-std::atomic<uint64_t> g_healed{0};
-
 bool fixEnabled() {
   return featureEnabled(Feature::SynthesisAnimationRate);
-}
-
-bool probeEnabled() {
-  const char* value = std::getenv("DUSK_MIXCARD_PROBE");
-  return value && value[0] != '0';
 }
 
 bool STDMETHODCALLTYPE tracedCardUpdate(uintptr_t self, float dt) {
@@ -74,22 +62,16 @@ bool STDMETHODCALLTYPE tracedCardUpdate(uintptr_t self, float dt) {
   if (!tryRead(self + kAccumulator, accumulated))
     return originalCardUpdate(self, dt);   // unreadable: leave the engine alone
 
-  g_calls.fetch_add(1, std::memory_order_relaxed);
-
-  if (accumulated < kDriftFloor) {
+  if (accumulated < kDriftFloor)
     accumulated = 0.0f;
-    g_healed.fetch_add(1, std::memory_order_relaxed);
-  }
 
   const float next = accumulated + dt;
 
   // The engine's own predicate, evaluated the way the engine evaluates it. When
   // a tick is due the original runs completely untouched -- it re-reads the same
   // field, recomputes the same count, and behaves bit-for-bit as shipped.
-  if (static_cast<int>(next * kRate) >= 1) {
-    g_ticked.fetch_add(1, std::memory_order_relaxed);
+  if (static_cast<int>(next * kRate) >= 1)
     return originalCardUpdate(self, dt);
-  }
 
   // No tick this frame. Bank the elapsed time so it is not lost; the next frame
   // that crosses the threshold spends it.
@@ -97,7 +79,6 @@ bool STDMETHODCALLTYPE tracedCardUpdate(uintptr_t self, float dt) {
     std::memcpy(reinterpret_cast<void*>(self + kAccumulator), &next,
                 sizeof(next));
   }
-  g_skipped.fetch_add(1, std::memory_order_relaxed);
   return true;   // the original's only exit is `mov al, 1`
 }
 
@@ -125,26 +106,8 @@ bool installMixCardFix(BYTE* base, const MixCardTarget& target) {
     reinterpret_cast<void**>(&originalCardUpdate));
 
   log("FIXES synthesis_rate=", ok ? "active" : "failed",
-      " update_rva=0x", std::hex, target.updateRva, std::dec,
-      " probe=", probeEnabled() ? 1 : 0);
+      " update_rva=0x", std::hex, target.updateRva, std::dec);
   return ok;
-}
-
-// Reported from the frame tick so a run can be judged without a debugger. The
-// whole measurement is ticks-per-second against frames-per-second: the first
-// should stay near 59.9 -- or 119.9 while the synthesis state is running, since
-// the container is pumped twice per frame there -- and the second should scale
-// with refresh rate.
-void mixCardReport() {
-  if (!probeEnabled())
-    return;
-  const uint64_t calls = g_calls.load(std::memory_order_relaxed);
-  if (!calls)
-    return;
-  log("MIXCARD calls=", std::dec, calls,
-      " ticked=", g_ticked.load(std::memory_order_relaxed),
-      " skipped=", g_skipped.load(std::memory_order_relaxed),
-      " drift_heals=", g_healed.load(std::memory_order_relaxed));
 }
 
 }  // namespace atfix

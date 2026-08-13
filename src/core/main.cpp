@@ -22,21 +22,19 @@
 #include "game.h"
 #include "hook_util.h"
 #include "log.h"
-#include "pad_notify_trace.h"
 #include "d3d11_hooks.h"
 #include "highres.h"
 #include "sampler.h"
-#include "frame_map.h"
 #include "scene_policy.h"
 #include "scene_pass.h"
 #include "sharpen.h"
 #include "smaa.h"
-#include "frame_capture.h"
 #include "supersample.h"
 #include "supersample_policy.h"
 #include "util.h"
 #include "window_background.h"
 #include "version.h"
+#include "version_git.h"
 #include "../../vendor/minhook/include/MinHook.h"
 
 #ifdef _MSC_VER
@@ -93,7 +91,8 @@ D3D11Proc loadSystemD3D11() {
   // thing it has touched.
   if (!std::getenv("DUSK_DISABLE") || std::getenv("DUSK_DISABLE")[0] == '0')
     installCrashLogger();
-  log("Atelier Dusk Fixes version ", DUSK_FIX_VERSION);
+  log("Atelier Dusk Fixes version ", DUSK_FIX_VERSION,
+      " build=", DUSK_FIX_GIT);
   log("Title: ", titleName(currentTitle()));
   logConfiguration();
 
@@ -151,18 +150,16 @@ PFN_IDXGISwapChain_Present originalPresent = nullptr;
 HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* swapChain,
                                         UINT syncInterval, UINT flags) {
   // The frame boundary. For the Phyre module this is the atlas cache's entire
-  // lifetime, not just where the diagnostic attributes out-of-drain locks.
+  // lifetime: every snapshot is discarded before the next frame is presented.
   dusk::engineFrameTick();
   highResFrameTick();
-  // Counters and one-shot diagnostics ONLY. Supersampling deliberately does no
+  // Counters and health reports ONLY. Supersampling deliberately does no
   // rendering work at Present: two of its four failed predecessors blacked the
   // screen out with a present-time pass painting over a finished frame, and the
   // absence of one here is this design's safety argument rather than an
   // optimisation. See supersample.h.
   ssaaFrameTick(swapChain);
-  frameCaptureTick(swapChain);
   scenePassFrameTick();
-  frameMapFrameTick();
   scenePolicy().frameTick();
   sharpenPreload();
   samplerReport();

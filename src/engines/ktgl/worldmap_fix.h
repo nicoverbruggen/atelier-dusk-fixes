@@ -40,14 +40,10 @@
 // engines/phyre/worldmap_fix.h for the argument in full; only the address pack,
 // the offsets and the publish differ.
 //
-// UNSETTLED, and it is the reason the probe exists. Which world-map state the
-// player occupies while moving the cursor is not proven. Two independent static
-// investigations disagreed: one traced the stick reader forward to this mover,
-// the other found a second mover on the same screen whose easing is
-// dt-correct and identical between the two games. Both can be true -- two
-// movement modes on one screen. `DUSK_WORLDMAP_PROBE=1` measures which is
-// running: raw units per second should scale with refresh rate and applied
-// units per second should not.
+// The potentially competing state was settled at runtime: 658 mover calls were
+// observed while the player crossed the map, and the correction made the cursor
+// speed stable at high refresh. The second, already-delta-correct mover belongs
+// to a different movement mode and does not invalidate this route.
 namespace atfix {
 
 // Installs on Escha & Logy only, and declines with a reason on anything else or

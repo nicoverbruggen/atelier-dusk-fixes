@@ -12,10 +12,8 @@
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 
 #include "worldmap_fix.h"
@@ -109,17 +107,8 @@ const WorldMapAddrs* g_addrs = nullptr;
 // each other a delta time that was never theirs.
 thread_local float g_updateDt = 0.0f;
 
-std::atomic<uint32_t> g_moveCalls{0};
-std::atomic<uint32_t> g_lines{0};
-constexpr uint32_t kMaxLines = 600;
-
 bool fixEnabled() {
   return featureEnabled(Feature::WorldMapCursor);
-}
-
-bool probeEnabled() {
-  const char* value = std::getenv("DUSK_WORLDMAP_PROBE");
-  return value && value[0] != '0';
 }
 
 float distance3(const Vec4& a, const Vec4& b) {
@@ -165,8 +154,6 @@ bool STDMETHODCALLTYPE tracedMove(uintptr_t self) {
   const bool haveAfter = tryRead(self + kPositionOffset, after);
   const float rawStep =
     (haveBefore && haveAfter) ? distance3(before, after) : 0.0f;
-  float appliedStep = rawStep;
-  float factor = 1.0f;
 
   // rawStep > 0 is also what stands in for the mover's return value: with the
   // stick at rest and no direction held it returns early without touching the
@@ -175,7 +162,7 @@ bool STDMETHODCALLTYPE tracedMove(uintptr_t self) {
     // min(dt * 60, 1): at 60 fps and below this is 1 and the shipped behaviour
     // is bit-for-bit preserved. Clamping rather than scaling freely matters --
     // a long frame (a load, a breakpoint) would otherwise teleport the cursor.
-    factor = std::clamp(dt * 60.0f, 0.0f, 1.0f);
+    const float factor = std::clamp(dt * 60.0f, 0.0f, 1.0f);
     Vec4 corrected = after;
     for (size_t i = 0; i < 3; ++i)
       corrected[i] = before[i] + (after[i] - before[i]) * factor;
@@ -191,26 +178,6 @@ bool STDMETHODCALLTYPE tracedMove(uintptr_t self) {
     std::memcpy(reinterpret_cast<void*>(self + kPositionOffset),
                 corrected.data(), kVec3Bytes);
     republish(self, corrected);
-    after = corrected;
-    appliedStep = distance3(before, after);
-  }
-
-  if (probeEnabled()) {
-    const uint32_t call =
-      g_moveCalls.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (call == 1)
-      log("WMPROBE mover FIRED rva=0x", std::hex, g_addrs ? g_addrs->move : 0,
-          std::dec, " self=", reinterpret_cast<void*>(self), " dt=", dt,
-          " fix=", fixEnabled());
-    // raw_per_s against applied_per_s is the whole measurement: the first
-    // should scale with refresh rate and the second should not.
-    if (rawStep > 1e-6f &&
-        g_lines.fetch_add(1, std::memory_order_relaxed) < kMaxLines)
-      log("WMPROBE move n=", call, " dt=", dt,
-          " raw_step=", rawStep, " factor=", factor,
-          " applied_step=", appliedStep,
-          " raw_per_s=", (dt > 0.0f) ? rawStep / dt : 0.0f,
-          " applied_per_s=", (dt > 0.0f) ? appliedStep / dt : 0.0f);
   }
   return result;
 }
@@ -223,8 +190,7 @@ namespace dusk {
 bool installWorldMapFix(BYTE* base, uint8_t exeBuild) {
   using namespace atfix;
   auto& log = atfix::log;   // std::log is also in scope via <cmath>
-  const bool diagnostic = probeEnabled();
-  if (!fixEnabled() && !diagnostic) {
+  if (!fixEnabled()) {
     log("FIXES world_map=off");
     return false;
   }
@@ -255,8 +221,7 @@ bool installWorldMapFix(BYTE* base, uint8_t exeBuild) {
 
   log("FIXES world_map=", moveOk && driverOk ? "active" : "failed",
       " driver_rva=0x", std::hex, g_addrs->driver,
-      " move_rva=0x", g_addrs->move, std::dec,
-      " probe=", diagnostic ? 1 : 0);
+      " move_rva=0x", g_addrs->move, std::dec);
   return moveOk && driverOk;
 }
 

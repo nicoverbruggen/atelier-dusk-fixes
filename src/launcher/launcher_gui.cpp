@@ -145,14 +145,6 @@ struct Capabilities {
   bool smaaOnByDefault;
   bool skipLogos;       // [Startup] SkipLogos
   bool skipMovie;       // [Startup] SkipIntroMovie
-  // Whether skipping the logos actually saves time, which differs by engine and
-  // is the whole substance of the checkbox's description. On Ayesha the logos
-  // animate while the game loads, so suppressing them buys a black screen of the
-  // same length. On the other two they are a timed sequence the loading does not
-  // overlap -- eight seconds of hold, read out of the game's own step table --
-  // so the skip is real. Telling both games the same thing would be wrong for
-  // one of them.
-  bool logosCostTime;
 };
 
 // `ssaaScalesGameIni` is where the two engines' supersampling differs, and the
@@ -178,14 +170,14 @@ struct Capabilities {
 // If a fourth game ever arrives whose pre-UI moment cannot be identified, SMAA
 // falls back to running at Present over the finished frame, and the note below
 // would have to say so again.
-// The SmaaOn column is src/core/game.cpp's Smaa cell: OnByDefault on Ayesha,
-// OptIn on the other two. It is a copy of that matrix, as the rest of this
-// table is, and a cell that disagrees with it writes the wrong default.
+// The SmaaOn column is src/core/game.cpp's Smaa cell. It currently reads
+// OnByDefault for all three games, and remains explicit because a future matrix
+// change must also change what a fresh launcher writes.
 const Capabilities kCapabilities[kGameCount] = {
-  //             Ssaa   ScalesIni  Smaa  SmaaOn  Logos  Movie  LogoTime
-  /* Ayesha  */ { true,  false,     true, true,   true,  true,  false },
-  /* Escha   */ { true,  true,      true, true,   true,  true,  true  },
-  /* Shallie */ { true,  true,      true, true,   true,  true,  true  },
+  //             Ssaa   ScalesIni  Smaa  SmaaOn  Logos  Movie
+  /* Ayesha  */ { true,  false,     true, true,   true,  true },
+  /* Escha   */ { true,  true,      true, true,   true,  true },
+  /* Shallie */ { true,  true,      true, true,   true,  true },
 };
 
 char g_iniPath[MAX_PATH] = {};       // dusk-fix.ini, in the game folder
@@ -197,7 +189,7 @@ int g_game = -1;                     // index into kGames, -1 when none found
 
 Capabilities capabilities() {
   if (g_game < 0 || g_game >= kGameCount)
-    return Capabilities{ false, false, false, false, false, false, false };
+    return Capabilities{ false, false, false, false, false, false };
   return kCapabilities[g_game];
 }
 
@@ -1070,15 +1062,13 @@ void loadFromIni() {
 
   // ---- the mod's dusk-fix.ini
   //
-  // Every shipping fix is on by default and absent from this window: the
-  // font-atlas read cache, the two field-jitter halves, the high-resolution
-  // correction, the travel-map cursor, the synthesis animation rate, the
-  // system-save guard and the loading-text correction. None of them is a
-  // choice. The high-resolution one is the only one that had to be argued
-  // rather than assumed -- rendering at 4K costs real performance -- but
-  // choosing the resolution IS that decision, and the fix only makes the
-  // resolution already chosen honest. Each has an environment switch for the
-  // A/B a bug report needs.
+  // Non-configurable corrective fixes are on by default and absent from this
+  // window: the font-atlas read cache, the two field-jitter halves, the
+  // high-resolution correction, the travel-map cursor, the synthesis animation
+  // rate, the system-save guard and the loading-text correction. The
+  // high-resolution one can cost performance, but choosing the resolution is
+  // already that decision; the fix makes the chosen value honest. Each has an
+  // environment switch for the A/B comparison a bug report may need.
   //
   // What is left is the two antialiasing settings, and both exist only where
   // the capability matrix says the game has them.
@@ -1258,9 +1248,9 @@ void resetToDefaults() {
   // running this, which is where reset is most likely to be reached for. It is
   // OptIn in every row of the matrix, so off IS its default.
   //
-  // SMAA goes to the running game's own default instead, because for Ayesha
-  // that is on. "Reset to defaults" writing a value the shipped configuration
-  // does not have is the one thing this button must not do.
+  // SMAA goes to the running game's own default. It is currently on for all
+  // three, and keeping the value capability-driven prevents Reset from drifting
+  // if those defaults ever diverge.
   setChecked(g_hSmaa, capabilities().smaaOnByDefault);
   if (g_hSharpen)
     SendMessageW(g_hSharpen, CB_SETCURSEL, 0, 0);
@@ -1970,19 +1960,12 @@ void createControls(HWND w) {
       if (capabilities().skipLogos) {
         g_hSkipLogos = mkCheck(w, L"Skip the startup logos", 0, 0, 10,
           IDC_SKIPLOGOS);
-        page.checkRow(g_hSkipLogos, capabilities().logosCostTime
-          ? L"Reaches the title screen about five seconds sooner."
-          : L"The logos play while the game loads, so this shows a black "
-            L"screen for as long as loading takes rather than starting "
-            L"sooner.");
+        page.checkRow(g_hSkipLogos, nullptr);
       }
       if (capabilities().skipMovie) {
         g_hSkipMovie = mkCheck(w, L"Skip the opening movie", 0, 0, 10,
           IDC_SKIPMOVIE);
-        page.checkRow(g_hSkipMovie,
-          L"Goes straight to the title screen. Only the movie that plays at "
-          L"startup is skipped, so endings, event movies and the Movies menu "
-          L"are unaffected.");
+        page.checkRow(g_hSkipMovie, nullptr);
       }
     }
 
@@ -2032,7 +2015,8 @@ void createControls(HWND w) {
       g_hSharpen = mkCombo(w, 0, 0, 10, IDC_SHARPEN);
       comboFill(g_hSharpen, kSharpenItems, kSharpenCount);
       page.row(L"Sharpening:", g_hSharpen,
-        L"Sharpens the scene. Good with edge smoothing and supersampling.");
+        L"Sharpens the scene. High settings are only recommended with "
+        L"supersampling.");
     }
 
     // The game's own, and present in all three titles' Setting.ini.
@@ -2040,15 +2024,6 @@ void createControls(HWND w) {
     page.checkRow(g_hOutline,
       L"The game's own outline rendering. Turn it off at higher resolutions.");
 
-    // Said plainly rather than left as a gap. Supersampling needs the engine to
-    // render the scene larger than it displays it, and on this renderer nothing
-    // yet does that; edge smoothing needs nothing of the sort, which is why it
-    // is offered above and this note is only about the one that is missing.
-    if (!caps.supersampling)
-      page.fullNote(
-        L"Supersampling is not available for this game yet. It needs the game "
-        L"to render at a higher resolution than it displays, and that has only "
-        L"been established for Atelier Ayesha so far.");
   }
 
   // ---------------- page 2: About ----------------

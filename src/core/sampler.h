@@ -7,18 +7,16 @@
 
 // Anisotropic texture filtering.
 //
-// These games ask for plain trilinear filtering and get exactly that, which is
-// what makes ground planes and walls smear into mush the moment they are viewed
-// at an angle -- the further from perpendicular a surface is, the fewer texels
-// a trilinear sample can afford to average, and the detail goes with them.
-// Anisotropic filtering spends more samples along the direction the surface is
-// stretched in, and on any GPU these ports can run on it is close to free.
+// Some scene samplers ask for plain trilinear filtering. On ground planes and
+// walls viewed at an angle, anisotropic filtering can preserve more texture
+// detail by spending samples along the stretched direction.
 //
 // The mechanism is the Arland project's, unchanged (`src/sync_fix.cpp`,
 // `ID3D11Device_CreateSamplerState`): intercept sampler creation and rewrite
 // the filter. Pure D3D11 with no mapped addresses and no engine knowledge,
-// which is why it is in core and why it covers all three Dusk games at once
-// rather than needing a port per engine.
+// which is why the implementation lives in core rather than needing a port per
+// engine. The capability matrix nevertheless enables it only for Ayesha; the
+// same code is deliberately inert on both KTGL games.
 //
 // WHAT IS DELIBERATELY NOT UPGRADED. Anything at or above
 // D3D11_FILTER_ANISOTROPIC (0x55) already asked for what we would give it, and
@@ -28,18 +26,17 @@
 // operation. The bound is therefore the basic point/linear block, 0x00..0x15,
 // exactly as Arland has it.
 //
-// THE POINT-SAMPLER QUESTION, which is open. That bound includes
+// THE POINT-SAMPLER QUESTION. That bound includes
 // D3D11_FILTER_MIN_MAG_MIP_POINT, which is enum zero -- so every point sampler
-// is upgraded too. Arland ships that and gets away with it. It is not obviously
-// safe here: point sampling is *correct* for lookup textures, and filtering a
-// colour-grading LUT, a gradient ramp or a dither table smears the very thing
-// it encodes. This is flagged as needing validation against a
-// scene with tonemapping and post-processing running, not just a menu.
+// is upgraded too. Ayesha is runtime-validated and reported `fromPoint=0`, so
+// the question is moot there. It remains unresolved on both KTGL games: point
+// sampling is *correct* for lookup textures, and filtering a colour-grading
+// LUT, a gradient ramp or a dither table smears the very thing it encodes. That
+// is one reason Escha & Logy and Shallie mark this feature Unsupported.
 //
-// So this counts what it upgrades, by kind, and says so. If a run reports no
-// point samplers at all the question is moot for that game; if it reports many
-// and something looks wrong, `DUSK_ANISO_KEEP_POINT=1` leaves them alone and
-// the difference is one run rather than an argument.
+// The Ayesha path still counts what it upgrades, by kind, and says so. Its
+// validated run found no point samplers; `DUSK_ANISO_KEEP_POINT=1` remains a
+// narrow comparison switch if that ever changes.
 namespace atfix {
 
 // The anisotropy level: 0 or 1 means off, otherwise 2, 4, 8 or 16. Resolved

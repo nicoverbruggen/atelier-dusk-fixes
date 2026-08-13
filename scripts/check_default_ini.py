@@ -31,12 +31,12 @@ SECTIONS = ("Rendering", "Startup", "Interface", "Launcher")
 
 # Options the code reads that are deliberately kept out of default.ini.
 #
-# These two are ON BY DEFAULT ON AYESHA and opt-in on the other two games, so
-# there is no single value the shipped file could carry. Writing either line
-# would turn a feature OFF on the one game that ships it on, which is worse than
-# leaving it unstated -- default.ini promises that deleting any line changes
-# nothing, and for these two no line can keep that promise. They are named in
-# default.ini's comments instead, so a reader still learns they exist.
+# AnisotropicFiltering is ON BY DEFAULT on Ayesha and Unsupported on the other
+# two games, so there is no single value the shipped file could carry. Writing
+# the line would turn it OFF on the one game that supports it, which is worse
+# than leaving it unstated -- default.ini promises that deleting any line
+# changes nothing. It is named in default.ini's comments instead, so a reader
+# still learns that it exists on Ayesha.
 UNDOCUMENTED = {
     ("Rendering", "AnisotropicFiltering"),
 }

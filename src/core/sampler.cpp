@@ -43,12 +43,10 @@ unsigned int anisotropyLevel() {
     const Support support = featureSupport(Feature::AnisotropicFiltering);
     if (support == Support::Unsupported)
       return 0;
-    // 16x rather than Arland's original 8x, and on by default. On any GPU that
-    // runs these ports the difference between 8x and 16x is not measurable,
-    // while the difference between trilinear and either is visible on every
-    // ground plane in the game. A setting whose cost is nil is not a trade-off
-    // worth asking the player to make -- but the ini key stays, because Arland
-    // exposes one and the two launchers are meant to match.
+    // Ayesha uses 16x rather than Arland's original 8x and ships it on: that
+    // path is runtime-validated and reported no point samplers. The KTGL rows
+    // are Unsupported, so the early return above makes their ini key and
+    // environment override inert before either is read.
     const int fallback = support == Support::OnByDefault ? 16 : 0;
     int v = 0;
     if (const char* env = std::getenv("DUSK_ANISO"))

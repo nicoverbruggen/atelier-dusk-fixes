@@ -254,6 +254,14 @@ constexpr Support X = Support::OnByDefault;
 // function, the failure would be visible rather than silent, and enabling the
 // row is what puts a run in front of it.
 //
+// AnisotropicFiltering is an Ayesha-only feature. Its runtime report confirmed
+// the 16x upgrade and found no point samplers. Escha & Logy and Shallie are
+// Unsupported rather than merely off by default: they have no equivalent
+// runtime sampler census, point-filtered lookup resources remain a possible
+// hazard, and the maintainer found both games acceptable without the upgrade.
+// The generic D3D11 implementation lives in core, but the matrix makes it inert
+// on KTGL even if an ini key or DUSK_ANISO override asks for it.
+//
 // WorldMapCursor is Ayesha-only and ships ON BY DEFAULT, on the same reasoning
 // as the field-jitter fix it is a sibling of: a cursor that crosses the map
 // three times too fast at 200 Hz is not a preference anyone would choose, it is
@@ -350,8 +358,8 @@ constexpr Support X = Support::OnByDefault;
 // fails loudly the next time a Feature is added without extending every row.
 //                               Stats Trace Verfy Censu Targt HiRes Cache Field Stabl Smaa  Ssaa  Aniso WMap  Logo  Movi  Typo  SysSv Promt PadRe Synth
 constexpr Support kAyesha[]  = { O,    O,    O,    O,    O,    X,    X,    X,    X,    X,    O,    X,    X,    O,    O,    U,    U,    U,    X,    U };
-constexpr Support kEscha[]   = { U,    U,    U,    U,    O,    U,    U,    U,    U,    X,    O,    O,    X,    O,    O,    X,    X,    U,    X,    X };
-constexpr Support kShallie[] = { U,    U,    U,    U,    O,    U,    U,    U,    U,    X,    O,    O,    U,    O,    O,    X,    X,    O,    X,    X };
+constexpr Support kEscha[]   = { U,    U,    U,    U,    O,    U,    U,    U,    U,    X,    O,    U,    X,    O,    O,    X,    X,    U,    X,    X };
+constexpr Support kShallie[] = { U,    U,    U,    U,    O,    U,    U,    U,    U,    X,    O,    U,    U,    O,    O,    X,    X,    O,    X,    X };
 
 constexpr std::size_t kColumns = static_cast<std::size_t>(Feature::Count);
 static_assert(std::size(kAyesha) == kColumns,  "Ayesha row is not one entry per Feature");

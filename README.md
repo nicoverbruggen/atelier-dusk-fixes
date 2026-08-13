@@ -37,7 +37,7 @@ These things were not part of the original games, but were added with the mod. T
 | Edge smoothing (SMAA)                      |   ✓    |      ✓       |    ✓    |
 | Supersampling (internal render resolution) |   ✓    |      ✓       |    ✓    |
 | Sharpening                                 |   ✓    |      ✓       |    ✓    |
-| Anisotropic filtering                      |   ✓    |      ✓       |    ✓    |
+| Anisotropic filtering                      |   ✓    |      —       |    —    |
 
 ## Installation on Windows
 

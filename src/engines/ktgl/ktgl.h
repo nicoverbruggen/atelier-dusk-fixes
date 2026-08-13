@@ -35,6 +35,7 @@ struct KtglGame {
   uintptr_t loadingTextRva;       // the "Loadning system data." literal in .rdata
   uintptr_t systemLoadStepRva;    // PlatformSteam::Load::step  (system_save_fix.h)
   uintptr_t systemSaveStepRva;    // PlatformSteam::Save::step  (system_save_fix.h)
+  uintptr_t systemCodecRva;       // the save-data codec        (system_save_fix.h)
   uintptr_t controlPromptUpdateRva; // ButtonHelp::Update, Shallie only
   uintptr_t controlPromptDrawRva;   // ButtonHelp::Draw, Shallie only
   uintptr_t padCreateWrapperRva;  // the CS-guarded pad create (core/pad_rescan.h)

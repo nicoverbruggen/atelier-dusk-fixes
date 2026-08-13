@@ -8,12 +8,14 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 
 #include "system_save_fix.h"
 #include "../../core/game.h"
 #include "../../core/hook_util.h"
 #include "../../core/log.h"
 #include "../../core/mem.h"
+#include "../../core/module_lifetime.h"
 
 namespace atfix {
 
@@ -23,9 +25,15 @@ namespace {
 
 // Both are `void step(this)` on the shared PlatformSteam::{Load,Save} object.
 using StepProc = void (STDMETHODCALLTYPE*)(uintptr_t);
+// (object, buffer, length, outSize, encode) -> non-zero on success. See the hook
+// below for why the fifth argument is the direction and the fourth is ignored by
+// the game on the read path.
+using CodecProc = uint8_t (STDMETHODCALLTYPE*)(uintptr_t, const void*, uint32_t,
+                                               uint32_t*, uint8_t);
 
 StepProc originalLoadStep = nullptr;
 StepProc originalSaveStep = nullptr;
+CodecProc originalSystemCodec = nullptr;
 
 // PlatformSteam::{Load,Save} share one 0x438-byte object. Both KTGL games and
 // both language builds access these same offsets in their load/save steps.
@@ -47,6 +55,88 @@ std::atomic<bool> g_systemDataUntrusted{false};
 
 std::atomic<uint32_t> g_loadsRepaired{0};
 std::atomic<uint32_t> g_savesRefused{0};
+
+// Which kind the last load handled. The codec is handed only a buffer, so it
+// cannot tell system data from game data on its own; the load hook runs first on
+// the same load and publishes it. Loads are driven one at a time by the save/load
+// state machine, so there is no interleaving to lose here.
+std::atomic<bool> g_lastLoadWasSystemData{false};
+
+// English builds only, by decision: the message below is written once, in
+// English, and a guessed translation shown to a Japanese or Chinese player would
+// be worse than the game's own behaviour. Set at install from the matched row.
+bool g_englishBuild = false;
+
+// What the games do instead, and why this exists. Escha & Logy says NOTHING at
+// all -- it runs on defaults and the player finds out when their settings are
+// gone. Shallie does show a box, but its English build renders a UTF-8 Japanese
+// string as Latin-1, so it reads as mojibake with an `err: -3`. Neither tells a
+// player what happened or what to do.
+// Titled with the game rather than the mod. A player meeting this has a problem
+// with their save data, not with the mod, and the box should look like it came
+// from the thing they launched. titleName() is narrow and this needs wide, so the
+// two names are spelled out here; the pair is exhaustive because this hook only
+// installs on KTGL, and Unknown cannot reach it.
+const wchar_t* unreadableTitle() {
+  switch (currentTitle()) {
+    case Title::Shallie: return L"Atelier Shallie DX";
+    default:             return L"Atelier Escha & Logy DX";
+  }
+}
+constexpr wchar_t kUnreadableMessage[] =
+  L"The system data could not be loaded. The game will continue to work, but "
+  L"editing any settings may cause data loss.";
+
+// The game's own box for this failure, which ours replaces on English builds.
+// Both games call MessageBoxA -- neither imports the W form at all -- and hand it
+// UTF-8 Japanese, so Windows decodes it in the system codepage and the player
+// gets mojibake plus an `err: -3`. Ours goes out through MessageBoxW, so this
+// detour cannot see it and there is no re-entry to guard against.
+//
+// Matched narrowly rather than swallowed blindly. The executables carry five of
+// these (`save`/`load` captions against user and system, plus a duplicate), and
+// only one is the system LOAD failure: caption "load", text beginning "system ".
+// The user-load box begins "user " and the save boxes have the other caption, so
+// none of them match. It is also armed only while our own dialog is up, so a
+// system-load failure we did NOT report still shows the game's box rather than
+// disappearing silently.
+using MessageBoxAProc = int (WINAPI*)(HWND, LPCSTR, LPCSTR, UINT);
+MessageBoxAProc originalMessageBoxA = nullptr;
+std::atomic<bool> g_suppressGameLoadBox{false};
+
+int WINAPI tracedMessageBoxA(HWND owner, LPCSTR text, LPCSTR caption,
+                             UINT type) {
+  if (g_suppressGameLoadBox.load(std::memory_order_relaxed) && text && caption &&
+      !std::strcmp(caption, "load") && !std::strncmp(text, "system ", 7)) {
+    g_suppressGameLoadBox.store(false, std::memory_order_relaxed);
+    return IDOK;   // as though the player dismissed it
+  }
+  return originalMessageBoxA(owner, text, caption, type);
+}
+
+DWORD WINAPI unreadableSystemDataThread(LPVOID) {
+  MessageBoxW(nullptr, kUnreadableMessage, unreadableTitle(),
+              MB_OK | MB_ICONWARNING | MB_TOPMOST | MB_SETFOREGROUND);
+  return 0;
+}
+
+// On its own thread, deliberately. The decode runs on the load path, and a modal
+// blocks whichever thread shows it; if the game is waiting on that load to finish
+// it would wait forever. Handing the box to a thread of its own lets the load
+// complete and the game carry on behind it.
+void showUnreadableSystemData() {
+  // A worker cannot safely run from an image FreeLibrary has unmapped, so the
+  // module is pinned before the thread is published. No pin, no thread.
+  if (!retainModuleForProcessLifetime())
+    return;
+  // Armed before ours goes up, because the game's box follows within the same
+  // load and the two would otherwise stack.
+  if (originalMessageBoxA)
+    g_suppressGameLoadBox.store(true, std::memory_order_relaxed);
+  if (HANDLE thread = CreateThread(nullptr, 0, &unreadableSystemDataThread,
+                                   nullptr, 0, nullptr))
+    CloseHandle(thread);
+}
 
 bool fixEnabled() {
   return featureEnabled(Feature::SystemSaveGuard);
@@ -71,6 +161,7 @@ void STDMETHODCALLTYPE tracedLoadStep(uintptr_t self) {
   bool systemData = false;
   if (!readSystemDataKind(self, systemData))
     return;
+  g_lastLoadWasSystemData.store(systemData, std::memory_order_relaxed);
 
   uint8_t completed = 0;
   uint64_t bytesRead = 0;
@@ -146,6 +237,63 @@ void STDMETHODCALLTYPE tracedSaveStep(uintptr_t self) {
   originalSaveStep(self);
 }
 
+// The save-data codec, shared by both save kinds and both directions:
+//   (object, buffer, length, outSize, encode) -> non-zero on success
+//
+// The fifth argument is the direction. Every save call site passes 1 and a real
+// out-size pointer; every load call site passes 0 and NULL, which is the whole
+// asymmetry described in system_save_fix.h -- the write path uses the size it is
+// given back and the read path declines to ask for it.
+//
+// Hooking this is correctly scoped rather than a blanket intercept: the codec
+// has exactly four call sites per executable and all four are the save/load
+// consumers, so nothing else in the game can reach it.
+uint8_t STDMETHODCALLTYPE tracedSystemCodec(uintptr_t self, const void* buffer,
+                                            uint32_t length, uint32_t* outSize,
+                                            uint8_t encode) {
+  const uint8_t ok = originalSystemCodec(self, buffer, length, outSize, encode);
+  if (!fixEnabled() || ok || encode)
+    return ok;
+
+  // A DECODE failed, which is reported and nothing more. Refusing the write-back
+  // here was tried and is wrong, and the reasoning is worth keeping because the
+  // opposite looks obviously right:
+  //
+  // The zero-byte guard above refuses saves because a load that read NOTHING may
+  // have a perfectly healthy file behind it -- an open that lost a race with a
+  // Cloud sync, a lock, an antivirus scan. Protecting that file is the whole
+  // point. A failed decode is the other situation: the bytes were read and they
+  // are bad, so there is no good file left to protect. Refusing then preserves
+  // an unreadable file forever, and because the game would otherwise replace it,
+  // the user gets settings that silently reset on every launch with no way out
+  // short of deleting the file by hand.
+  //
+  // Partial files are the expected source of this, which is what settles it: the
+  // write path has no temp file and no rename, so an interrupted save leaves one
+  // behind. Letting the game rewrite is the recovery.
+  //
+  // A transient SHORT READ of a healthy file would also land here and would be
+  // worth refusing, but it cannot be told apart from a short file: `ftell` lands
+  // at end-of-file either way, and the object carries no expected length.
+  static std::atomic<bool> reported{false};
+  static std::atomic<bool> announced{false};
+  if (!reported.exchange(true, std::memory_order_relaxed))
+    log("SYSSAVE save-data decode FAILED on ", std::dec, length,
+        " bytes: the file is unreadable, not merely unread. The engine discards"
+        " this result and runs on defaults, and it will rewrite the file rather"
+        " than be stopped from doing so -- which is the recovery. Reported here"
+        " because it is otherwise completely silent.");
+
+  // Tell the player, once, and only about SYSTEM data on an English build. Game
+  // data is left alone: Shallie already raises its own load error there, and the
+  // engine's dialog is the right place for it rather than a second box from us.
+  if (g_englishBuild &&
+      g_lastLoadWasSystemData.load(std::memory_order_relaxed) &&
+      !announced.exchange(true, std::memory_order_relaxed))
+    showUnreadableSystemData();
+  return ok;
+}
+
 // Per-game prologue windows. Both are byte-identical between the English and
 // multilingual build of the same game -- they are the same compile of the same
 // source -- so there is one pair per game rather than one per executable.
@@ -156,6 +304,13 @@ constexpr std::array<BYTE, 16> kEschaLoadExpected = {
 constexpr std::array<BYTE, 16> kShallieLoadExpected = {
   0x40, 0x53, 0x48, 0x83, 0xec, 0x30, 0x4c, 0x8d,
   0x41, 0x18, 0x48, 0xc7, 0x44, 0x24, 0x40, 0x00,
+};
+// The codec is byte-identical across all four builds: homolog confirms the pair
+// in each game with 104 votes forward and reverse, the same 0x832 size, and this
+// same prologue.
+constexpr std::array<BYTE, 16> kCodecExpected = {
+  0x4c, 0x89, 0x4c, 0x24, 0x20, 0x48, 0x89, 0x54,
+  0x24, 0x10, 0x48, 0x89, 0x4c, 0x24, 0x08, 0x55,
 };
 // Save::step is byte-identical across all four builds.
 constexpr std::array<BYTE, 16> kSaveExpected = {
@@ -176,18 +331,22 @@ bool installSystemSaveFix(BYTE* base, const atfix::KtglGame& game) {
     log("FIXES system_save=off");
     return false;
   }
-  if (!game.systemLoadStepRva || !game.systemSaveStepRva) {
+  if (!game.systemLoadStepRva || !game.systemSaveStepRva ||
+      !game.systemCodecRva) {
     log("FIXES system_save=unavailable (no address row for this executable)");
     return false;
   }
 
+  g_englishBuild = game.exeBuild == BuildEnglish;
   const bool shallie = currentTitle() == Title::Shallie;
   const std::array<BYTE, 16>& loadExpected =
     shallie ? kShallieLoadExpected : kEschaLoadExpected;
 
   BYTE* loadStep = base + game.systemLoadStepRva;
   BYTE* saveStep = base + game.systemSaveStepRva;
-  if (!matches(loadStep, loadExpected) || !matches(saveStep, kSaveExpected)) {
+  BYTE* codec = base + game.systemCodecRva;
+  if (!matches(loadStep, loadExpected) || !matches(saveStep, kSaveExpected) ||
+      !matches(codec, kCodecExpected)) {
     log("FIXES system_save=declined (prologue mismatch)");
     return false;
   }
@@ -201,11 +360,34 @@ bool installSystemSaveFix(BYTE* base, const atfix::KtglGame& game) {
   const bool saveOk = loadOk && installMinHookDetour(saveStep,
     reinterpret_cast<void*>(&tracedSaveStep),
     reinterpret_cast<void**>(&originalSaveStep));
+  // Last, and for the same reason the load hook goes first: the codec hook only
+  // ever SETS the latch, so without the save hook to read it the game would be
+  // left exactly as it shipped rather than half-guarded.
+  const bool codecOk = saveOk && installMinHookDetour(codec,
+    reinterpret_cast<void*>(&tracedSystemCodec),
+    reinterpret_cast<void**>(&originalSystemCodec));
 
-  log("FIXES system_save=", loadOk && saveOk ? "active" : "failed",
+  const bool ok = loadOk && saveOk && codecOk;
+  // English builds only, and never required: this replaces a broken message with
+  // a readable one and protects no data, so a failure here must not take the
+  // guards down with it.
+  if (ok && g_englishBuild) {
+    if (HMODULE user32 = GetModuleHandleW(L"user32.dll")) {
+      if (BYTE* proc = reinterpret_cast<BYTE*>(
+            GetProcAddress(user32, "MessageBoxA")))
+        if (!installMinHookDetour(proc,
+              reinterpret_cast<void*>(&tracedMessageBoxA),
+              reinterpret_cast<void**>(&originalMessageBoxA)))
+          log("FIXES system_save: the game's own load-error box could not be"
+              " replaced; both it and ours will appear");
+    }
+  }
+
+  log("FIXES system_save=", ok ? "active" : "failed",
       " load_rva=0x", std::hex, game.systemLoadStepRva,
-      " save_rva=0x", game.systemSaveStepRva, std::dec);
-  return loadOk && saveOk;
+      " save_rva=0x", game.systemSaveStepRva,
+      " codec_rva=0x", game.systemCodecRva, std::dec);
+  return ok;
 }
 
 }  // namespace dusk

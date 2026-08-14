@@ -6,7 +6,7 @@
 // regardless of how it was produced -- texture-interior and alpha-test edges
 // included, which is exactly what multisampling cannot reach.
 //
-// Ported from the Arland project's src/smaa.cpp, which is this project's own
+// Ported from the Arland project's src/core/smaa.cpp, which is this project's own
 // code (MIT). The reference shader and the AreaTex/SearchTex lookup tables are
 // vendored unchanged under vendor/smaa/ (Jimenez, Echevarria, Masia, Navarro,
 // Gutierrez; MIT) and compiled at runtime through d3dcompiler, which is the

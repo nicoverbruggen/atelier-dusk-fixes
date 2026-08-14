@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// Grey-flash fix, ported from the Arland project's src/window_background.cpp
+// Grey-flash fix, ported from the Arland project's src/core/window_background.cpp
 // (this project's own code, MIT). Nothing in it needed changing, and that is
 // worth stating: Ayesha registers the same window class under the same name
 // with the same brush, so the Arland file works here as written.

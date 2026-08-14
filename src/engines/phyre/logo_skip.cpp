@@ -2,7 +2,7 @@
 //
 // Startup logo skip for Ayesha.
 //
-// Ported from the Arland project's src/logo_skip.cpp, which is this project's
+// Ported from the Arland project's src/engines/phyre/logo_skip.cpp, which is this project's
 // own code (MIT). The mechanism is identical because the code is: Ayesha runs
 // the same PhyreEngine boot sequence, and both hooked functions are
 // byte-identical to the Arland ones over their prologue windows.

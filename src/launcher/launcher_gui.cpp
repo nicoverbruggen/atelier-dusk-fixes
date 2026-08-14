@@ -4,7 +4,7 @@
 // and the game's own, and starts the game; it is what msimg32.dll opens in
 // place of Koei Tecmo's launcher when the game is started from Steam.
 //
-// It is the Arland project's src/config_gui/main.cpp, page for page and row for
+// It is the Arland project's src/launcher/launcher_gui.cpp, page for page and row for
 // row: the same three tabs, the same order within them, the same wording on the
 // notes, the same bottom button row, the same save-failure reporting. Someone
 // who has used one should not have to learn the other. Where Arland has a

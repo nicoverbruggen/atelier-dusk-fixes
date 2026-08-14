@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
 // 32-bit MSIMG32 proxy for the Dusk front-ends. Ported from the Arland project's
-// src/launcher_proxy.cpp, which is where every load-bearing decision below was
+// src/launcher/launcher_proxy.cpp, which is where every load-bearing decision below was
 // learned; this file changes the names it matches on and nothing about the
 // mechanism.
 //

@@ -2,7 +2,7 @@
 //
 // Intro movie skip for Ayesha.
 //
-// Ported from the Arland project's src/movie_skip.cpp, which is this project's
+// Ported from the Arland project's src/engines/phyre/movie_skip.cpp, which is this project's
 // own code (MIT). The game plays its movies through one open routine taking the
 // player object and an index into a table of movies, 0x20 bytes per entry.
 //

@@ -2,7 +2,7 @@
 //
 // See worldmap_fix.h for the defect and the correction.
 //
-// PROVENANCE. Ported from the Arland project's src/worldmap_fix.cpp (this
+// PROVENANCE. Ported from the Arland project's src/engines/phyre/worldmap_fix.cpp (this
 // project's own code, MIT), where the same defect was found in Totori and
 // Meruru and the fix is runtime-confirmed at both 144 and 60 fps. The mechanism
 // is unchanged; the address pack, the gating, and the publish differ -- see

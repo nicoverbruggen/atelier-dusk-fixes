@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 //
-// The LTGL/KTGL module: Atelier Escha & Logy DX and Atelier Shallie DX.
+// The KTGL module: Atelier Escha & Logy DX and Atelier Shallie DX.
 //
-// These two are UCRT builds on the newer Gust engine. They carry NO known menu
+// KTGL is Koei Tecmo's own engine, the one the Warriors games use. Published
+// sources also call it LTGL or the Warriors engine; the binaries call it KTGL
+// and nothing else, so that is the name used here. Escha & Logy is where Gust
+// moved off PhyreEngine onto it, which is why these two share so little with
+// Ayesha.
+//
+// These two are UCRT builds on that engine. They carry NO known menu
 // hitch -- the Arland/Ayesha text renderer has no homolog in either binary and
 // their queue drain mismatches on both vote and prologue shape -- so nothing in
 // `src/engines/phyre/` applies to them and none of it is reachable here. Their

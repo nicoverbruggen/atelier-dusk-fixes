@@ -35,17 +35,18 @@ const char* engineName(Engine e);
 // Enhancements the mod can apply. Order must match the matrix columns and the
 // descriptor rows in game.cpp.
 //
-// AtlasCache, HighResRendering, and both field-jitter halves ship on by
-// default for Ayesha. AtlasVerify and TargetCensus are diagnostics. Several
-// later fixes are shared, while LoadingTextTypo and SystemSaveGuard begin the
-// KTGL-specific group.
+// AtlasCache, HighResRendering and FieldEngineFix ship on by default for
+// Ayesha. The rest of the field-jitter work has no row here: the ground ray and
+// its grace-hold fallback answer to their environment switches alone, which
+// game.cpp records beside the matrix. AtlasVerify and TargetCensus are
+// diagnostics. Several later fixes are shared, while LoadingTextTypo and
+// SystemSaveGuard begin the KTGL-specific group.
 enum class Feature : uint8_t {
   AtlasVerify,      // Ayesha font-atlas snapshot-vs-real comparison (slow)
   TargetCensus,     // any game: sizes of the render/depth targets it creates
   HighResRendering, // Ayesha: scene targets follow the resolution, not 1080p
   AtlasCache,       // Ayesha atlas read caching (frame-scoped)
-  FieldEngineFix,   // Ayesha high-refresh field jitter: rescale the move threshold
-  FieldStabilizer,  // Ayesha high-refresh field jitter: hold the character at rest
+  FieldEngineFix,   // Ayesha: rescale the resolver's move threshold with frame time
   Smaa,             // any game: SMAA scene antialiasing before UI composition
   Supersampling,    // any game: render above display size, downscale to it
   WorldMapCursor,   // Ayesha + Escha: travel-map cursor per second, not per frame

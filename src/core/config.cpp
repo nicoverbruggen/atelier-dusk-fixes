@@ -102,7 +102,6 @@ void logConfiguration() {
     { Feature::HighResRendering, "HighResolution" },
     { Feature::AtlasCache,       "AtlasCache" },
     { Feature::FieldEngineFix,   "FieldEngineFix" },
-    { Feature::FieldStabilizer,  "FieldStabilizer" },
     { Feature::WorldMapCursor,   "WorldMapCursor" },
     { Feature::SkipStartupLogos, "SkipLogos" },
     { Feature::SkipIntroMovie,   "SkipIntroMovie" },

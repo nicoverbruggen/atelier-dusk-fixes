@@ -50,10 +50,9 @@ Title detectTitle() {
 // dangerous, but because they are not choices. A fix that is simply correct,
 // on by default, and has no configuration a user could reason about is not a
 // setting, and a key in the file is an invitation to turn it off. That covers
-// every fix this mod ships: the font-atlas read cache, both field-jitter halves
-// (further coupled -- the stabilizer needs the rescale), and the
-// high-resolution correction. Their environment switches remain so an A/B or a
-// bug report can stand one down for a session.
+// every fix this mod ships: the font-atlas read cache, the field-movement
+// corrections, and the high-resolution correction. Their environment switches
+// remain so an A/B or a bug report can stand one down for a session.
 //
 // The high-resolution correction is the one that looks like a counter-example
 // and is not. Rendering at 4K instead of 1080p does cost real performance, so
@@ -74,7 +73,6 @@ const Descriptor& descriptor(Feature f) {
     /* HighRes         */ { "DUSK_HIGHRES",           nullptr, nullptr },
     /* AtlasCache      */ { "DUSK_ATLAS_CACHE",       nullptr, nullptr },
     /* FieldEngineFix  */ { "DUSK_FIELD_ENGINE_FIX",  nullptr, nullptr },
-    /* FieldStabilizer */ { "DUSK_FIELD_STABILIZER",  nullptr, nullptr },
     /* Smaa            */ { "DUSK_SMAA",     "Rendering", "SMAA" },
     // Env-only DESPITE having an ini key, which is the one exception in this
     // table and needs stating. `[Rendering] Supersampling` is an INT
@@ -127,27 +125,25 @@ constexpr Support X = Support::OnByDefault;
 // key and no launcher control; `DUSK_ATLAS_CACHE=0` turns it off, which is what
 // an A/B or a bug report wants.
 //
-// The two field-jitter halves are Ayesha-only and ship ON BY DEFAULT, as they
-// do in Arland. They were held OptIn while nothing had been measured on Ayesha;
-// that gap is now closed at both ends. The defect was quantified from a capture
-// of the atelier's interior steps -- 12-18 px of vertical excursion while the
+// FieldEngineFix is Ayesha-only and ships ON BY DEFAULT, as it does in Arland.
+// It was held OptIn while nothing had been measured on Ayesha; that gap is now
+// closed at both ends. The defect was quantified from a capture of the
+// atelier's interior steps -- 12-18 px of vertical excursion while the
 // character is horizontally at rest, a gravity-versus-threshold sawtooth rather
-// than a bob -- and an in-game session with both switches on confirmed the fix
-// (see engines/phyre/field_physics.h).
+// than a bob -- and confirmed in game.
 //
-// They are one feature in two keys, not two features. The stabilizer needs the
-// rescale it builds on and refuses to run without it (installFieldPhysics), so
-// promoting the rescale alone would have left the resting case unfixed, and
-// promoting the stabilizer alone does nothing at all. That is also why neither
-// appears in the launcher and neither has an ini key: two coupled switches for
-// a single fix that is simply correct is not a setting. `DUSK_FIELD_ENGINE_FIX=0`
-// stands the whole thing down for one session, which is what an A/B or a bug
-// report wants and is the only override that exists.
+// It has no ini key and no launcher control: a fix that is simply correct is
+// not a setting. `DUSK_FIELD_ENGINE_FIX=0` stands it down for one session,
+// which is what an A/B or a bug report wants.
 //
-// The offsets the stabilizer writes through were the last thing here resting on
-// carry-over rather than evidence. They have since been confirmed against both
-// Ayesha builds -- see the comment on the offset constants in field_physics.cpp
-// -- so nothing about this fix is now inherited on trust.
+// A second row, FieldStabilizer, used to sit beside this one for a resting
+// stabilizer that held the character still while it was genuinely at rest. The
+// ground ray replaced it -- it covers that case and reaches a moving character
+// besides, which the stabilizer structurally could not -- and the row was
+// removed with it. The ray and its grace-hold fallback answer to
+// `DUSK_FIELD_GROUND_RAY` and `DUSK_FIELD_GRACE_HOLD` and have no rows here, so
+// FieldEngineFix no longer covers the whole of field movement; see
+// engines/phyre/field_physics.h for what each piece does.
 //
 // Smaa is available in all three games and ON BY DEFAULT in all three, because
 // all three have a pre-UI injection point. smaa.cpp runs there on the scene
@@ -326,10 +322,10 @@ constexpr Support X = Support::OnByDefault;
 // so an incomplete row reads as a deliberate "this game does not get it". Let
 // the extent come from the initializer instead and each static_assert below
 // fails loudly the next time a Feature is added without extending every row.
-//                               Verfy Targt HiRes Cache Field Stabl Smaa  Ssaa  WMap  Logo  Movi  Typo  SysSv Promt PadRe Synth
-constexpr Support kAyesha[]  = { O,    O,    X,    X,    X,    X,    X,    O,    X,    O,    O,    U,    U,    U,    X,    U };
-constexpr Support kEscha[]   = { U,    O,    U,    U,    U,    U,    X,    O,    X,    O,    O,    X,    X,    U,    X,    X };
-constexpr Support kShallie[] = { U,    O,    U,    U,    U,    U,    X,    O,    U,    O,    O,    X,    X,    O,    X,    X };
+//                               Verfy Targt HiRes Cache Field Smaa  Ssaa  WMap  Logo  Movi  Typo  SysSv Promt PadRe Synth
+constexpr Support kAyesha[]  = { O,    O,    X,    X,    X,    X,    O,    X,    O,    O,    U,    U,    U,    X,    U };
+constexpr Support kEscha[]   = { U,    O,    U,    U,    U,    X,    O,    X,    O,    O,    X,    X,    U,    X,    X };
+constexpr Support kShallie[] = { U,    O,    U,    U,    U,    X,    O,    U,    O,    O,    X,    X,    O,    X,    X };
 
 constexpr std::size_t kColumns = static_cast<std::size_t>(Feature::Count);
 static_assert(std::size(kAyesha) == kColumns,  "Ayesha row is not one entry per Feature");

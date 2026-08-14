@@ -104,8 +104,7 @@ bool initializePhyreFixes() {
     const bool wantWorldMap =
       atfix::featureEnabled(atfix::Feature::WorldMapCursor);
     const bool wantField =
-      atfix::featureEnabled(atfix::Feature::FieldEngineFix) ||
-      atfix::featureEnabled(atfix::Feature::FieldStabilizer);
+      atfix::featureEnabled(atfix::Feature::FieldEngineFix);
     const bool wantLogoSkip =
       atfix::featureEnabled(atfix::Feature::SkipStartupLogos);
     const bool wantMovieSkip =

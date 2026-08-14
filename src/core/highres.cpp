@@ -454,6 +454,20 @@ std::atomic<uint64_t> g_rsScissorCalls{0};
 std::atomic<uint64_t> g_drawCalls{0};
 std::atomic<uint64_t> g_updatesEntered{0};   // draws that found dirty state
 std::atomic<uint64_t> g_targetLookupFails{0};
+// The largest count the engine has ever submitted to either setter, and the one
+// number that says whether the single-viewport rule below is a rule or a
+// coincidence. Nothing else in either project measures it. Anything above 1
+// means the correction is standing down for those submissions, which is the
+// safe answer but not a silent one.
+std::atomic<uint32_t> g_maxRasterCount{0};
+
+void noteRasterCount(UINT count) {
+  uint32_t previous = g_maxRasterCount.load(std::memory_order_relaxed);
+  while (count > previous &&
+         !g_maxRasterCount.compare_exchange_weak(previous, count,
+                                                 std::memory_order_relaxed)) {
+  }
+}
 
 // The first few distinct (viewport, scissor, bound target) combinations, logged
 // once each. This is the line that says what the engine actually submits and
@@ -519,6 +533,14 @@ void updateViewportScissor(ID3D11DeviceContext* context) {
 
   // Only a single full-screen-from-the-origin viewport or scissor is a
   // candidate. A partial one belongs to a pass that meant it.
+  //
+  // "Only a single" is established by the SETTERS, not here. The array below
+  // holds one element, so RSGetViewports can only ever report 0 or 1 back into
+  // viewportCount whatever the engine actually bound, and a `== 1` test here
+  // cannot see a second viewport at all. What it does see is the empty case,
+  // which viewport.Width > 0.0f already covers. The setters mark the context
+  // dirty only when the engine submitted exactly one, so by the time this runs
+  // the count is known and this test is a formality.
   const bool viewportCandidate = viewportCount == 1 &&
     viewport.TopLeftX == 0.0f && viewport.TopLeftY == 0.0f &&
     viewport.Width > 0.0f && viewport.Height > 0.0f;
@@ -570,11 +592,23 @@ void updateViewportScissor(ID3D11DeviceContext* context) {
 
 }  // namespace
 
+// THIS IS WHERE THE SINGLE-VIEWPORT RULE IS ESTABLISHED, and it is the only
+// place it can be. `count` here is the engine's own argument. Once the
+// submission is over, RSGetViewports can only report back as many as the array
+// it is handed, so a correction that reads the state later cannot tell one
+// viewport from eight. Marking dirty only for a single submission means the
+// correction never sees a multi-viewport pass, and never collapses one to a
+// single viewport by rewriting it.
+//
+// These engines are not known to bind more than one, and g_maxRasterCount is
+// what turns that into something the log states rather than something the code
+// assumes.
 void STDMETHODCALLTYPE hookedRSSetViewports(
     ID3D11DeviceContext* self, UINT count, const D3D11_VIEWPORT* viewports) {
   d3d11OriginalsFor(self).rsSetViewports(self, count, viewports);
   g_rsViewportCalls.fetch_add(1, std::memory_order_relaxed);
-  if (g_fixEnabled)
+  noteRasterCount(count);
+  if (g_fixEnabled && count == 1)
     markRasterDirty(self);
 }
 
@@ -582,7 +616,8 @@ void STDMETHODCALLTYPE hookedRSSetScissorRects(
     ID3D11DeviceContext* self, UINT count, const D3D11_RECT* rects) {
   d3d11OriginalsFor(self).rsSetScissorRects(self, count, rects);
   g_rsScissorCalls.fetch_add(1, std::memory_order_relaxed);
-  if (g_fixEnabled)
+  noteRasterCount(count);
+  if (g_fixEnabled && count == 1)
     markRasterDirty(self);
 }
 
@@ -753,6 +788,7 @@ void highResFrameTick() {
       " distinctShapes=", distinctShapes,
       " rsViewports=", g_rsViewportCalls.load(std::memory_order_relaxed),
       " rsScissors=", g_rsScissorCalls.load(std::memory_order_relaxed),
+      " maxRasterCount=", g_maxRasterCount.load(std::memory_order_relaxed),
       " draws=", g_drawCalls.load(std::memory_order_relaxed),
       " updates=", g_updatesEntered.load(std::memory_order_relaxed),
       " drawsTo1x=", g_drawsSingleSample.load(std::memory_order_relaxed),

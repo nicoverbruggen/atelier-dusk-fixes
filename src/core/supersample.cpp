@@ -307,7 +307,11 @@ ID3D11ShaderResourceView* g_smallSRV = nullptr;
 UINT g_smallWidth = 0, g_smallHeight = 0;
 DXGI_FORMAT g_smallFormat = DXGI_FORMAT_UNKNOWN;
 bool g_passReady = false;
-bool g_passBroken = false;
+// Atomic because it is the one flag here read outside g_passBusy: the early-out
+// at the top of ssaaSubstituteShaderResources tests it before the guard is
+// claimed, and this engine records on deferred contexts of which it may hold
+// several. Every write is still inside the guard.
+std::atomic<bool> g_passBroken{false};
 
 // WHAT g_small CURRENTLY HOLDS -- part of g_small's state, and declared with it
 // so nothing can reallocate the texture without facing the question. See the

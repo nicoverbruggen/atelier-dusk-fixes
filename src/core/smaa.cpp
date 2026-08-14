@@ -132,7 +132,10 @@ const char* kSmaaPrefix =
 
 // ---- state -----------------------------------------------------------------
 std::atomic<bool> g_init{false};
-bool g_broken = false;
+// Atomic because both entry points test it before claiming g_passBusy, while
+// every write to it is inside the guard. Same reason as g_passBroken in
+// supersample.cpp.
+std::atomic<bool> g_broken{false};
 std::atomic<bool> g_preUiProven{false};
 std::atomic<bool> g_doneThisFrame{false};
 // One resource tuple, used from both deferred pre-UI recording and the

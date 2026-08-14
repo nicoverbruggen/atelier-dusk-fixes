@@ -479,9 +479,13 @@ void logSaveFailure(const char* name, const char* path,
                     const WriteFailure& failure, bool verifiedOk) {
   if (!failure.failed)
     return;
+  // wsprintfA does no bounds checking, and the path is the one input here whose
+  // length the user controls. Everything else is a literal or a bounded field,
+  // and the worst case without this bound is 473 of 512 bytes. Capping the path
+  // stops that margin from depending on the strings above it staying short.
   char line[512];
   wsprintfA(line,
-    "[launcher] %s write %s at %s: error %lu, %s (path %s)\r\n",
+    "[launcher] %s write %s at %s: error %lu, %s (path %.200s)\r\n",
     name,
     verifiedOk ? "MISREPORTED (the value is on disk)" : "FAILED",
     failure.where, failure.error, writeErrorName(failure.error),
@@ -1224,7 +1228,9 @@ SaveOutcome saveToIni() {
 }
 
 // Put every setting back to a known-good starting point: the mod's own
-// defaults, plus Auto windowed.
+// defaults, plus Auto resolution in fullscreen. Fullscreen is what the game
+// itself defaults to, which is also what loadFromIni falls back to when the
+// game's own file has not been written yet.
 //
 // Language is the one exception, and deliberately so. It is not tuning that can
 // be wrong -- it is what the player reads the game in, and resetting someone to
@@ -2240,8 +2246,12 @@ LRESULT CALLBACK WndProc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_COMMAND:
       // The supersampling list is computed from the selected resolution, so it
-      // has to follow every change to it.
-      if (LOWORD(wp) == IDC_RES && HIWORD(wp) == CBN_SELCHANGE) {
+      // has to follow every change to it -- and the note under the list has to
+      // follow every change to the list, which is why the multiplier is here
+      // too. Without it, picking a smaller multiplier by hand after one was
+      // reduced to fit the 8K limit left the note still saying it was reduced.
+      if (HIWORD(wp) == CBN_SELCHANGE &&
+          (LOWORD(wp) == IDC_RES || LOWORD(wp) == IDC_SSAA)) {
         updateRenderResolution();
         return 0;
       }
@@ -2254,7 +2264,7 @@ LRESULT CALLBACK WndProc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
           const int answer = MessageBoxW(w,
             L"Reset all of the mod's settings to their defaults? This will "
             L"also set your game resolution back to your desktop's, in "
-            L"windowed mode. Your language is left alone.",
+            L"fullscreen. Your language is left alone.",
             L"Atelier Dusk Fixes",
             MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
           if (answer != IDYES)

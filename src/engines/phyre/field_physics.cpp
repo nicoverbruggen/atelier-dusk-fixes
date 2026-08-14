@@ -1,22 +1,32 @@
 // SPDX-License-Identifier: MIT
 //
-// Ayesha field-jitter correction: the threshold rescale and the resting
-// stabilizer. See field_physics.h for the defect and how the two halves couple.
+// Ayesha field movement: the ground ray and the threshold rescale. See
+// field_physics.h for both defects and what each correction does.
 //
-// Both ship ON BY DEFAULT and are confirmed in game. An early test reported that
-// they did not help and the pair was held opt-in on that basis; a later session
-// with BOTH switches on confirmed that they do. That earlier negative is worth
-// remembering rather than forgetting, because the most likely reading of it is a
-// configuration result rather than a code one -- the stabilizer refuses to run
-// without the rescale, so a test that enabled only one of them, or that relied
-// on an ini key while an environment variable pinned it off, would report
-// exactly that failure. `DUSK_FIELD_ENGINE_FIX=0` stands the pair down for a
-// comparison and `DUSK_FIELD_STABILIZER=0` disables only the second half.
+// Ported from the Arland games, which run the same character controller under a
+// different renderer. Nothing was carried across on faith: every address here
+// was resolved from Ayesha's own call sites, and the three controller offsets
+// the ray dereferences were read out of Ayesha's own resolver. Ayesha is built
+// with incremental linking, so its calls hop through a jump table first and the
+// addresses below are the resolved targets rather than the call operands.
+//
+// A resting stabilizer used to sit alongside the rescale here. The ground ray
+// covers its case and reaches a moving character besides, which the stabilizer
+// structurally could not, so it was removed once the two were compared. The
+// rescale stays: it fixes movement being discarded outright at high refresh,
+// which the ray cannot help with, because the revert it guards against restores
+// the whole position vector including any correction.
+//
+// `DUSK_FIELD_ENGINE_FIX=0` stands the rescale down, `DUSK_FIELD_GROUND_RAY=0`
+// the ray, `DUSK_FIELD_GRACE_HOLD=0` its fallback, and `DUSK_FIELD_RAY_STATS=1`
+// reports why the ray did or did not correct.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
 #include <cmath>
+#include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 
 #include "field_physics.h"
@@ -54,6 +64,14 @@ constexpr uintptr_t kVelYOffset = 0x54;
 constexpr uintptr_t kPosOffset = 0x60;
 constexpr uintptr_t kEntryPosOffset = 0x70;   // pos is copied here at entry
 constexpr uintptr_t kAirTimerOffset = 0xb8;
+// Confirmed in Ayesha's own resolver, not assumed from Arland: it loads the
+// collision wrapper from [this+0x98] and the foot offset from [this+0xb4], and
+// the translate helper guards on [this+0x20] for the scene node.
+constexpr uintptr_t kQueryIfaceOffset = 0x98;
+constexpr uintptr_t kFootOffset = 0xb4;
+constexpr uintptr_t kNodeOffset = 0x20;
+constexpr uintptr_t kWrapperScene = 0x10;
+constexpr uintptr_t kWrapperDirty = 0x18;
 constexpr uint32_t kGroundedBit = 0x100;
 
 // Past the last field touched here, so one range check covers the whole set.
@@ -105,18 +123,6 @@ bool engineFixEnabled() {
   return featureEnabled(Feature::FieldEngineFix);
 }
 
-// ON BY DEFAULT, and the half that writes into live game state: unlike the
-// rescale, which writes one verified constant, the stabilizer writes into the
-// CONTROLLER OBJECT at kVelYOffset and kAirTimerOffset. Those offsets came from
-// the Arland builds and have since been confirmed against both Ayesha builds
-// (see the comment on the offset constants above), which is what allowed this
-// to ship on rather than as an investigation switch.
-//
-// Same rule as engineFixEnabled: ask featureEnabled(), never getenv.
-bool stabilizerEnabled() {
-  return featureEnabled(Feature::FieldStabilizer);
-}
-
 // Rescale the resolver's minimum-movement threshold for this frame's duration,
 // turning a per-frame distance into a constant speed (0.51 units/s). Identical
 // to the shipped value at 60 fps, and clamped so a long frame never raises it
@@ -132,12 +138,10 @@ void applyThreshold(float dt) {
   *g_moveThreshold = scaled;
 }
 
-bool g_stabilizerActive = false;   // false unless requested and verified
 
 // A speed low enough that nothing the player is doing produces it, but not
 // exactly zero, since these components come out of float arithmetic. For scale,
 // the rescaled threshold discards anything under 0.51 units/s.
-constexpr float kRestSpeedEpsilon = 0.001f;
 
 // There was an escape hatch here: every third of a second the character was
 // released for one untouched frame, so that ground moving away underneath a
@@ -183,62 +187,270 @@ bool controllerWritable(uintptr_t self) {
   return self >= base && self + kControllerSpan <= base + mbi.RegionSize;
 }
 
-// Hold the character still while it is genuinely at rest, which is what the
-// rescale on its own cannot do: gravity keeps integrating against a surface, so
-// a frame still breaks through every few frames and leaves a sawtooth.
+// --- the ground ray ---------------------------------------------------------
 //
-// Rest is three conditions at once: ground contact, no horizontal velocity, and
-// a previous frame whose move the resolver threw away, which shows as the
-// position sitting exactly on the copy Update took on entry. The response is to
-// drop the vertical velocity gravity has been accumulating and to pin the air
-// timer. Pinning the timer is the load-bearing half: held at zero the grounded
-// grace period can never expire, so contact does not need a breakthrough frame
-// to be re-latched. Zeroing vel.Y without it makes the jitter worse rather than
-// better, because that velocity ramp is the only thing that ever clears the
-// threshold.
+// THE DEFECT. The engine holds a character up by cancelling its vertical
+// velocity on any frame it has ground contact, and keeps the grounded flag alive
+// for a fixed 0.0666667 seconds after contact is lost -- without stopping
+// gravity for that window. A character whose contact flickers therefore
+// free-falls while the engine still considers it grounded, and the whole
+// accumulated drop is corrected in one frame when contact returns. Fall, fall,
+// fall, jump, about fifteen times a second. The amplitude follows from a
+// wall-clock constant, so it is the same at any frame rate and only its
+// appearance changes: a fast buzz at high refresh, bumpy walking at 60.
 //
-// This must run BEFORE the original Update, not after it. Update refreshes the
-// entry-position copy on the way in, so the same test applied after the call
-// compares a value against itself, always passes, and describes nothing.
-void applyRestingStabilizer(uintptr_t self, float dt) {
-  if (!g_stabilizerActive || !(dt > 0.0f) || !controllerWritable(self))
-    return;
+// The engine already knows the right answer for a character standing still: it
+// casts a ray down from the feet and snaps to the hit. But the gate in front of
+// that demands the frame's resolved movement be under 1.1920929e-5, so anything
+// moving never qualifies and takes its height from sliding along contact planes
+// instead. On a slope that is what oscillates.
+//
+// THE CORRECTION runs the same query for a character that is moving. Ours rather
+// than the engine's, for one reason: the ray length. The engine reaches 5 units
+// below the feet, which is safe when the caller is already stationary on the
+// ground and is not safe here -- a character that has just walked off a ledge is
+// still flagged grounded for the grace period, and a 5 unit ray would snap it to
+// the ground below instead of letting it fall. A short ray finds the surface
+// underfoot and nothing else.
+//
+// Two details carry it. It runs AFTER the update, so the height is set for the
+// position the character actually ends the frame at rather than the one it left;
+// correcting first leaves the height stale by one frame's step, which on a slope
+// reads as falling behind the terrain instead of hugging it. And on a hit the
+// air timer is cleared, because the engine only notices ground when a character
+// sinks into it -- one held exactly on the surface never re-establishes contact,
+// the grace period expires, and it drops.
+//
+// Ported from the Arland games, where it was measured: residual motion falls to
+// one gravity step per frame, about a hundred times smaller than the bounce it
+// replaces. Every address below was read out of Ayesha's own binary rather than
+// carried over, because Ayesha is built with incremental linking and its calls
+// hop through a jump table first; these are the resolved targets.
+struct GroundRayAddrs {
+  uintptr_t raycast;
+  uintptr_t filterVtable;  // PSSG::detail::RaycastFilter
+  uintptr_t translate;     // pos += delta, and push to the scene node
+};
+constexpr GroundRayAddrs kGroundRayAyeshaEn { 0x85b930, 0x10f87d0, 0x739900 };
+constexpr GroundRayAddrs kGroundRayAyeshaMl { 0x87de30, 0x123f700, 0x75be00 };
+
+const GroundRayAddrs* groundRayAddressesFor(uint8_t exeBuild) {
+  return exeBuild == BuildEnglish ? &kGroundRayAyeshaEn : &kGroundRayAyeshaMl;
+}
+
+// How far below the feet to look. Well under a character's height, so a step or
+// a slope is found and a ledge is not.
+constexpr float kGroundRayReach = 0.35f;
+// The engine's own bias, so a character sits where the engine would put it.
+constexpr float kGroundRayBias = 0.01f;
+// A character launched downward by something other than gravity keeps its speed;
+// by the end of a grace period gravity alone cannot have reached this.
+constexpr float kGraceHoldMaxSpeed = 8.0f;
+
+// The query descriptor, read out of Ayesha's own construction of it. Laid out as
+// raw bytes with explicit offsets rather than as a struct: the engine's field
+// order is what it is, and a compiler that pads differently would corrupt the
+// call rather than fail to build.
+constexpr size_t kRayDescSize = 0x70;
+constexpr size_t kRayHitPos = 0x00;    // out, vec4
+constexpr size_t kRayOrigin = 0x20;    // in, vec4
+constexpr size_t kRayDirection = 0x30; // in, vec4, unit
+constexpr size_t kRayFlag40 = 0x40;
+constexpr size_t kRayDist44 = 0x44;
+constexpr size_t kRayHitObject = 0x48; // out
+constexpr size_t kRayFilter = 0x50;    // in, points at one qword: the vtable
+constexpr size_t kRayMask = 0x58;      // in, the engine passes 3
+constexpr size_t kRayDist60 = 0x60;    // in, the extent actually read
+constexpr size_t kRayFlag64 = 0x64;
+constexpr size_t kRayZero68 = 0x68;
+
+using PFN_Raycast = void* (*)(void* scene, void* descriptor);
+using PFN_Translate = void (*)(uintptr_t self, const void* delta);
+
+bool g_groundRayActive = false;
+bool g_graceActive = false;
+PFN_Raycast g_raycast = nullptr;
+PFN_Translate g_translate = nullptr;
+uintptr_t g_filterVtable = 0;     // the whole filter object is this one pointer
+
+struct GroundRayCounts {
+  uint32_t calls;
+  uint32_t notGround;
+  uint32_t noScene;
+  uint32_t dirty;
+  uint32_t missed;
+  uint32_t rejected;
+  uint32_t applied;
+};
+GroundRayCounts g_rayCounts = {};
+
+// A diagnostic, so an environment switch and no ini key.
+bool rayStatsEnabled() {
+  static const bool on = [] {
+    const char* value = std::getenv("DUSK_FIELD_RAY_STATS");
+    return value && value[0] != '0';
+  }();
+  return on;
+}
+
+bool applyGroundRay(uintptr_t self) {
+  if (!g_groundRayActive || !controllerWritable(self))
+    return false;
+  ++g_rayCounts.calls;
+  if (rayStatsEnabled() && g_rayCounts.calls % 4000 == 0) {
+    log("GROUNDRAY calls=", std::dec, g_rayCounts.calls,
+        " applied=", g_rayCounts.applied,
+        " notGround=", g_rayCounts.notGround,
+        " noScene=", g_rayCounts.noScene,
+        " dirty=", g_rayCounts.dirty,
+        " missed=", g_rayCounts.missed,
+        " rejected=", g_rayCounts.rejected);
+  }
 
   uint32_t flags = 0;
-  float vel[3] = {};
   float pos[3] = {};
-  float entryPos[3] = {};
+  float foot = 0.0f;
+  uintptr_t wrapper = 0;
+  uintptr_t node = 0;
   std::memcpy(&flags, reinterpret_cast<const void*>(self + kGroundedOffset),
               sizeof(flags));
-  std::memcpy(vel, reinterpret_cast<const void*>(self + kVelOffset), sizeof(vel));
   std::memcpy(pos, reinterpret_cast<const void*>(self + kPosOffset), sizeof(pos));
-  std::memcpy(entryPos, reinterpret_cast<const void*>(self + kEntryPosOffset),
-              sizeof(entryPos));
+  std::memcpy(&foot, reinterpret_cast<const void*>(self + kFootOffset),
+              sizeof(foot));
+  std::memcpy(&wrapper, reinterpret_cast<const void*>(self + kQueryIfaceOffset),
+              sizeof(wrapper));
+  std::memcpy(&node, reinterpret_cast<const void*>(self + kNodeOffset),
+              sizeof(node));
 
-  const bool grounded = (flags & kGroundedBit) != 0;
-  const bool horizontallyStill = std::fabs(vel[0]) < kRestSpeedEpsilon &&
-                                 std::fabs(vel[2]) < kRestSpeedEpsilon;
-  // The revert copies the entry vector back verbatim, so this is an exact
-  // match rather than a near one, and a single moved component disqualifies it.
-  const bool moveWasReverted = pos[0] == entryPos[0] && pos[1] == entryPos[1] &&
-                               pos[2] == entryPos[2];
-  if (!grounded || !horizontallyStill || !moveWasReverted)
+  // A jump clears the grounded bit outright, so this cannot fight one, and a
+  // genuine fall has already cleared it by the time it matters. A rising
+  // character is deliberately NOT skipped: walking up a slope reads as upward
+  // velocity, and refusing those frames refuses the whole uphill walk.
+  if ((flags & kGroundedBit) == 0) {
+    ++g_rayCounts.notGround;
+    return false;
+  }
+  if (!wrapper || !node) {
+    ++g_rayCounts.noScene;
+    return false;
+  }
+
+  uintptr_t scene = 0;
+  uint8_t dirty = 1;
+  if (!tryRead(wrapper + kWrapperScene, scene) ||
+      !tryRead(wrapper + kWrapperDirty, dirty) || !scene) {
+    ++g_rayCounts.noScene;
+    return false;
+  }
+  // A dirty scene is rebuilt by the engine before its own queries. Rather than
+  // call that rebuild, this frame is skipped: a missed correction costs one
+  // frame of the defect it is fixing, and calling into a rebuild from here would
+  // be the most invasive thing this feature does.
+  if (dirty != 0) {
+    ++g_rayCounts.dirty;
+    return false;
+  }
+
+  alignas(16) uint8_t descriptor[kRayDescSize] = {};
+  const float origin[4] = { pos[0], pos[1] + foot, pos[2], 0.0f };
+  const float direction[4] = { 0.0f, -1.0f, 0.0f, 0.0f };
+  const float reach = foot + kGroundRayReach;
+  const uint64_t mask = 3;
+  const uint64_t zero = 0;
+  const void* filter = &g_filterVtable;
+  std::memcpy(descriptor + kRayOrigin, origin, sizeof(origin));
+  std::memcpy(descriptor + kRayDirection, direction, sizeof(direction));
+  descriptor[kRayFlag40] = 0;
+  std::memcpy(descriptor + kRayDist44, &reach, sizeof(reach));
+  std::memcpy(descriptor + kRayHitObject, &zero, sizeof(zero));
+  std::memcpy(descriptor + kRayFilter, &filter, sizeof(filter));
+  std::memcpy(descriptor + kRayMask, &mask, sizeof(mask));
+  std::memcpy(descriptor + kRayDist60, &reach, sizeof(reach));
+  descriptor[kRayFlag64] = 1;
+  std::memcpy(descriptor + kRayZero68, &zero, sizeof(zero));
+
+  if (!g_raycast(reinterpret_cast<void*>(scene), descriptor)) {
+    ++g_rayCounts.missed;   // nothing underfoot: a real fall, leave it alone
+    return false;
+  }
+
+  float hitY = 0.0f;
+  std::memcpy(&hitY, descriptor + kRayHitPos + sizeof(float), sizeof(hitY));
+  const float delta = (hitY + kGroundRayBias) - pos[1];
+  // The ray cannot report a surface further than its own length, so a delta
+  // outside that means the hit is not what this feature thinks it is. Refusing
+  // is free; a bad correction is a character teleporting.
+  if (!(delta > -reach && delta < reach)) {
+    ++g_rayCounts.rejected;
+    return false;
+  }
+
+  const float move[4] = { 0.0f, delta, 0.0f, 0.0f };
+  g_translate(self, move);
+  const float rest = 0.0f;
+  std::memcpy(reinterpret_cast<void*>(self + kVelYOffset), &rest, sizeof(rest));
+  std::memcpy(reinterpret_cast<void*>(self + kAirTimerOffset), &rest,
+              sizeof(rest));
+  ++g_rayCounts.applied;
+  return true;
+}
+
+// The weaker half, for the frames where the ray finds no ground: inside the
+// grace period the engine still calls the character grounded, so its vertical
+// velocity has no business accumulating. Removing it turns the fall from
+// quadratic in the window to linear. The timer is NOT pinned here -- a character
+// that really has walked off a ledge must start falling when the period expires.
+bool graceHoldEnabled() {
+  static const bool enabled = [] {
+    const char* value = std::getenv("DUSK_FIELD_GRACE_HOLD");
+    return !value || value[0] != '0';
+  }();
+  return enabled;
+}
+
+bool groundRayEnabled() {
+  static const bool enabled = [] {
+    const char* value = std::getenv("DUSK_FIELD_GROUND_RAY");
+    return !value || value[0] != '0';
+  }();
+  return enabled;
+}
+
+void applyGraceHold(uintptr_t self) {
+  if (!g_graceActive || !controllerWritable(self))
     return;
-
-  const float zero = 0.0f;
-  std::memcpy(reinterpret_cast<void*>(self + kVelYOffset), &zero, sizeof(zero));
-  std::memcpy(reinterpret_cast<void*>(self + kAirTimerOffset), &zero,
-              sizeof(zero));
+  uint32_t flags = 0;
+  float airTimer = 0.0f;
+  float velY = 0.0f;
+  std::memcpy(&flags, reinterpret_cast<const void*>(self + kGroundedOffset),
+              sizeof(flags));
+  std::memcpy(&airTimer, reinterpret_cast<const void*>(self + kAirTimerOffset),
+              sizeof(airTimer));
+  std::memcpy(&velY, reinterpret_cast<const void*>(self + kVelYOffset),
+              sizeof(velY));
+  // Grounded but with the grace timer running is exactly the window: the flag
+  // is still set and the contact that set it is gone.
+  if ((flags & kGroundedBit) == 0 || !(airTimer > 0.0f))
+    return;
+  if (!(velY < 0.0f) || velY < -kGraceHoldMaxSpeed)
+    return;
+  const float rest = 0.0f;
+  std::memcpy(reinterpret_cast<void*>(self + kVelYOffset), &rest, sizeof(rest));
 }
 
 void STDMETHODCALLTYPE tracedFieldUpdate(uintptr_t self, float dt) {
-  // Both of these belong before the update, for different reasons: the threshold
-  // so the resolver this call drives reads the value meant for this frame, the
-  // stabilizer because Update overwrites the entry-position copy it tests.
+  // Before the update, so the resolver this call drives reads the value meant
+  // for this frame.
   applyThreshold(dt);
-  applyRestingStabilizer(self, dt);
+  // Also before it, because the grace hold works by taking away the vertical
+  // velocity the update is about to integrate.
+  applyGraceHold(self);
 
   originalFieldUpdate(self, dt);
+
+  // After it, so the height is set for the position the character actually ends
+  // the frame at. See the note above applyGroundRay.
+  applyGroundRay(self);
 }
 
 // Confirm the threshold really holds the shipped value, and make its page
@@ -270,18 +482,10 @@ bool prepareThreshold(BYTE* base, const FieldPhysicsAddrs& addrs,
 
 bool installFieldPhysics(BYTE* base, uint8_t exeBuild) {
   const bool wantFix = engineFixEnabled();
-  // The stabilizer holds the character only while it is grounded, and without
-  // the rescale that precondition can drop while the character is still
-  // settling: above roughly 115 fps the grace period expires before a frame
-  // moves far enough to re-establish contact. Holding the two apart is only
-  // useful for an A/B, and this half of the A/B is not sound, so it is refused
-  // rather than run.
-  bool wantStabilizer = stabilizerEnabled();
-  if (wantStabilizer && !wantFix) {
-    log("FIELDPHYS stabilizer needs the threshold rescale; leaving it off");
-    wantStabilizer = false;
-  }
-  if (!wantFix && !wantStabilizer) {
+  const bool wantGrace = graceHoldEnabled();
+  const GroundRayAddrs* rayAddrs =
+    groundRayEnabled() ? groundRayAddressesFor(exeBuild) : nullptr;
+  if (!wantFix && !wantGrace && !rayAddrs) {
     log("FIXES field_physics=off");
     return false;
   }
@@ -306,9 +510,8 @@ bool installFieldPhysics(BYTE* base, uint8_t exeBuild) {
     return false;
   }
   // The threshold is only meaningful if the function reading it is the one we
-  // think it is, and the stabilizer's whole premise is that same function's
-  // revert, so the resolver is verified before either is used.
-  if ((wantFix || wantStabilizer) &&
+  // think it is.
+  if (wantFix &&
       !matches(base + addrs->collisionResolver, resolverExpected)) {
     log("FIELDPHYS declined: unexpected collision-resolver prologue");
     return false;
@@ -316,7 +519,33 @@ bool installFieldPhysics(BYTE* base, uint8_t exeBuild) {
   ProtectionTransaction protection;
   if (wantFix && !prepareThreshold(base, *addrs, protection))
     return false;
-  g_stabilizerActive = wantStabilizer;
+  g_graceActive = wantGrace;
+
+  // The ground ray calls into the game rather than only writing to it, so both
+  // entry points are checked before either is armed. A wrong address here is a
+  // call through a pointer into the middle of a function.
+  if (rayAddrs) {
+    const std::array<BYTE, 8> raycastExpected = {
+      0x48, 0x8b, 0x41, 0x20, 0x48, 0x85, 0xc0, 0x74,
+    };
+    const std::array<BYTE, 12> translateExpected = {
+      0x48, 0x83, 0xec, 0x38, 0x48, 0x83, 0x79, 0x20,
+      0x00, 0x74, 0x66, 0xf3,
+    };
+    if (!matches(base + rayAddrs->raycast, raycastExpected)) {
+      log("FIELDPHYS ground ray declined: unexpected query prologue at 0x",
+          std::hex, rayAddrs->raycast, std::dec);
+    } else if (!matches(base + rayAddrs->translate, translateExpected)) {
+      log("FIELDPHYS ground ray declined: unexpected translate prologue at 0x",
+          std::hex, rayAddrs->translate, std::dec);
+    } else {
+      g_raycast = reinterpret_cast<PFN_Raycast>(base + rayAddrs->raycast);
+      g_translate = reinterpret_cast<PFN_Translate>(base + rayAddrs->translate);
+      g_filterVtable =
+        reinterpret_cast<uintptr_t>(base + rayAddrs->filterVtable);
+      g_groundRayActive = true;
+    }
+  }
 
   const bool installed = installMinHookDetour(base + addrs->update,
     reinterpret_cast<void*>(&tracedFieldUpdate),
@@ -330,13 +559,15 @@ bool installFieldPhysics(BYTE* base, uint8_t exeBuild) {
           " be restored");
     else
       g_moveThreshold = nullptr;
-    g_stabilizerActive = false;
+    g_graceActive = false;
+    g_groundRayActive = false;
   } else {
     protection.commit();
   }
   log("FIXES field_physics=", installed ? "active" : "failed",
       " engine_fix=", installed && g_moveThreshold ? 1 : 0,
-      " stabilizer=", g_stabilizerActive ? 1 : 0);
+      " grace_hold=", g_graceActive ? 1 : 0,
+      " ground_ray=", g_groundRayActive ? 1 : 0);
   return installed;
 }
 

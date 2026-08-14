@@ -1,25 +1,16 @@
 // SPDX-License-Identifier: MIT
 //
-// Ayesha field movement: the ground ray and the threshold rescale. See
-// field_physics.h for both defects and what each correction does.
+// Ayesha field movement: the addresses, and how each correction is applied.
 //
-// Ported from the Arland games, which run the same character controller under a
-// different renderer. Nothing was carried across on faith: every address here
-// was resolved from Ayesha's own call sites, and the three controller offsets
-// the ray dereferences were read out of Ayesha's own resolver. Ayesha is built
-// with incremental linking, so its calls hop through a jump table first and the
-// addresses below are the resolved targets rather than the call operands.
+// See field_physics.h for both defects, what each correction does about them,
+// why the ray runs after the engine's update, and which switch turns which one
+// off. None of that is repeated here.
 //
-// A resting stabilizer used to sit alongside the rescale here. The ground ray
-// covers its case and reaches a moving character besides, which the stabilizer
-// structurally could not, so it was removed once the two were compared. The
-// rescale stays: it fixes movement being discarded outright at high refresh,
-// which the ray cannot help with, because the revert it guards against restores
-// the whole position vector including any correction.
-//
-// `DUSK_FIELD_ENGINE_FIX=0` stands the rescale down, `DUSK_FIELD_GROUND_RAY=0`
-// the ray, `DUSK_FIELD_GRACE_HOLD=0` its fallback, and `DUSK_FIELD_RAY_STATS=1`
-// reports why the ray did or did not correct.
+// ONE IMPLEMENTATION FACT THAT LIVES ONLY HERE. Ayesha is built with
+// incremental linking, so its calls hop through a jump table first and every
+// address below is the resolved target rather than the call operand. The three
+// controller offsets the ray dereferences were read out of Ayesha's own
+// resolver, not carried across from the Arland build.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
@@ -88,7 +79,7 @@ constexpr float kReferenceDt = 1.0f / 60.0f;
 constexpr float kMinThreshold = 0.0005f;
 
 // Per-build addresses. The threshold is a float in the writable data section
-// with exactly one reader — the collision resolver, at +0x5d1 — and no writer
+// with exactly one reader -- the collision resolver, at +0x5d1 -- and no writer
 // anywhere in the image. The resolver is verified before the threshold is
 // trusted, since neither is meaningful without the other.
 struct FieldPhysicsAddrs {
@@ -117,8 +108,9 @@ float* g_moveThreshold = nullptr;   // null unless verified and made writable
 // the matrix while installFieldPhysics saw false and logged
 // `FIXES field_physics=off`. featureEnabled() is the only thing that knows
 // about the matrix, the Unsupported hard-off, and the environment override,
-// and every gate in this tree has to ask it rather than reimplement a third of
-// it.
+// and any gate with a matrix column has to ask it rather than reimplement a
+// third of it. The ground ray and the grace hold have no column and answer to
+// their environment switches alone; game.h records that split.
 bool engineFixEnabled() {
   return featureEnabled(Feature::FieldEngineFix);
 }
@@ -159,7 +151,7 @@ void applyThreshold(float dt) {
 // character needs no hatch: penetration push-out is applied to the position
 // before the movement is measured, so it accumulates until the frame stands on
 // its own, the position no longer matches the entry copy, and the hold releases
-// itself. Ground receding downward would need the snap, but no Arland field map
+// itself. Ground receding downward would need the snap, but no Ayesha field map
 // has moving floors, lifts or platforms to produce it.
 //
 // If one is ever needed, the only form that works is to stop holding and stay
@@ -189,15 +181,9 @@ bool controllerWritable(uintptr_t self) {
 
 // --- the ground ray ---------------------------------------------------------
 //
-// THE DEFECT. The engine holds a character up by cancelling its vertical
-// velocity on any frame it has ground contact, and keeps the grounded flag alive
-// for a fixed 0.0666667 seconds after contact is lost -- without stopping
-// gravity for that window. A character whose contact flickers therefore
-// free-falls while the engine still considers it grounded, and the whole
-// accumulated drop is corrected in one frame when contact returns. Fall, fall,
-// fall, jump, about fifteen times a second. The amplitude follows from a
-// wall-clock constant, so it is the same at any frame rate and only its
-// appearance changes: a fast buzz at high refresh, bumpy walking at 60.
+// THE DEFECT is in field_physics.h. What matters here is the part of it the
+// header does not cover: why this casts its own ray rather than asking the
+// engine for one.
 //
 // The engine already knows the right answer for a character standing still: it
 // casts a ray down from the feet and snaps to the hit. But the gate in front of

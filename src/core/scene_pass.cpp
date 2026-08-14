@@ -22,33 +22,6 @@ extern Log log;   // main.cpp
 
 namespace {
 
-
-// HOW MANY DISTINCT SURFACES THE TEST ACCEPTS, which is the question the leave
-// count just redirected us to. One leave per frame means the trigger fires at
-// the end of scene rendering, so timing is not the fault -- but if several
-// targets satisfy the test, the pass antialiases one and the composite reads
-// another, and the result is exactly what was seen: the debug edge map showing
-// through in some regions and only some ground textures sharpened.
-//
-// A static read of Escha's creation paths found a ping-pong pool of
-// screen-sized 0x28 colour targets that Shallie does not have, so more than one
-// bind can satisfy the test on that game. This counts them rather than assuming
-// the reading applies.
-constexpr int kMaxAccepted = 16;
-void* g_accepted[kMaxAccepted] = {};
-std::atomic<int> g_acceptedCount{0};
-
-void noteAccepted(ID3D11Texture2D* colour) {
-  const int n = g_acceptedCount.load(std::memory_order_relaxed);
-  for (int i = 0; i < n && i < kMaxAccepted; ++i)
-    if (g_accepted[i] == colour)
-      return;
-  if (n >= kMaxAccepted)
-    return;
-  g_accepted[n] = colour;
-  g_acceptedCount.store(n + 1, std::memory_order_relaxed);
-}
-
 // The scene colour last bound on this context. Per-context, because Ayesha
 // records its scene on a deferred context and replays it on the immediate one,
 // so a single global would mix the two.
@@ -124,7 +97,6 @@ void scenePassNoteBoundary(ID3D11DeviceContext* context, unsigned int numViews,
   // private-data tag below and supersampling's host tag are for.
 
   if (arrivingIsScene) {
-    noteAccepted(arrivingColor);
     context->SetPrivateDataInterface(IID_DuskSceneColor, arrivingColor);
     // Tag it for supersampling. This module owns the verdict "that surface is
     // the scene"; supersample.cpp owns storing it, so there is still exactly

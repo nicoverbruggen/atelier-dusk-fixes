@@ -79,26 +79,38 @@ bool hostExeName(std::array<wchar_t, 32768>& path, const wchar_t** name) {
 //    executable's entry point instead, by which time the process is fully
 //    assembled.
 //
+//    The same rule applies to DECIDING what to start. Reading which target the
+//    settings ask for means profile reads, file-attribute queries and, on the
+//    KTGL games, profile writes, and DllMain holds the loader lock. All of it
+//    therefore happens at the entry point too, in resolveStartTarget.
+//    armRedirect verifies the entry window and splices; nothing else.
+//
 //  - The stock launcher process must stay alive while ours is open, rather than
 //    being terminated the moment its replacement starts. It is the process
 //    Steam launched and is counting, and the game is started from our launcher
 //    underneath it. Waiting costs nothing -- this process has no window and no
 //    work of its own once its entry point belongs to us.
 //
-// Nothing here is destructive if the install is partial: with no
-// dusk-fix-launcher.exe next to it the redirect is never armed and the stock
-// launcher comes up exactly as before. That is the state this repository ships
-// in today, so SkipLauncher is the only path that currently does anything.
+// Nothing here is destructive if the install is partial. The entry point is
+// restored before anything is decided, so with no dusk-fix-launcher.exe next to
+// it the stock launcher runs from its own unmodified entry bytes. That is the
+// state this repository ships in today, so SkipLauncher is the only path that
+// currently does anything.
 //
 // DUSK_NO_REDIRECT stands the redirect down. Our launcher will set it on the
 // original launcher and settings editor when its own buttons open them, which
 // is what stops those buttons from being bounced straight back here.
 
 // What the redirect starts: our launcher normally, the game itself when
-// SkipLauncher is set. `g_startsGame` is what armRedirect asks to decide which
-// of the two it resolves into `g_startTarget`.
+// SkipLauncher is set. Both are resolved at the entry point rather than at
+// arm time; see redirectedEntryPoint.
 std::array<wchar_t, 32768> g_startTarget = { };
 bool g_startsGame = false;
+// The row armRedirect matched on. Points into SupportedGames, which is a
+// namespace-scope constant, so it stays valid for the life of the process.
+// redirectedEntryPoint needs it and cannot re-derive it: by then the host name
+// has already served its purpose.
+const struct DuskGame* g_game = nullptr;
 std::array<wchar_t, 32768> g_gameDirectory = { };
 std::uint8_t* g_entryPoint = nullptr;
 std::array<std::uint8_t, 5> g_entryOriginal = { };
@@ -362,17 +374,15 @@ bool resolveGameExecutable(const DuskGame& game,
   return false;
 }
 
-// Put the executable's own entry point back and run it, for the case where the
-// target cannot be started after all. The launcher then comes up as if the mod
-// were not installed.
-void runOriginalEntryPoint() {
+// Put the executable's own five entry bytes back, so the image is the one that
+// shipped. Called first thing from redirectedEntryPoint, before anything that
+// could fail, which is what makes every path below it able to fall back to the
+// stock launcher without a second protection change.
+bool restoreEntryPoint() {
   DWORD oldProtect = 0;
   if (!VirtualProtect(g_entryPoint, g_entryOriginal.size(),
-      PAGE_EXECUTE_READWRITE, &oldProtect)) {
-    // Calling while the jump is still present re-enters redirectedEntryPoint,
-    // which comes back here again. Exit instead of recursing to stack failure.
-    ExitProcess(1);
-  }
+      PAGE_EXECUTE_READWRITE, &oldProtect))
+    return false;
   std::memcpy(g_entryPoint, g_entryOriginal.data(), g_entryOriginal.size());
   FlushInstructionCache(GetCurrentProcess(), g_entryPoint,
     g_entryOriginal.size());
@@ -382,11 +392,58 @@ void runOriginalEntryPoint() {
   // turn a cosmetic failure into a launcher that does nothing.
   DWORD ignored = 0;
   VirtualProtect(g_entryPoint, g_entryOriginal.size(), oldProtect, &ignored);
+  return true;
+}
+
+// Run the launcher as if the mod were not installed. Only valid once
+// restoreEntryPoint has succeeded: while the jump is still there this would
+// re-enter redirectedEntryPoint and recurse to stack failure.
+void runOriginalEntryPoint() {
   reinterpret_cast<void (*)()>(g_entryPoint)();
+}
+
+// Which target to start, resolved here rather than at arm time.
+//
+// ALL OF THIS IS FILE WORK: two profile reads and up to three file-attribute
+// queries, and on the KTGL games applyAutoResolution adds a display
+// enumeration and five profile writes. armRedirect runs from DllMain, so doing
+// it there put every one of those under the loader lock. Nothing about them
+// needs to happen that early -- their only ordering requirement is that they
+// precede the target starting, and this does.
+bool resolveStartTarget() {
+  g_startsGame = skipLauncherRequested();
+  // Before either target starts. With SkipLauncher this is the only chance to
+  // follow the display at all; without it the window is about to re-resolve the
+  // same value anyway, so doing it here as well keeps one code path rather than
+  // two.
+  applyAutoResolution(g_game && g_game->ssaaScalesGameIni);
+  if (g_startsGame)
+    return g_game && resolveGameExecutable(*g_game, g_startTarget);
+  return pathInGameDirectory(L"dusk-fix-launcher.exe", g_startTarget) &&
+         GetFileAttributesW(g_startTarget.data()) != INVALID_FILE_ATTRIBUTES;
 }
 
 // Stands in for the launcher's entry point once the redirect is armed.
 void redirectedEntryPoint() {
+  // RESTORED FIRST, before anything that can fail or take time. Two things
+  // follow from that. The image spends the shortest possible time carrying the
+  // jump, and from here on the stock launcher is reachable by a plain call --
+  // there is no way back into this function, so a failure below is a fallback
+  // rather than a recursion.
+  //
+  // Exiting is the only thing left if the restore itself fails, because the
+  // jump is then still live and calling it comes straight back here.
+  if (!restoreEntryPoint())
+    ExitProcess(1);
+
+  // No target: the mod is partially installed, or the game folder does not hold
+  // what SkipLauncher asked for. The launcher comes up exactly as it would
+  // without the mod.
+  if (!resolveStartTarget()) {
+    runOriginalEntryPoint();
+    return;
+  }
+
   STARTUPINFOW startup = { };
   startup.cb = sizeof(startup);
   PROCESS_INFORMATION process = { };
@@ -441,20 +498,10 @@ bool armRedirect() {
 
   // Where the redirect goes. SkipLauncher asks for the game itself; without it
   // (the default) this is our launcher.
-  g_startsGame = skipLauncherRequested();
-  // Before either target starts. With SkipLauncher this is the only chance to
-  // follow the display at all; without it the window is about to re-resolve the
-  // same value anyway, so doing it here as well costs nothing and keeps one
-  // code path rather than two.
-  applyAutoResolution(game->ssaaScalesGameIni);
-  if (g_startsGame) {
-    if (!resolveGameExecutable(*game, g_startTarget)) {
-      return false;
-    }
-  } else if (!pathInGameDirectory(L"dusk-fix-launcher.exe", g_startTarget) ||
-      GetFileAttributesW(g_startTarget.data()) == INVALID_FILE_ATTRIBUTES) {
-    return false;
-  }
+  // Where the redirect goes is decided at the entry point, not here. See
+  // resolveStartTarget: all of it is profile and file-system work, and this
+  // function runs under the loader lock.
+  g_game = game;
 
   auto* base = reinterpret_cast<std::uint8_t*>(GetModuleHandleW(nullptr));
   if (!base)

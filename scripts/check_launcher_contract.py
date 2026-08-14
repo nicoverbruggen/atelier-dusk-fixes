@@ -46,7 +46,7 @@ def main():
             "candidateHeight = uint64_t(height) * candidate / 100",
             "L\"DisplayWidth\", value, ini.data()",
             "L\"DisplayHeight\", value, ini.data()",
-            "applyAutoResolution(game->ssaaScalesGameIni)",
+            "applyAutoResolution(g_game && g_game->ssaaScalesGameIni)",
         ):
             if token not in PROXY:
                 raise ValueError(
@@ -60,6 +60,24 @@ def main():
             raise ValueError("proxy does not verify the per-title entry window")
         if arm.index("std::memcmp(g_entryPoint") > arm.index("VirtualProtect(g_entryPoint"):
             raise ValueError("proxy makes the entry writable before verifying its bytes")
+        # armRedirect runs from DllMain, so it holds the loader lock. Deciding
+        # what to start means profile reads, file-attribute queries and, on the
+        # KTGL games, profile writes; none of that belongs there. It has to
+        # happen before the executable's entry point either way, so the entry
+        # point is where it goes.
+        for banned in (
+            "PrivateProfile",
+            "GetFileAttributes",
+            "EnumDisplaySettings",
+            "skipLauncherRequested",
+            "resolveGameExecutable",
+            "applyAutoResolution",
+        ):
+            if banned in arm:
+                raise ValueError(
+                    "armRedirect holds the loader lock and must not touch the "
+                    "file system: " + banned
+                )
         for token in (
             "kLauncherEntryRelocationOffset = 13",
             "kLauncherPreferredImageBase = 0x00400000",
@@ -70,12 +88,51 @@ def main():
         if PROXY.count("0x00 }") < 3:
             raise ValueError("Dusk launcher entry windows do not cover the full relocation")
 
+        # The five entry bytes go back before anything that can fail, so every
+        # path after it reaches the stock launcher by a plain call. A restore
+        # that cannot report its own failure is the dangerous one: the jump is
+        # still live, and calling it comes straight back into the redirect.
+        restore = require(
+            r"bool restoreEntryPoint\(\) \{(.*?)\n\}", PROXY,
+            "restoreEntryPoint",
+        ).group(1)
+        if "if (!VirtualProtect" not in restore or "return false" not in restore:
+            raise ValueError("restoreEntryPoint does not report a failed restore")
+
+        redirected = require(
+            r"void redirectedEntryPoint\(\) \{(.*?)\n\}", PROXY,
+            "redirectedEntryPoint",
+        ).group(1)
+        if ("if (!restoreEntryPoint())" not in redirected
+                or "ExitProcess(1)" not in redirected):
+            raise ValueError("entry restore failure can recurse into the redirect")
+        if redirected.index("restoreEntryPoint()") > redirected.index(
+                "resolveStartTarget()"):
+            raise ValueError(
+                "the entry point is restored after the file work rather than "
+                "before it"
+            )
+        if "runOriginalEntryPoint();" not in redirected:
+            raise ValueError(
+                "redirectedEntryPoint never falls back to the stock launcher"
+            )
+
+        # runOriginalEntryPoint is call-only now: the restore belongs to its
+        # caller and happens once. A protection change back in here would mean
+        # two restores and the recursion hazard returning with them.
         original = require(
             r"void runOriginalEntryPoint\(\) \{(.*?)\n\}", PROXY,
             "runOriginalEntryPoint",
         ).group(1)
-        if "if (!VirtualProtect" not in original or "ExitProcess(1)" not in original:
-            raise ValueError("entry restore failure can recurse into the redirect")
+        if "VirtualProtect" in original:
+            raise ValueError(
+                "runOriginalEntryPoint restores again; the restore belongs to "
+                "its caller"
+            )
+        if "reinterpret_cast<void (*)()>(g_entryPoint)()" not in original:
+            raise ValueError(
+                "runOriginalEntryPoint never calls the entry point it stands for"
+            )
 
         if "LastWrite" in GUI or "verifyWrite(" in GUI:
             raise ValueError("GUI reverted to last-key-only save verification")

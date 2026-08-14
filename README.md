@@ -30,14 +30,13 @@ If the game crashes, the mod appends a report to `dusk-fix.log` that helps pinpo
 
 ### List of graphics enhancements
 
-These things were not part of the original games, but were added with the mod. Each one can be turned on or off in the launcher. Edge smoothing is on to begin with, as is anisotropic filtering where the game supports it; supersampling and sharpening are optional.
+These things were not part of the original games, but were added with the mod. Each one can be turned on or off in the launcher. Edge smoothing is on to begin with; supersampling and sharpening are optional.
 
 | Enhancement                                | Ayesha | Escha & Logy | Shallie |
 |--------------------------------------------|:------:|:------------:|:-------:|
 | Edge smoothing (SMAA)                      |   ✓    |      ✓       |    ✓    |
 | Supersampling (internal render resolution) |   ✓    |      ✓       |    ✓    |
 | Sharpening                                 |   ✓    |      ✓       |    ✓    |
-| Anisotropic filtering                      |   ✓    |      —       |    —    |
 
 ## Installation on Windows
 

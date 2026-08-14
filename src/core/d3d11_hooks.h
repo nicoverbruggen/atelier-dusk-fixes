@@ -45,15 +45,12 @@ namespace atfix {
 using PFN_CreateTexture2D = HRESULT (STDMETHODCALLTYPE *) (
   ID3D11Device*, const D3D11_TEXTURE2D_DESC*, const D3D11_SUBRESOURCE_DATA*,
   ID3D11Texture2D**);
-using PFN_CreateSamplerState = HRESULT (STDMETHODCALLTYPE *) (
-  ID3D11Device*, const D3D11_SAMPLER_DESC*, ID3D11SamplerState**);
 // The trampolines for whichever device methods were hooked. A member is null
 // when that hook was not requested or could not be installed, so a detour must
 // never be reachable without its own original being set -- which it cannot be,
 // since an uninstalled hook is never called.
 struct DeviceOriginals {
   PFN_CreateTexture2D createTexture2D = nullptr;
-  PFN_CreateSamplerState createSamplerState = nullptr;
 };
 
 const DeviceOriginals& d3d11DeviceOriginals();

@@ -38,9 +38,7 @@ const char* engineName(Engine e);
 // AtlasCache, HighResRendering, and both field-jitter halves ship on by
 // default for Ayesha. AtlasVerify and TargetCensus are diagnostics. Several
 // later fixes are shared, while LoadingTextTypo and SystemSaveGuard begin the
-// KTGL-specific group. AnisotropicFiltering is Ayesha-only;
-// the implementation is generic D3D11, but the KTGL rows deliberately reject
-// it so configuration cannot activate an unvalidated sampler rewrite there.
+// KTGL-specific group.
 enum class Feature : uint8_t {
   AtlasVerify,      // Ayesha font-atlas snapshot-vs-real comparison (slow)
   TargetCensus,     // any game: sizes of the render/depth targets it creates
@@ -50,7 +48,6 @@ enum class Feature : uint8_t {
   FieldStabilizer,  // Ayesha high-refresh field jitter: hold the character at rest
   Smaa,             // any game: SMAA scene antialiasing before UI composition
   Supersampling,    // any game: render above display size, downscale to it
-  AnisotropicFiltering, // Ayesha: upgrade basic samplers (sampler.h)
   WorldMapCursor,   // Ayesha + Escha: travel-map cursor per second, not per frame
   SkipStartupLogos, // any game: skip the publisher/developer logos shown at boot
   SkipIntroMovie,   // any game: skip the movie played on the way to the title

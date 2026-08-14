@@ -23,8 +23,8 @@ const char* configPath();
 bool duskConfigBool(const char* section, const char* key, bool def);
 
 // Numeric option, for the settings that are a value rather than a switch (the
-// supersampling multiplier, the anisotropic level). Seeds `def` when the key is
-// absent, exactly as duskConfigBool does.
+// supersampling multiplier). Seeds `def` when the key is absent, exactly as
+// duskConfigBool does.
 int duskConfigInt(const char* section, const char* key, int def);
 
 // Write the settings actually in force to the log once at startup: the ini path

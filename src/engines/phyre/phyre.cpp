@@ -88,7 +88,7 @@ namespace dusk {
 bool initializePhyreFixes() {
   static const bool initialized = [] {
     // Identity is resolved independently of the address-based feature set.
-    // Shared D3D fixes (SMAA, anisotropy, sharpening and supersampling) still
+    // Shared D3D fixes (SMAA, sharpening and supersampling) still
     // need a verified host when every Phyre address fix is disabled.
     g_game = recognizeExecutable(g_base);
     if (!g_game)

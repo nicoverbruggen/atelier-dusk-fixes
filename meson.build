@@ -75,7 +75,6 @@ else
     'src/core/mix_card.cpp',
     'src/core/pad_rescan.cpp',
     'src/core/pad_notify_trace.cpp',
-    'src/core/sampler.cpp',
     'src/core/scene_pass.cpp',
     'src/core/sharpen.cpp',
     'src/core/smaa.cpp',

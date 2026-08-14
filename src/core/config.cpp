@@ -10,7 +10,6 @@
 #include "config.h"
 #include "game.h"
 #include "log.h"
-#include "sampler.h"
 #include "sharpen.h"
 #include "smaa.h"
 #include "supersample.h"
@@ -132,11 +131,6 @@ void logConfiguration() {
   } else {
     log("Config:   Supersampling = ", ssaaPercent(), "%");
   }
-
-  if (featureSupport(Feature::AnisotropicFiltering) == Support::Unsupported)
-    log("Config:   AnisotropicFiltering = unsupported on this game");
-  else
-    log("Config:   AnisotropicFiltering = ", anisotropyLevel(), "x");
 
   log("Config:   Sharpen = ",
       static_cast<unsigned int>(sharpenAmount() * 100.0f + 0.5f), "%");

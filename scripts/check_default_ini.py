@@ -29,17 +29,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SECTIONS = ("Rendering", "Startup", "Interface", "Launcher")
 
-# Options the code reads that are deliberately kept out of default.ini.
-#
-# AnisotropicFiltering is ON BY DEFAULT on Ayesha and Unsupported on the other
-# two games, so there is no single value the shipped file could carry. Writing
-# the line would turn it OFF on the one game that supports it, which is worse
-# than leaving it unstated -- default.ini promises that deleting any line
-# changes nothing. It is named in default.ini's comments instead, so a reader
-# still learns that it exists on Ayesha.
-UNDOCUMENTED = {
-    ("Rendering", "AnisotropicFiltering"),
-}
+# Options the code reads that are deliberately kept out of default.ini. Empty
+# today: every option the code reads carries one shipped value that is correct
+# on all three games, so default.ini can state it. An option belongs here only
+# when no single value would be right -- writing the line would then change
+# behaviour on at least one game, and default.ini promises that deleting any
+# line changes nothing.
+UNDOCUMENTED: set[tuple[str, str]] = set()
 
 SECTION_ALT = "|".join(SECTIONS)
 PATTERNS = (

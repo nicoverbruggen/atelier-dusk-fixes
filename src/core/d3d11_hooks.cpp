@@ -12,7 +12,6 @@
 #include "hook_util.h"
 #include "highres.h"
 #include "log.h"
-#include "sampler.h"
 #include "scene_pass.h"
 #include "sharpen.h"
 #include "smaa.h"
@@ -189,8 +188,7 @@ void d3d11InstallHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
   // below. Naming it here is what keeps `DUSK_SSAA=200` with everything else
   // off from installing nothing and reporting nothing.
   if (!highRes.createTexture2D && !highRes.rasterCorrection &&
-      !anisotropyLevel() && !smaaPreUiEnabled() && !ssaaActive() &&
-      !sharpenEnabled())
+      !smaaPreUiEnabled() && !ssaaActive() && !sharpenEnabled())
     return;
 
   // The Phyre module initializes MinHook for Ayesha, but this subsystem is the
@@ -340,22 +338,6 @@ void d3d11InstallHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
     }
   }
 
-  // Device slot 23, CreateSamplerState. Cheap and unconditional when on: the
-  // upgrade is a descriptor rewrite at creation time, and sampler states are
-  // created a handful of times per session, not per frame.
-  if (anisotropyLevel()) {
-    if (!transaction.create(deviceVtable[23],
-          reinterpret_cast<void*>(&hookedCreateSamplerState),
-          reinterpret_cast<void**>(&g_deviceOriginals.createSamplerState))) {
-      decline();
-      if (deferred)
-        deferred->Release();
-      if (owned)
-        owned->Release();
-      return;
-    }
-  }
-
   int hookedVtables = 0;
   if (specCount) {
     if (!addContextVtable(immediateVtable, g_immediateOriginals, specs,
@@ -426,7 +408,6 @@ void d3d11InstallHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
   log("D3D11HOOKS: installed highres=", highRes.rasterCorrection ? 1 : 0,
       " census=", highRes.createTexture2D && !highRes.rasterCorrection ? 1 : 0,
       " ssaa=", ssaaPercent(),
-      " aniso=", anisotropyLevel(),
       " contextVtables=", hookedVtables,
       " hooksPerVtable=", specCount);
 

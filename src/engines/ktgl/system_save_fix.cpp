@@ -49,6 +49,11 @@ constexpr uintptr_t kCompleted = 0x430;    // byte; the flag the caller gates on
 constexpr uint32_t kStateReadFailed = 7;
 constexpr uint32_t kErrorReadFailed = 5;
 
+// The values its success exit writes, in one qword store covering both fields:
+// `mov qword ptr [rbx+0x10], 6` at escha-en 0x138ba1.
+constexpr uint32_t kStateCompleted = 6;
+constexpr uint32_t kErrorNone = 0;
+
 // Set when a system-data load completed having read nothing, cleared when one
 // genuinely succeeds. While set, system-data saves are refused.
 std::atomic<bool> g_systemDataUntrusted{false};
@@ -220,11 +225,20 @@ void STDMETHODCALLTYPE tracedSaveStep(uintptr_t self) {
     // The object is left reporting completion so the caller's poll terminates.
     // It asked for a write and is told the write finished; what it is not told
     // is that the bytes it wanted written were defaults.
-    const uint32_t state = 6;
+    //
+    // The error field is written with the state because the engine writes both
+    // in one store. Setting the state alone leaves a combination the engine
+    // never produces -- completed, state 6, and whatever error the constructor
+    // set -- so a refused save stays indistinguishable from a real one in every
+    // field the engine defines.
+    const uint32_t state = kStateCompleted;
+    const uint32_t error = kErrorNone;
     const uint8_t done = 1;
     if (readableRange(self + kState, sizeof(state)) &&
+        readableRange(self + kError, sizeof(error)) &&
         readableRange(self + kCompleted, sizeof(done))) {
       std::memcpy(reinterpret_cast<void*>(self + kState), &state, sizeof(state));
+      std::memcpy(reinterpret_cast<void*>(self + kError), &error, sizeof(error));
       std::memcpy(reinterpret_cast<void*>(self + kCompleted), &done, sizeof(done));
     }
     const uint32_t n = g_savesRefused.fetch_add(1, std::memory_order_relaxed) + 1;

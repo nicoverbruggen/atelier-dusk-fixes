@@ -120,8 +120,16 @@ BOOL WINAPI hookedSetWindowPos(HWND hwnd, HWND after, int x, int y, int cx,
   // here to 2890x1656 -- a 2880x1620 client plus frame -- before the game ever
   // touches D3D11. Correcting it at creation could not work because at creation
   // there was no size to correct.
+  //
+  // THE MODULE TEST IS WHAT NARROWS THIS TO THE GAME'S WINDOW. The comment
+  // above records another module creating a window in this process, so "any
+  // window bigger than the display on both axes" is not a description of one
+  // window. hookedCreateWindowExA already requires the instance to be the
+  // executable's own; this is the same test, spelled for a window that exists.
   if (sizing.load(std::memory_order_relaxed) && !(flags & SWP_NOSIZE) &&
-      cx > 0 && cy > 0) {
+      cx > 0 && cy > 0 &&
+      reinterpret_cast<HMODULE>(GetWindowLongPtrA(hwnd, GWLP_HINSTANCE)) ==
+        GetModuleHandleW(nullptr)) {
     unsigned int displayWidth = 0, displayHeight = 0;
     if (ktglClampedDisplaySize(&displayWidth, &displayHeight)) {
       const LONG style = GetWindowLongA(hwnd, GWL_STYLE);

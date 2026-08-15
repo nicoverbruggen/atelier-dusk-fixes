@@ -41,6 +41,18 @@ This repository publishes **no investigation record**. The evidence layer — di
 
 That places a real obligation on comments. They carry what a separate document would have carried, so they are written for someone who can program but does not know this engine, and they record the reasoning rather than restating the code. A measurement that decided a design goes in the header that design lives in.
 
+### How much a comment says
+
+The everyday style is already right: half of all comment blocks are three lines and nine in ten are ten lines or under. What follows is about the few that carry an essay.
+
+**One explanation, one place.** A mechanism is explained in the header of the file that implements it. Everywhere else names it and stops. When a passage explains a mechanism and then says "See `supersample.h`", the text above the pointer is a second copy: keep the pointer and delete the copy. Before deleting, check the fact really does exist at the destination, and move it there when it does not.
+
+**A comment answers what a reader asks where it sits.** At the capability matrix a reader asks what the table is, how to read a cell, and what to do when adding a row. They do not ask how supersampling identifies the composite. Explaining another file's mechanism is the sign that the text is in the wrong file.
+
+**A file header is different, and may be long.** The code is the technical record, so the header of the file that owns a fix carries what a separate document would: the defect, the correction, why it takes that shape, and the measurement that settled it. `src/core/sharpen.h` is the model.
+
+**Do not trim by the ruler.** Length finds candidates. It does not judge them. A long block that is entirely about the thing its file implements is doing its job.
+
 The only user-facing documents are `README.md`, which lists what the mod does per game, and `default.ini`, which lists what can be set.
 
 ## Game copies

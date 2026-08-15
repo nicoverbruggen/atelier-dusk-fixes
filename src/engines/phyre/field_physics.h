@@ -24,6 +24,11 @@ namespace atfix {
 // frame when contact returns. The amplitude follows from a wall-clock constant,
 // so it is the same at any frame rate; only its appearance changes.
 //
+// Quantified on Ayesha from a capture of the atelier's interior steps: 12 to 18
+// px of vertical excursion while the character is horizontally at rest. That
+// shape is a gravity-versus-threshold sawtooth rather than a bob, and it is
+// what settles this as a defect correction rather than a preference.
+//
 // The correction casts a short ray down from the feet after the frame's
 // movement, and where it finds ground, puts the character on it and takes its
 // vertical velocity away. What is left is one gravity step per frame. Two

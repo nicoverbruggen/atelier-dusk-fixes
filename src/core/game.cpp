@@ -109,219 +109,25 @@ constexpr Support O = Support::OptIn;
 constexpr Support X = Support::OnByDefault;
 
 // The capability matrix. Rows are Ayesha / Escha & Logy / Shallie, columns
-// follow the Feature enum. KEEP IN SYNC with README.md's feature table.
+// follow the Feature enum, and a cell is X on by default, O opt-in, U
+// unsupported. KEEP IN SYNC with README.md's feature table.
 //
-// AtlasVerify is the correctness check for the cache, and is Ayesha-only and
-// OptIn for a stronger reason than the others: it makes the game slow on purpose
-// (a real atlas lock plus a ~1 MB comparison per verified read). It answers the
-// one question a playthrough cannot, since a stale glyph in Japanese is not
-// something a reader can reliably spot.
+// A cell says whether this game can have the feature and what it defaults to,
+// and nothing else. Why it defaults that way belongs beside the code that
+// answers it: engines/phyre/atlas_fix.h, core/supersample.h, core/highres.h,
+// engines/phyre/field_physics.h, and so on.
 //
-// AtlasCache is Ayesha-only and ships ON BY DEFAULT: it is the shipping fix.
-// The pattern it addresses is measured, not assumed -- 2385 candidate locks onto
-// 3 atlases per 248 ms drain, plus a per-frame steady-state drip -- and the
-// measured effect is an 85% reduction in menu-build time at a 95.5% hit rate
-// (see engines/phyre/atlas_fix.h). Like the field-jitter fix it has no ini
-// key and no launcher control; `DUSK_ATLAS_CACHE=0` turns it off, which is what
-// an A/B or a bug report wants.
-//
-// FieldEngineFix is Ayesha-only and ships ON BY DEFAULT, as it does in Arland.
-// It was held OptIn while nothing had been measured on Ayesha; that gap is now
-// closed at both ends. The defect was quantified from a capture of the
-// atelier's interior steps -- 12-18 px of vertical excursion while the
-// character is horizontally at rest, a gravity-versus-threshold sawtooth rather
-// than a bob -- and confirmed in game.
-//
-// It has no ini key and no launcher control: a fix that is simply correct is
-// not a setting. `DUSK_FIELD_ENGINE_FIX=0` stands it down for one session,
-// which is what an A/B or a bug report wants.
-//
-// A second row, FieldStabilizer, used to sit beside this one for a resting
-// stabilizer that held the character still while it was genuinely at rest. The
-// ground ray replaced it -- it covers that case and reaches a moving character
-// besides, which the stabilizer structurally could not -- and the row was
-// removed with it. The ray and its grace-hold fallback answer to
-// `DUSK_FIELD_GROUND_RAY` and `DUSK_FIELD_GRACE_HOLD` and have no rows here, so
-// FieldEngineFix no longer covers the whole of field movement; see
-// engines/phyre/field_physics.h for what each piece does.
-//
-// Smaa is available in all three games and ON BY DEFAULT in all three, because
-// all three have a pre-UI injection point. smaa.cpp runs there on the scene
-// target before the game composites its interface, so menus and text are left
-// alone, and that is what makes on-by-default defensible. The passes themselves
-// are the Arland project's own, ported unchanged, so the antialiasing is never
-// the experiment; the injection point is.
-//
-// Ayesha has always had a scene-target test. Escha & Logy and Shallie got one
-// in src/engines/ktgl/scene_target.cpp -- the first draw into the surface the
-// interface is about to be drawn into. Both cells were OptIn for exactly as
-// long as the full-frame path was the only one those two games had, which
-// stopped being true when that test landed.
-//
-// Nothing engine-specific is involved in the fallback, and that is the whole
-// reason these cells can change without new addresses: smaaApply takes the swap
-// chain's back buffer, creates a render-target view over it and runs the
-// passes. No scene test, no mapped address, no dependency on the
-// high-resolution fix. The three gates in smaaApply that stand the Present path
-// down -- the per-frame latch, the pre-UI-proven latch, and g_broken -- are all
-// driven by the pre-UI path.
-//
-// The fallback is still reached, for the frames before the scene test accepts a
-// target. Measured 2026-08-09: Escha & Logy logged the full-frame line at
-// 621 ms and the pre-UI line at 3727 ms; Shallie 1695 ms and 3032 ms. So boot
-// and the logos are antialiased whole and everything after them is not, which
-// is a bounded cost rather than the standing one an earlier version of this
-// comment described.
-//
-// The log says which one ran. "SMAA: pre-UI active" is the wanted path;
-// "SMAA: running at Present over the finished frame -- the interface is
-// antialiased too" is the fallback. Those two lines exist because "SMAA is on"
-// and "SMAA is on in the good place" are different facts.
-//
-// Supersampling is OptIn on all three games. On Ayesha it is a rebuild rather
-// than a repair: four implementations preceded it and none of them worked. A
-// back-buffer redirect found nothing to attach to, because this engine never
-// composites through the back buffer's render-target view.
-// Enlarging the scene targets and letting the engine resample worked but gave
-// four bilinear taps. Owning the resample improved it marginally.
-// Adding a once-per-frame latch to that pass produced a black scene, because
-// the transition it latched on fires 5-22 times per frame and the first one is
-// a post-processing bind rather than the composite.
-//
-// What ships now identifies the composite POSITIVELY -- the bind whose colour
-// target is the swap-chain back buffer, which is a runtime fact and exact --
-// and substitutes a box-filtered display-sized copy of the scene in the
-// argument array of the one PSSetShaderResources call that composite makes.
-// Nothing is latched across calls and nothing at all happens at Present. See
-// supersample.h.
-//
-// OptIn rather than on by default, and it can never be anything else: 200% is
-// four times the shaded pixels, measured at 70% GPU on a 7900 XTX in the game's
-// opening interior, which is close to the lightest scene there is.
-//
-// Its key is the one in this table that featureEnabled must not be asked about
-// -- see the note on the Descriptor row.
-//
-// Escha & Logy reaches the same feature by the opposite route, and its cell is
-// OptIn for the same cost reason. Ayesha pins its scene targets, so the mod
-// enlarges them and owns the resolve. KTGL sizes every full-frame target from
-// its own Setting.ini, so the launcher writes that file at base x factor and
-// the mod only has to stop the swap chain following it up: it clamps the back
-// buffer to the base and resolves the oversized scene into it at the
-// composite's own sample. A run confirmed the engine half with no
-// code at all -- Setting.ini at 5120x2880 on a 1440p panel produced every
-// full-frame target at 5120x2880, blur pyramid chaining down from it.
-//
-// Shallie gets the same cell, and the caution that kept it Unsupported for a
-// day turned out to be about a design that was abandoned. It has roughly twice
-// as many places re-reading the resolution out of the ini as Escha does, which
-// would have mattered to the settings-reader hook that was never built: that
-// one wrote the in-memory settings object and left the file holding the base,
-// so every re-reader would have disagreed with it. THE SHIPPED DESIGN WRITES
-// THE FILE. Every re-reader gets the multiplied number, because that is what is
-// on disk, and there is nothing to disagree with.
-//
-// One residual is real rather than theoretical, and it is Shallie-only: its
-// `0x5881a0` takes a width from the bound surface and a height from a fresh ini
-// read. The mod clamps that surface, so those two now come from different
-// worlds and the result would be a target with the wrong aspect. It is one
-// function, the failure would be visible rather than silent, and enabling the
-// row is what puts a run in front of it.
-//
-// WorldMapCursor is Ayesha-only and ships ON BY DEFAULT, on the same reasoning
-// as the field-jitter fix it is a sibling of: a cursor that crosses the map
-// three times too fast at 200 Hz is not a preference anyone would choose, it is
-// the game behaving differently from the way it was built to. The Arland
-// project reached the same conclusion for Totori and Meruru.
-//
-// `DUSK_WORLDMAP=0` stands it down for a comparison, and it has no ini key for
-// the reason given on Descriptor: a correction is not a setting.
-//
-// Escha & Logy ships it on too, for the same reason and on the same evidence
-// shape: its cursor mover scales the stick vector by a constant per frame and
-// Shallie's multiplies by the frame delta, read from the bytes of both. See
-// engines/ktgl/worldmap_fix.h.
-//
-// SHALLIE STAYS UNSUPPORTED, and that is a finding rather than a gap: its mover
-// is already correct, so hooking it would rescale a rate that does not need it.
-// Its d-pad branches do still overwrite the scaled value with a flat constant,
-// which is a separate defect in a shared menu object and is not this row.
-//
-// TargetCensus is the one diagnostic that is NOT Ayesha-only. It reads nothing
-// but the D3D11 resources the game creates, so it needs no mapped address and
-// no engine knowledge, and the question it answers -- does this game size its
-// internal render targets from the resolution it was asked for, or does it pin
-// some of them to 1080p the way the old-Arland renderer does -- is open for all
-// three games. It stays OptIn everywhere: it hooks CreateTexture2D, which no
-// shipping configuration should.
-//
-// HighResRendering is Ayesha-only and ships ON BY DEFAULT, applied the same way
-// the Arland project applies its own correction: automatically, whenever the
-// resolution the player selected is higher than 1080p. Nothing here asks the
-// user to know that the engine pins its internal targets. The trigger is not in
-// this matrix at all -- highres.cpp resizes only while the learned main render
-// size exceeds the pinned 1920x1080 (kPinnedWidth/kPinnedHeight), which is
-// Arland's `mainWidth > 1920 && mainHeight > 1080` rule carried over. At 1080p
-// and below every hook stays installed and every target passes through, so
-// being on by default costs a player at 1080p nothing.
-//
-// `DUSK_HIGHRES=0` stands it down for a session, which matters more here than
-// for the other fixes: the failure mode is a visibly wrong picture (a viewport
-// or a target that did not move with the rest) rather than a silent regression,
-// so a player who hits one needs a way to confirm what they are looking at. It
-// has no ini key and no launcher control, for the reason given on Descriptor.
-//
-// The defect is measured and the mechanism is TellowKrinkle's, proven on this
-// engine family and refined in the Arland project, so this is not an experiment
-// in the way the field-jitter switches are.
-//
-// Escha & Logy and Shallie are Unsupported, and the reason is stronger than
-// "their renderer has not been censused". They do not have the defect: both
-// size the swap chain, the back buffer, the depth target and every full-frame
-// intermediate from the two Setting.ini values, and a byte-exhaustive census of
-// all four KTGL executables found no 1920/1080 pair outside the UI canvas
-// initializer. There is nothing pinned to correct.
-//
-// Enabling it there would be worse than useless at one specific resolution.
-// isPinnedFullTarget matches exactly 1920x1080 and isPinnedBlurTarget exactly
-// 960x540. On an engine that derives its sizes, a player running 3840x2160 has
-// half-frame intermediates at exactly 1920x1080 and quarter-frame ones at
-// exactly 960x540 -- so both rules would match surfaces that are already the
-// right size and double them. The rules are keyed on absolute sizes, which is
-// only meaningful in an engine that pins them; in an engine that derives them
-// the same numbers are a coincidence of the chosen resolution.
-//
-// LoadingTextTypo is the mirror image of every row above it: the two KTGL games
-// get it and Ayesha does not, because Ayesha does not have the defect. The
-// literal "Loadning system data." is in all four Escha & Logy and Shallie
-// executables and in neither Ayesha build (loading_text_fix.h), so Ayesha's U
-// here is a fact about the binary rather than a gap in the evidence.
-//
-// It ships ON BY DEFAULT, and it is the least arguable row in this table: a
-// misspelling on the first screen of the game is not a preference, and the
-// correction costs one 22-byte store at startup, runs no code afterwards, and
-// cannot change anything a player would want back. `DUSK_LOADING_TEXT=0` stands
-// it down for a comparison, and it has no ini key for the reason given on
-// Descriptor.
-//
-// It is also the one row here that needs no engine knowledge whatsoever, which
-// is why it can ship for KTGL while everything else in this table cannot: it
-// rewrites a string literal in the mapped image and hooks nothing.
-//
-// NOTE on the WorldMapCursor column. It was absent from these rows at first, so
-// the array's trailing elements were value-initialized and every game silently
-// read Unsupported for it -- contradicting the paragraph above, which says
-// Ayesha ships it on by default. It is spelled out now, and the address pack it
-// was waiting on has since been derived for both Ayesha builds, so the column
-// and the code finally agree.
+// A feature with no ini key is stood down for one session with its environment
+// switch, DUSK_<FEATURE>=0, which is what an A/B or a bug report wants. See the
+// note on Descriptor above for why a correction does not become a setting.
 //
 // The rows are three separate arrays of DEDUCED extent rather than one
-// `[3][Count]` block, which is the whole reason that column could go missing
-// unnoticed: with the width declared, a short row is not an error, the trailing
-// entries are value-initialized, and Unsupported happens to be the zero value --
-// so an incomplete row reads as a deliberate "this game does not get it". Let
-// the extent come from the initializer instead and each static_assert below
-// fails loudly the next time a Feature is added without extending every row.
+// `[3][Count]` block, and that is deliberate. With the width declared, a short
+// row is not an error: the trailing entries are value-initialized and
+// Unsupported is the zero value, so a row that has lost a column reads as a
+// deliberate "this game does not get it". Taking the extent from the
+// initializer instead makes each static_assert below fail loudly the next time
+// a Feature is added without extending every row.
 //                               Verfy Targt HiRes Cache Field Smaa  Ssaa  WMap  Logo  Movi  Typo  SysSv Promt PadRe Synth
 constexpr Support kAyesha[]  = { O,    O,    X,    X,    X,    X,    O,    X,    O,    O,    U,    U,    U,    X,    U };
 constexpr Support kEscha[]   = { U,    O,    U,    U,    U,    X,    O,    X,    O,    O,    X,    X,    U,    X,    X };

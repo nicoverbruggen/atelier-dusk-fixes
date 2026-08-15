@@ -201,6 +201,12 @@ void ssaaClearContextState(ID3D11DeviceContext* context);
 // clamps the swap chain back down and lets the engine's device init take its own
 // offscreen branch. That code lives in engines/ktgl/present_clamp.cpp, and which
 // route this process takes is answered by supersample_policy.h.
+//
+// ONE RESIDUAL ON THE CLAMP ROUTE, and it is Shallie-only. Its `0x5881a0` takes
+// a width from the bound surface and a height from a fresh ini read. The mod
+// clamps that surface, so the two now come from different worlds and the result
+// is a target with the wrong aspect. It is one function and the failure would
+// be visible rather than silent, so a run in front of it is what settles it.
 
 // Is either supersampling route on? The Ayesha route is `ssaaConfigured()`, the
 // KTGL one is the clamp above. Everything that only needs to know "is this

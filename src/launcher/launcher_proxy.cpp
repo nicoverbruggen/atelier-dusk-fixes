@@ -27,6 +27,8 @@
 #include <cstdint>
 #include <cstring>
 
+#include "aspect_fit.h"
+
 namespace {
 
 using PFN_AlphaBlend = BOOL (WINAPI *)(
@@ -199,6 +201,14 @@ void applyAutoResolution(bool ssaaScalesGameIni) {
   if (!pathInGameDirectory(L"Setting.ini", settings) ||
       GetFileAttributesW(settings.data()) == INVALID_FILE_ATTRIBUTES)
     return;
+
+  // A 16:9 base: always on PhyreEngine, and on KTGL only in a window, where the
+  // back buffer then comes out 16:9 and that engine's fit pass declines on its
+  // own. See aspect_fit.h.
+  const bool windowed =
+    GetPrivateProfileIntW(L"Window", L"FullScreen", 1, settings.data()) == 0;
+  if (!ssaaScalesGameIni || windowed)
+    atfix::fitRenderToSixteenNine(&width, &height);
 
   // KTGL sizes its scene from Setting.ini itself. The GUI therefore writes
   // base x SSAA there and keeps the base in dusk-fix.ini for the swap-chain

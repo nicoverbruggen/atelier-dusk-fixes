@@ -59,6 +59,7 @@
 #include <cstring>
 #include <vector>
 
+#include "aspect_fit.h"
 #include "ini_write_set.h"
 
 namespace {
@@ -642,6 +643,23 @@ void addResolution(unsigned width, unsigned height) {
 // Rebuild the combo from g_resolutions. Auto stays pinned at index 0; the rest
 // are sorted by pixel count so an appended entry lands where it belongs rather
 // than at the bottom. `selectAuto` wins over the width/height pair.
+// Whether the base this window is about to save will be fitted to 16:9. The
+// same rule saveToIni applies, kept here so the list cannot promise a size the
+// save will not write -- which is exactly what it did while Auto was labelled
+// with the bare desktop mode on a 4:3 screen.
+//
+// Read from the control when it has a selection and from the file when it does
+// not: the resolution list is filled before the Window mode combo is populated,
+// and loadFromIni picks a resolution before it sets that combo.
+bool willUseSixteenNineBase() {
+  if (!capabilities().ssaaScalesGameIni)
+    return true;   // PhyreEngine is fitted whatever the window mode
+  const LRESULT selection = SendMessageW(g_hWinMode, CB_GETCURSEL, 0, 0);
+  if (selection >= 0)
+    return selection == 0;   // index 0 is Windowed
+  return GetPrivateProfileIntA("Window", "FullScreen", 1, g_settingsPath) == 0;
+}
+
 void refillResolutions(unsigned selectWidth, unsigned selectHeight,
                        bool selectAuto) {
   // Everything but the Auto sentinel takes part in the sort.
@@ -661,8 +679,18 @@ void refillResolutions(unsigned selectWidth, unsigned selectHeight,
       // Auto carries what it currently resolves to, for the same reason the
       // supersampling list carries its render size: the answer belongs in the
       // list being chosen from, not somewhere the user has to go and look it up.
+      //
+      // RESOLVED, not the raw desktop mode. On a display that is not 16:9 the
+      // save fits the base, so Auto on a 1600x1200 screen becomes 1600x900 --
+      // and a label reading 1600x1200 there is simply wrong about what starting
+      // the game will do. Kept separate from desktopWidth/Height below, which
+      // still marks the entry that matches the panel.
+      unsigned autoWidth = desktopWidth;
+      unsigned autoHeight = desktopHeight;
+      if (haveDesktop && willUseSixteenNineBase())
+        atfix::fitRenderToSixteenNine(&autoWidth, &autoHeight);
       if (haveDesktop)
-        wsprintfW(label, L"Auto  (%u x %u)", desktopWidth, desktopHeight);
+        wsprintfW(label, L"Auto  (%u x %u)", autoWidth, autoHeight);
       else
         lstrcpynW(label, L"Auto  (desktop resolution)", 96);
     } else if (haveDesktop && r.width == desktopWidth &&
@@ -1047,13 +1075,24 @@ void loadFromIni() {
   unsigned desktopWidth = 0, desktopHeight = 0;
   if (desktopResolution(&desktopWidth, &desktopHeight))
     addResolution(desktopWidth, desktopHeight);
-  // Whatever the game's file already holds is offered too, even when it is
-  // larger than this display. That is the one place this list is wider than
-  // Arland's, and it is deliberate: rendering above the panel is how the
-  // 1440p render-target census was measured on a 1080p screen, and a
-  // deliberate downsampling setup must survive being looked at. Nothing is
-  // added that the user did not already choose.
-  if (width && height)
+  // A SAVED RESOLUTION THE DISPLAY CANNOT SHOW IS DROPPED, and the selection
+  // falls back to Auto. This list used to offer it, on the grounds that
+  // rendering above the panel is how the render-target census was measured and
+  // that a deliberate downsampling setup should survive being looked at.
+  //
+  // That setup does not work, which is what removed the exception. On KTGL the
+  // present clamp records the size the engine was configured for while the
+  // swap chain comes out at the panel, and the composite is then corrected to
+  // the configured number -- a viewport LARGER than its target, which crops
+  // rather than downsamples. Seen on Shallie carrying 2560x1440 onto a
+  // 1600x1200 screen: the log reported a correction to 2560x1440 against a
+  // 1600x1200 back buffer, and the picture was a magnified corner of the scene.
+  //
+  // A census run wanting a larger render still has Supersampling, which is what
+  // that setting is for and which the clamp understands.
+  const bool savedFitsDisplay = width && height &&
+    (!maxWidth || !maxHeight || (width <= maxWidth && height <= maxHeight));
+  if (savedFitsDisplay)
     addResolution(width, height);
   // Auto is the launcher's own memory of a choice, not a value the game could
   // hold, so it lives in dusk-fix.ini rather than in Setting.ini.
@@ -1072,7 +1111,11 @@ void loadFromIni() {
   // carries no resolution. The default is conditional rather than a flat `true`,
   // though, because a flat true would break the other rule this window keeps:
   // opening it must never silently replace a resolution the user already chose.
+  // Auto is forced when the saved size was dropped above: the entry is no
+  // longer in the list, so leaving it selected would show an empty control and
+  // write the resolution back blank on the next save.
   refillResolutions(width, height,
+    !savedFitsDisplay ||
     iniBool(g_iniPath, "Launcher", "AutoResolution", !(width && height)));
 
   char value[16] = {};
@@ -1190,6 +1233,14 @@ SaveOutcome saveToIni() {
     // replaces a NEGATIVE value with a default.
     if (automatic && !desktopResolution(&chosen.width, &chosen.height))
       chosen = { 1920, 1080 };
+
+    // A 16:9 base: always on PhyreEngine, and on KTGL only in a window. Applied
+    // to the base rather than the render, so the multiplied size and the
+    // swap-chain clamp below both follow from one number. See aspect_fit.h.
+    const bool windowed =
+      SendMessageW(g_hWinMode, CB_GETCURSEL, 0, 0) == 0;
+    if (!capabilities().ssaaScalesGameIni || windowed)
+      atfix::fitRenderToSixteenNine(&chosen.width, &chosen.height);
 
     // What the game is told to render at. On the KTGL route that is the base
     // multiplied by the factor, and the base itself goes into dusk-fix.ini so
@@ -2315,6 +2366,21 @@ LRESULT CALLBACK WndProc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
       // reduced to fit the 8K limit left the note still saying it was reduced.
       if (HIWORD(wp) == CBN_SELCHANGE &&
           (LOWORD(wp) == IDC_RES || LOWORD(wp) == IDC_SSAA)) {
+        updateRenderResolution();
+        return 0;
+      }
+      // Window mode changed, and on KTGL that changes what Auto resolves to:
+      // fullscreen keeps the panel's own shape and lets the Present-time pass
+      // fit the frame inside it, while a window is made 16:9 outright. The
+      // label has to follow, or switching the mode leaves it stating the size
+      // the other mode would have used.
+      if (HIWORD(wp) == CBN_SELCHANGE && LOWORD(wp) == IDC_WINMODE) {
+        const LRESULT index = SendMessageW(g_hRes, CB_GETCURSEL, 0, 0);
+        Resolution chosen = { 0, 0 };
+        if (index >= 0 && size_t(index) < g_resolutions.size())
+          chosen = g_resolutions[size_t(index)];
+        refillResolutions(chosen.width, chosen.height,
+                          !chosen.width && !chosen.height);
         updateRenderResolution();
         return 0;
       }

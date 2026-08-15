@@ -79,8 +79,16 @@ constexpr uintptr_t kNodeOffset = 0x20;
 // The node's local transform: four rows of four floats, the last being the
 // translation kNodePosOffset points at. The whole matrix is snapshotted rather
 // than the translation alone because the actor writes all four rows in one go.
-constexpr uintptr_t kNodeMatrixOffset = 0x110;
-constexpr size_t kNodeMatrixSize = 64;
+// BOTH transforms, local first: PSSG::PNode keeps local at 0xd0..0x10f with its
+// translation row at +0x100, and world at 0x110..0x14f with its row at +0x140.
+// World is DERIVED from local, and two recomputes exist -- the controller
+// update's own, and the render traversal's, which is stamp-gated and runs later
+// in the frame. Restoring world alone therefore holds only while nothing bumps
+// the stamp; the render path would rebuild it from a local this never touched.
+// Covering the source as well as the derived value removes that dependency.
+// See atelier-re-tools/systems/phyre-field-movement.md, "Position storage".
+constexpr uintptr_t kNodeMatrixOffset = 0xd0;
+constexpr size_t kNodeMatrixSize = 128;
 constexpr uintptr_t kWrapperScene = 0x10;
 constexpr uintptr_t kWrapperDirty = 0x18;
 constexpr uint32_t kGroundedBit = 0x100;
@@ -571,7 +579,7 @@ bool talkAnchorEnabled() {
 // where the conversation puts them. So the update's contribution is taken away
 // by restoring what the node held before it ran.
 void restoreNodeAcrossUpdate(uintptr_t self, bool capture,
-                             std::array<float, 16>& matrix, bool& have) {
+                             std::array<float, 32>& matrix, bool& have) {
   const uintptr_t node = nodeOf(self);
   if (!node)
     return;
@@ -608,7 +616,7 @@ void STDMETHODCALLTYPE tracedFieldUpdate(uintptr_t self, float dt) {
   // controller was not looking: equal means the update itself moves it,
   // different means something outside this path did.
 
-  std::array<float, 16> nodeMatrix{};
+  std::array<float, 32> nodeMatrix{};
   bool haveMatrix = false;
   const bool holdNode = talkAnchorEnabled() && conversationOnScreen();
   if (holdNode)
@@ -634,7 +642,7 @@ void STDMETHODCALLTYPE tracedFieldUpdate(uintptr_t self, float dt) {
     // disagreement somewhere else.
     if (writableRange(self + kPosOffset, sizeof(float) * 3))
       std::memcpy(reinterpret_cast<void*>(self + kPosOffset),
-                  nodeMatrix.data() + 12, sizeof(float) * 3);
+                  nodeMatrix.data() + 28, sizeof(float) * 3);
     static std::atomic<uint32_t> held{0};
     const uint32_t n = held.fetch_add(1, std::memory_order_relaxed);
     if (n == 0 || (verboseLogging() && n % 4096 == 0))

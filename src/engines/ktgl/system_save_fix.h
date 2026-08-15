@@ -55,10 +55,30 @@
 //     four instructions above sets, so nothing downstream sees a situation it
 //     was not written to handle. The caller skips the install, leaving the live
 //     data untouched; GAMEDATA also reaches the engine's own Load Error dialog.
-//   * After this happens to SYSTEMDATA, refuse SYSTEM-DATA saves. This is the
-//     second guard that protects that automatically rewritten file, because the
-//     write would otherwise replace good data with defaults. It is released as
-//     soon as a system-data load succeeds.
+//   * After this happens to SYSTEMDATA, refuse SYSTEM-DATA saves -- but only
+//     when there is a file worth refusing for. This is the second guard that
+//     protects that automatically rewritten file, because the write would
+//     otherwise replace good data with defaults. It is released as soon as a
+//     system-data load succeeds.
+//
+//     WHY IT ASKS THE FILESYSTEM FIRST. A failed open and an empty file arrive
+//     at the same exit having read nothing, and they deserve opposite answers.
+//     A healthy file behind a transient open failure is the whole reason the
+//     refusal exists. An empty file has nothing to protect, and refusing to
+//     write it strands the player for good: the latch clears only on a load
+//     that reads content, and the refused save is the only thing that could
+//     give the file any. That state was measured, not argued -- a zero-byte
+//     SYSDATA.pcsave armed the latch at boot, the refusal fired about a second
+//     later without the player touching anything, and the file stayed empty.
+//     So the guard reads the path the load opened, inline at object+0x18 in all
+//     four builds, and arms only when a file with content is actually there.
+//     Anything it cannot determine answers "protect", which is the safe way to
+//     be wrong.
+//
+//     This also means the engine's own zero-byte producer is recoverable. The
+//     save thread is joined at the start of the next request rather than at
+//     shutdown, so a quit inside that window leaves an empty file; the game can
+//     now rewrite it instead of being locked out of it.
 //   * When the CODEC reports a failed DECODE, say so in the log and do nothing
 //     else. That covers the non-empty truncation in defect 2, which no length
 //     test can see: the codec returns non-zero on success and writes a sentinel

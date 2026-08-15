@@ -37,8 +37,15 @@ CodecProc originalSystemCodec = nullptr;
 
 // PlatformSteam::{Load,Save} share one 0x438-byte object. Both KTGL games and
 // both language builds access these same offsets in their load/save steps.
+//
+// kLoadPath is an inline wide string rather than a pointer: all four builds pass
+// `&object[0x18]` straight to their open. Escha uses the three-argument form
+// with the FILE** in rcx, Shallie a four-argument one with the path pushed out
+// to r8, but the field is the same in both, so this is one constant and not a
+// per-build row.
 constexpr uintptr_t kState = 0x10;         // dword; 6 = completed, 7 = read failed
 constexpr uintptr_t kError = 0x14;         // dword; 5 accompanies state 7
+constexpr uintptr_t kLoadPath = 0x18;      // inline wchar_t[]; the opened file
 constexpr uintptr_t kIsSystemData = 0x418; // byte; 0 selects GAMEDATA
 constexpr uintptr_t kBytesRead = 0x428;    // qword, recovered with ftell
 constexpr uintptr_t kCompleted = 0x430;    // byte; the flag the caller gates on
@@ -158,6 +165,35 @@ bool readSystemDataKind(uintptr_t self, bool& systemData) {
   return true;
 }
 
+// Does the file the load tried to open actually hold anything?
+//
+// This is the one question the zero-byte guard cannot ask of the object, and it
+// decides opposite answers for two situations that look identical there. A
+// transient open failure on a healthy file must not be followed by a save --
+// that is what the latch is for. An empty file has nothing to protect, and
+// refusing to write it strands the player forever, because the latch clears
+// only on a load that reads content and the refused save is the only thing that
+// could give the file any.
+//
+// Answers true whenever it cannot tell, so the protective behaviour is what an
+// unreadable path or an odd object falls back to.
+bool loadTargetHasContent(uintptr_t self) {
+  constexpr size_t kMaxChars = MAX_PATH;
+  if (!readableRange(self + kLoadPath, sizeof(wchar_t) * kMaxChars))
+    return true;
+  wchar_t path[kMaxChars + 1] = {};
+  std::memcpy(path, reinterpret_cast<const void*>(self + kLoadPath),
+              sizeof(wchar_t) * kMaxChars);
+  path[kMaxChars] = L'\0';
+  if (!path[0])
+    return true;
+
+  WIN32_FILE_ATTRIBUTE_DATA info = {};
+  if (!GetFileAttributesExW(path, GetFileExInfoStandard, &info))
+    return false;   // nothing is there to protect
+  return ((uint64_t(info.nFileSizeHigh) << 32) | info.nFileSizeLow) != 0;
+}
+
 void STDMETHODCALLTYPE tracedLoadStep(uintptr_t self) {
   originalLoadStep(self);
   if (!fixEnabled() || !self)
@@ -200,13 +236,19 @@ void STDMETHODCALLTYPE tracedLoadStep(uintptr_t self) {
   std::memcpy(reinterpret_cast<void*>(self + kError), &error, sizeof(error));
   std::memcpy(reinterpret_cast<void*>(self + kCompleted), &clear, sizeof(clear));
 
-  if (systemData)
+  const bool worthProtecting = systemData && loadTargetHasContent(self);
+  if (worthProtecting)
     g_systemDataUntrusted.store(true, std::memory_order_relaxed);
   const uint32_t n = g_loadsRepaired.fetch_add(1, std::memory_order_relaxed) + 1;
-  if (systemData) {
+  if (systemData && worthProtecting) {
     log("SYSSAVE system-data load reported success having read 0 bytes --"
         " forced to the engine's read-failure state, and system-data saves"
         " are now refused (n=", std::dec, n, ")");
+  } else if (systemData) {
+    log("SYSSAVE system-data load read 0 bytes and the file is empty or"
+        " absent -- forced to the engine's read-failure state, but saves are"
+        " ALLOWED: there is nothing here to protect, and refusing would leave"
+        " the file unwritable for good (n=", std::dec, n, ")");
   } else {
     log("SYSSAVE GAMEDATA load reported success having read 0 bytes -- forced"
         " to the engine's read-failure state; live game data was not replaced"

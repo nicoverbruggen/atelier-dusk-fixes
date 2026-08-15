@@ -583,8 +583,23 @@ void restoreNodeAcrossUpdate(uintptr_t self, bool capture,
                   kNodeMatrixSize);
     return;
   }
-  if (have && writableRange(at, kNodeMatrixSize))
-    std::memcpy(reinterpret_cast<void*>(at), matrix.data(), kNodeMatrixSize);
+  if (!have || !writableRange(at, kNodeMatrixSize))
+    return;
+  // Whether the update actually moved the node, not merely whether the hold
+  // ran. It runs every frame of every conversation and writes the same bytes
+  // back when there was no disagreement, so counting engagements says nothing
+  // about whether anything was corrected. This counts corrections.
+  const bool changed =
+    std::memcmp(reinterpret_cast<const void*>(at), matrix.data(),
+                kNodeMatrixSize) != 0;
+  std::memcpy(reinterpret_cast<void*>(at), matrix.data(), kNodeMatrixSize);
+  if (changed) {
+    static std::atomic<uint32_t> corrected{0};
+    const uint32_t n = corrected.fetch_add(1, std::memory_order_relaxed);
+    if (n < 4 || (verboseLogging() && n % 4096 == 0))
+      log("TALKANCHOR the update had moved the node; put back (n=", std::dec,
+          n + 1, ")");
+  }
 }
 
 void STDMETHODCALLTYPE tracedFieldUpdate(uintptr_t self, float dt) {

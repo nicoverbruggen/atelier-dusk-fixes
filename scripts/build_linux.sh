@@ -66,4 +66,45 @@ python3 "$repo/scripts/check_launcher_contract.py"
 python3 "$repo/scripts/check_transaction_contract.py"
 python3 "$repo/scripts/check_core_contract.py"
 python3 "$repo/scripts/check_lifecycle_contract.py"
+# Before packaging rather than after: the archive assembled below is what this
+# check describes, so a licence it would ship without should stop the build
+# instead of being found in the zip.
 python3 "$repo/scripts/check_release_contract.py"
+
+# Package the same archive the release workflow does, so what gets tested by
+# hand locally has the same shape as what users download: same file names, same
+# layout, documentation and licences in the same subfolder. Only the version in
+# the name differs, since there is no tag to take it from.
+#
+# Kept out of the repo by /out/ in .gitignore.
+if ! command -v zip >/dev/null 2>&1; then
+  echo
+  echo "zip is not installed; skipping the archive" >&2
+  exit 0
+fi
+
+out="$repo/out"
+stage="$out/stage"
+rm -rf "$stage"
+mkdir -p "$stage/dusk-fix/LICENSES"
+
+# Shipped under its final name so the archive extracts straight into the game
+# directory with nothing to rename.
+cp "$repo/build64/d3d11.dll" "$repo/build64/dusk-fix-launcher.exe" \
+   "$repo/build32/msimg32.dll" "$stage/"
+cp "$repo/default.ini" "$stage/dusk-fix.ini"
+cp "$repo/README.md" "$repo/LICENSE" "$stage/dusk-fix/"
+# Named for what they cover: LICENSE points at them and there is no vendor/
+# tree in the archive.
+cp "$repo/vendor/minhook/LICENSE.txt" "$stage/dusk-fix/LICENSES/MinHook.txt"
+cp "$repo/vendor/smaa/LICENSE.txt" "$stage/dusk-fix/LICENSES/SMAA.txt"
+
+build_version="$(python3 "$repo/scripts/read_version.py" "$repo/VERSION")"
+archive="$out/dusk-fix-$build_version.zip"
+rm -f "$archive"
+( cd "$stage" && zip -qr "$archive" \
+    d3d11.dll dusk-fix-launcher.exe msimg32.dll dusk-fix.ini dusk-fix )
+rm -rf "$stage"
+
+echo
+echo "  packaged out/$(basename "$archive")"

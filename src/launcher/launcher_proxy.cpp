@@ -93,11 +93,9 @@ bool hostExeName(std::array<wchar_t, 32768>& path, const wchar_t** name) {
 //
 // Nothing here is destructive if the install is partial. The entry point is
 // restored before anything is decided, so with no dusk-fix-launcher.exe next to
-// it the stock launcher runs from its own unmodified entry bytes. That is the
-// state this repository ships in today, so SkipLauncher is the only path that
-// currently does anything.
+// it the stock launcher runs from its own unmodified entry bytes.
 //
-// DUSK_NO_REDIRECT stands the redirect down. Our launcher will set it on the
+// DUSK_NO_REDIRECT stands the redirect down. Our launcher sets it on the
 // original launcher and settings editor when its own buttons open them, which
 // is what stops those buttons from being bounced straight back here.
 

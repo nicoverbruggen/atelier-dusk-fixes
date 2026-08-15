@@ -1,24 +1,8 @@
 // SPDX-License-Identifier: MIT
 //
-// SMAA (Enhanced Subpixel Morphological Anti-Aliasing, Jimenez et al.) as a
-// post-process over the finished frame. These games ship no antialiasing of any
-// kind, and SMAA works on the finished image, so it smooths every visible edge
-// regardless of how it was produced -- texture-interior and alpha-test edges
-// included, which is exactly what multisampling cannot reach.
-//
-// Ported from the Arland project's src/core/smaa.cpp, which is this project's own
-// code (MIT). The reference shader and the AreaTex/SearchTex lookup tables are
-// vendored unchanged under vendor/smaa/ (Jimenez, Echevarria, Masia, Navarro,
-// Gutierrez; MIT) and compiled at runtime through d3dcompiler, which is the
-// same arrangement Arland uses.
-//
-// Each engine supplies a measured pre-UI boundary so the passes run over the
-// scene before the interface is composited. Present remains a fallback when a
-// pre-UI pass cannot run.
-// Atelier Graphics Tweak also ships SMAA for these games, and confirmed two
-// useful facts by inspection: the same MIT reference shader at
-// SMAA_PRESET_ULTRA, and an injection point on the DEFERRED context. None of
-// its code is used here -- it is unlicensed, and this is a port of ours.
+// Implementation. What this fixes and why it takes this shape is in
+// smaa.h; what is here is the per-build wiring and the notes that
+// only mean anything beside the code they sit on.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <d3d11.h>

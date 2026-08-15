@@ -18,9 +18,8 @@
 // The verdict itself is engine-specific and is not in this file. Core declines
 // every bind until an engine module registers a test, and says so in the log
 // rather than silently doing nothing. `src/engines/phyre/scene_target.cpp`
-// registers Ayesha's. Escha & Logy and Shallie have none, which is the honest
-// state: their renderer has never been censused, so nothing is known about what
-// they bind.
+// registers Ayesha's, and `src/engines/ktgl/scene_target.cpp` registers the one
+// Escha & Logy and Shallie share.
 //
 // This module used to be msaa.cpp, and the multisampling it was written around
 // is gone. Do not put it back without reading the reasoning first: MSAA cannot
@@ -44,9 +43,9 @@ using SceneTargetTest = bool (*)(const D3D11_TEXTURE2D_DESC& color,
                                  const D3D11_TEXTURE2D_DESC& depth);
 void scenePassSetTest(SceneTargetTest test);
 
-// Track the scene/UI boundary and fire the pre-UI SMAA pass when the engine
-// stops rendering into the scene target, then tag the scene colour host for
-// supersampling.
+// Track the scene/UI boundary and tag the scene colour host for supersampling.
+// The pre-UI pass itself is fired by whichever engine module owns the moment,
+// not from here.
 //
 // Called from the bind detours below rather than from either feature, because
 // this is the only place that knows which colour target the engine's scene test

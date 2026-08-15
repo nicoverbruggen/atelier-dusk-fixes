@@ -1,21 +1,8 @@
 // SPDX-License-Identifier: MIT
 //
-// Ayesha font-atlas read cache and its opt-in correctness verifier.
-//
-// Both ride the same three hooked entry points. Each RVA and prologue window is
-// verified independently for both executable builds; do not change one without
-// re-deriving its row.
-//
-// DUSK_ATLAS_CACHE serves repeated 512x512 font-atlas locks from a CPU snapshot.
-// Two cheap session totals remain in the normal log so a report can establish
-// that the cache is doing useful work. DUSK_ATLAS_VERIFY is the deliberately
-// slow, opt-in correctness check for snapshots the cache is about to serve.
-//
-// Lifetime is FRAME-SCOPED, i.e. the Arland Rorona path rather than the
-// Totori/Meruru one. That is a measured choice, not a default: 72% of Ayesha's
-// candidate locks arrive outside the resource-event queue drain, so a
-// queue-scoped cache would miss most of the work. Snapshots are therefore
-// discarded at Present, and never held across a frame boundary.
+// Implementation. What this fixes and why it takes this shape is in
+// atlas_fix.h; what is here is the per-build wiring and the notes that
+// only mean anything beside the code they sit on.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 

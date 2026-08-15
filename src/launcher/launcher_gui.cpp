@@ -128,12 +128,7 @@ const int kGameCount = 3;
 // DLL will refuse to act on. A row that is false here is NOT CREATED, so the
 // window never offers a setting that would do nothing, and saving never grows a
 // key in dusk-fix.ini for a game that ignores it.
-//
-// An earlier version of this file had no per-game knowledge at all and said so
-// in a comment: every mod fix was on by default with no control here, so the
-// window was identical for all three games. That stopped being true once the
-// antialiasing settings arrived, which differ by engine in how they are
-// plumbed even where they agree on what ships on.
+
 struct Capabilities {
   bool supersampling;   // [Rendering] Supersampling
   bool ssaaScalesGameIni;  // ...by multiplying the game's own resolution?
@@ -1255,11 +1250,9 @@ SaveOutcome saveToIni() {
 // English because they wanted their graphics settings back would be a hostile
 // reading of "defaults". saveToIni writes it back unchanged from its control.
 //
-// The resolution deliberately differs from the Arland launcher, which resets to
-// 1280x720 as a safe floor it knows every display can show. Auto is that floor
-// here and a better one: it resolves to the desktop mode, which is by
-// definition displayable, and this launcher has to write a literal number into
-// the game's file either way. A fresh install looking far worse than the screen
+// The resolution resets to Auto, as the Arland launcher's does: it resolves to
+// the desktop mode, which is by definition displayable, and this launcher has
+// to write a literal number into the game's file either way. A fresh install looking far worse than the screen
 // it is running on is the outcome "defaults" should not produce.
 void resetToDefaults() {
   unsigned width = 1920, height = 1080;

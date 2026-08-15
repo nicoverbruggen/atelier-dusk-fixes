@@ -1,60 +1,8 @@
 // SPDX-License-Identifier: MIT
 //
-// Intro movie skip for Escha & Logy and Shallie.
-//
-// NOT A PORT of the Ayesha one, though it ends up the same shape. That engine's
-// `ThreadEasyRenderLogo` has no counterpart here and the movie path scheme is
-// different (`Movie/`, `Movie_EN/Eng/`, `.pam` names rewritten to `.wmv`). What
-// the two do share is the 11-entry, 0x20-byte movie table, which is why the
-// gating looks familiar.
-//
-// THE SKIP REPRODUCES A PATH THE ENGINE ALREADY HAS, which is the whole safety
-// argument and the reason this was not built until that path was found. The
-// play routine begins:
-//
-//     cmp qword ptr [rcx], 0     ; no backend player at all
-//     je  exit
-//     ...build the resource request, open the file...
-//     test rdi, rdi              ; the movie file did not open
-//     je  exit
-//     ...start the session...
-//
-// That second exit is the engine's own behaviour for a movie whose file is
-// missing: it returns having touched nothing, the session state stays 0, the
-// `isPlaying` predicate reports false, and the next `Movie::Update` tells its
-// parent task the movie finished. The shipped games can reach it today -- the
-// regional movie directories are not all complete -- so the surrounding code is
-// written for it. The detour returns without calling the original, which lands
-// the engine in exactly that state.
-//
-// WHY TWO HOOKS. The play routine receives the player and the resolved path,
-// not the movie index, so it cannot tell the opening from an ending on its own.
-// The index is one frame up, in the path builder. So the builder is hooked to
-// note the index and the play routine is hooked to act on it. The builder is
-// always called through, never skipped, and that is deliberate: the `bts` that
-// sets the movie's gallery seen-bit lives INSIDE it. Skipping the builder would
-// silently cost the player a gallery unlock; skipping only the play keeps it.
-// (Ayesha differs here -- its caller sets the seen-bit before calling in, so
-// there the open routine itself could be skipped.)
-//
-// The handoff is a plain atomic because the two are called synchronously on one
-// thread, the builder's call to the play routine being the only path in.
-//
-// WHAT IS SKIPPED: the first movie the process plays, and nothing after. See
-// consumeStartupMovieBudget in core/util.h for why the rule counts plays rather
-// than reading the movie's index -- in short, the in-game Movies gallery goes
-// through this same routine, and no identity rule can tell "the opening at boot"
-// from "the opening the player just selected".
-//
-// One is the budget because these games have exactly one constant-index movie
-// requester: the Title state's enter handler, which asks for index 0. Everything
-// else -- endings, route intros, event movies -- comes from a script argument
-// and happens long after the budget is spent. The index is still read and
-// logged, because knowing which movie boots is worth having; it just does not
-// decide anything.
-//
-// Every distinct index the play routine is asked for is logged once, so a run
-// says what the boot path actually requests rather than leaving it inferred.
+// Implementation. What this fixes and why it takes this shape is in
+// movie_skip.h; what is here is the per-build wiring and the notes that
+// only mean anything beside the code they sit on.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
@@ -92,7 +40,9 @@ std::atomic<bool> skipping{false};
 
 // The index the path builder is currently resolving, -1 when none. Set around
 // the forwarded call and cleared after it, so a play that arrives by any other
-// route sees -1 and is never skipped.
+// route sees -1 and is never skipped. A plain atomic is enough because the two
+// hooks are called synchronously on one thread, the builder's call to the play
+// routine being the only path in.
 std::atomic<int32_t> pendingIndex{-1};
 
 // One line per distinct index, and nothing after the table is exhausted. This
@@ -190,9 +140,9 @@ bool installKtglMovieSkip(BYTE* base, const KtglGame& game) {
     return false;
   }
 
-  // Play first. With only this one live the index stays -1, isIntroMovie
-  // refuses it and nothing is ever skipped -- so a partial install leaves the
-  // shipped behaviour rather than a movie skipped without knowing which.
+  // Play first. `skipping` is only set once both hooks are live, so a partial
+  // install leaves the shipped behaviour rather than a movie skipped without
+  // knowing which one it was.
   if (!installMinHookDetour(playTarget,
                             reinterpret_cast<void*>(&skippedMoviePlay),
                             reinterpret_cast<void**>(&originalMoviePlay))) {

@@ -1,19 +1,26 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+// Crash logger: a last-chance unhandled-exception filter that appends a
+// post-mortem to dusk-fix.log before the process dies -- exception code,
+// faulting access, registers, and every stack value that looks like a return
+// address, each resolved to module+RVA so a crash inside the game or this mod
+// can be mapped straight back to a function. Best-effort by design: it only
+// reads memory it has VirtualQuery-verified, guards against re-entry, and
+// chains to the previously installed filter (Wine/winedbg backtraces and
+// PROTON_LOG output are unaffected because the exception continues its search).
+//
+// Ported unchanged from the Arland project (this project's own code, MIT).
+// Without a crash handler a fault is indistinguishable from the process being
+// closed: a supersampling run that died at ~19 seconds left nothing in the log
+// but healthy counters, so every diagnostic this mod writes stopped one line
+// short of the thing that mattered.
 namespace atfix {
 
-// Installs a last-chance unhandled-exception filter that writes a post-mortem
-// (exception, registers, module+RVA stack scan) to dusk-fix.log. Idempotent;
+// Idempotent;
 // DUSK_CRASH_LOG=0 disables it. Installing the process-wide callback pins this
 // DLL until process exit so the operating system can never call unmapped code;
 // the operation is therefore intentionally irreversible.
-//
-// Ported unchanged from the Arland project (this project's own code, MIT).
-// Brought over the moment a supersampling run died at ~19 seconds leaving
-// nothing in the log but healthy counters: with no crash handler, a fault is
-// indistinguishable from the process being closed, and every diagnostic this
-// mod writes stops one line short of the thing that matters.
 void installCrashLogger();
 
 }  // namespace atfix

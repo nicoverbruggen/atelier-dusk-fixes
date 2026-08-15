@@ -322,8 +322,8 @@ uint64_t g_smallFrame = 0;
 
 // How many pipeline slots the state bracket below saves. Wider than the pass
 // itself touches on purpose: SMAA runs inside this bracket and binds up to ten
-// shader resources while restoring only four of them, so the four it would
-// leave behind are covered here instead of by editing a validated feature.
+// shader resources, restoring all ten itself. The extra width covers slots
+// 10-15, which SMAA's restore never reaches but the composite may have filled.
 constexpr UINT kSavedSrvs = 16;
 constexpr UINT kSavedSamplers = 4;
 constexpr UINT kSavedConstantBuffers = 4;
@@ -808,13 +808,14 @@ bool runDownscale(ID3D11DeviceContext* context, ID3D11Texture2D* host,
     // belongs at display resolution -- on a 2x scene target every edge is twice
     // as wide as its thresholds expect. Second, it is a quarter of the work at
     // 2560x1440 than at 5120x2880, including the full-surface copy it starts
-    // with. Third, it happens inside a bracket this pass already holds, instead
-    // of taking and restoring pipeline state a second time.
+    // with. Third, running it here keeps it on the substitution path, so it
+    // cannot re-enter this module's own PSSetShaderResources detour.
     //
     // Still pre-UI by construction: the composite has not drawn yet, and this
     // engine draws its interface onto the back buffer after the composite. That
-    // is why scenePassNoteBoundary stands its own SMAA call down whenever
-    // supersampling has engaged -- two pre-UI passes would be one too many,
+    // is why each engine's own pre-UI hook (phyrePreUiNoteTargets and its KTGL
+    // counterpart) stands its SMAA call down whenever supersampling has
+    // engaged -- two pre-UI passes would be one too many,
     // and the one at the boundary is the one keyed on a transition that fires
     // 5 to 22 times a frame.
     smaaApplySceneColor(context, g_small);
@@ -1287,7 +1288,7 @@ void ssaaFrameTick(IDXGISwapChain* swapChain) {
     log("SSAA: high-resolution fix is off; supersampling requires it and is"
         " inactive");
 
-  // Risk 4: the tag lives on the resource, and ResizeBuffers replaces it. One
+  // The tag lives on the resource, and ResizeBuffers replaces it. One
   // GetBuffer per frame is cheap, and re-tagging is the whole repair.
   if (swapChain) {
     ID3D11Texture2D* back = nullptr;

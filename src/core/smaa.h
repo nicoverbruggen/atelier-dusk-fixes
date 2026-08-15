@@ -6,6 +6,29 @@
 #include <d3d11.h>
 #include <dxgi.h>
 
+// SMAA (Enhanced Subpixel Morphological Anti-Aliasing, Jimenez et al.) as a
+// post-process over the finished frame. These games ship no antialiasing of any
+// kind, and SMAA works on the finished image, so it smooths every visible edge
+// regardless of how it was produced -- texture-interior and alpha-test edges
+// included, which is exactly what multisampling cannot reach.
+//
+// Ported from the Arland project's src/core/smaa.h, which is this project's
+// own code (MIT). The reference shader and the AreaTex/SearchTex lookup tables are
+// vendored unchanged under vendor/smaa/ (Jimenez, Echevarria, Masia, Navarro,
+// Gutierrez; MIT) and compiled at runtime through d3dcompiler, which is the
+// same arrangement Arland uses.
+//
+// Each engine identifies its own pre-UI moment and hands the scene target
+// here: Ayesha's is the bind that leaves the surface which received the
+// frame's 3D pass (engines/phyre/pre_ui.h), and Escha & Logy and Shallie's is
+// the first draw
+// into the interface target after the main geometry run
+// (engines/ktgl/scene_target.h). Both count draws. Present remains a fallback
+// when a pre-UI pass cannot run.
+// Atelier Graphics Tweak also ships SMAA for these games, and confirmed two
+// useful facts by inspection: the same MIT reference shader at
+// SMAA_PRESET_ULTRA, and an injection point on the DEFERRED context. None of
+// its code is used here -- it is unlicensed, and this is a port of ours.
 namespace atfix {
 
 // Whether SMAA post-processing is enabled. Supported and on by default in all
@@ -13,8 +36,8 @@ namespace atfix {
 bool smaaEnabled();
 
 // Whether the pre-UI path is wanted. On by default when SMAA is on, because it
-// is strictly better where it works: the Present path softens the interface,
-// which is the reason SMAA had to be switched off after its first validation.
+// is strictly better where it works: the Present path runs over the finished
+// frame, so it softens the interface and its text along with the scene.
 // DUSK_SMAA_PREUI=0 falls back to the Present path for comparison.
 bool smaaPreUiEnabled();
 

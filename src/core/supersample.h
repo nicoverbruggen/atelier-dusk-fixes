@@ -167,7 +167,6 @@ constexpr unsigned int kSsaaMaxSubstitutedViews = 16;
 // retained across that guard; after the forwarded PSSetShaderResources call
 // has taken its own reference, the caller releases every entry that differs
 // from `views`.
-//
 bool ssaaSubstituteShaderResources(ID3D11DeviceContext* context,
                                    unsigned int startSlot,
                                    unsigned int numViews,
@@ -222,7 +221,10 @@ void ssaaClampPresentSize(UINT* width, UINT* height, const char* where);
 // Resize a windowed swap chain's output window so its client area matches the
 // clamped back buffer.
 //
-// Only the KTGL route needs this, and only windowed. Supersampling there works
+// Only the KTGL route needs this, and only windowed. The defect and the
+// primary correction live in engines/ktgl/window_size.h; this is the
+// after-the-fact fallback for a window that hook did not see.
+// Supersampling there works
 // by writing the game's own ini at base x factor so the engine renders
 // everything larger, then clamping the swap chain back down. The engine also
 // sizes its WINDOW from that ini, so at 150% the player gets a 2880x1620 window

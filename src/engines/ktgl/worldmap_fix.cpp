@@ -132,7 +132,7 @@ uintptr_t renderNode(uintptr_t self) {
 // stale node pointer cannot leave the block half-written.
 void republish(uintptr_t self, const Vec4& position) {
   const uintptr_t node = renderNode(self);
-  if (!node || !readableRange(node + kNodePrevious, kNodeBlockSpan))
+  if (!node || !writableRange(node + kNodePrevious, kNodeBlockSpan))
     return;
   for (uintptr_t field : { kNodePrevious, kNodeTarget, kNodeCurrent })
     std::memcpy(reinterpret_cast<void*>(node + field), position.data(),

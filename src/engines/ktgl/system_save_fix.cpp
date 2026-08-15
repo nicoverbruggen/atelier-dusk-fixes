@@ -374,9 +374,10 @@ bool installSystemSaveFix(BYTE* base, const atfix::KtglGame& game) {
   const bool saveOk = loadOk && installMinHookDetour(saveStep,
     reinterpret_cast<void*>(&tracedSaveStep),
     reinterpret_cast<void**>(&originalSaveStep));
-  // Last, and for the same reason the load hook goes first: the codec hook only
-  // ever SETS the latch, so without the save hook to read it the game would be
-  // left exactly as it shipped rather than half-guarded.
+  // Last, because it is report-only: it explains a decode failure to the player
+  // and changes nothing else. The latch is set by the load hook and read by the
+  // save hook, so those two go first and any partial install leaves the game
+  // exactly as it shipped rather than half-guarded.
   const bool codecOk = saveOk && installMinHookDetour(codec,
     reinterpret_cast<void*>(&tracedSystemCodec),
     reinterpret_cast<void**>(&originalSystemCodec));

@@ -30,6 +30,7 @@
 #include "config.h"
 #include "game.h"
 #include "highres.h"
+#include "letterbox.h"
 #include "shadow_res.h"
 #include "scene_policy.h"
 #include "log.h"
@@ -574,6 +575,12 @@ void updateViewportScissor(ID3D11DeviceContext* context) {
     g_targetLookupFails.fetch_add(1, std::memory_order_relaxed);
     return;
   }
+
+  // No letterbox here, said so the absence is not rediscovered as an oversight.
+  // Confining whatever draw targets the back buffer is the cheap way to fit a
+  // frame and it was built here; it works on neither engine. Ayesha fits its own
+  // frame, and KTGL writes the back buffer four times a frame, so confining all
+  // four places the image three times over. See core/letterbox.h.
 
   bool rewroteViewport = false;
   if (viewportCandidate &&

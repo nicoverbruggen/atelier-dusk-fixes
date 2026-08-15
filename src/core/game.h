@@ -60,6 +60,7 @@ enum class Feature : uint8_t {
   ShadowMultiplier,       // Ayesha: higher-resolution shadow map (valued: 1/2/4/8)
   FieldCharacterPull,     // Ayesha: stop character separation pulling bodies together
   TalkAnchorHold,         // Ayesha: hold a talking character at its conversation anchor
+  Letterbox,              // KTGL: render 16:9 and bar the rest on a non-16:9 display
   Count,
 };
 

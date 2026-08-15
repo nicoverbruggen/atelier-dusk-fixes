@@ -28,6 +28,7 @@
 #include "scene_pass.h"
 #include "sharpen.h"
 #include "smaa.h"
+#include "letterbox.h"
 #include "supersample.h"
 #include "supersample_policy.h"
 #include "util.h"
@@ -162,6 +163,7 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* swapChain,
   scenePolicy().frameTick();
   sharpenPreload();
   smaaPreload();
+  letterboxPreload();
   // Last thing before the frame is handed over: SMAA runs over the finished
   // image, so everything the game drew this frame has to be in it already.
   smaaApply(swapChain);
@@ -170,6 +172,11 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* swapChain,
   // would let both run, which is precisely the UI softening the pre-UI path
   // exists to avoid.
   smaaFrameReset();
+  // AFTER smaaApply, and last of everything: the fit has to happen once over a
+  // frame nobody will write again, and on KTGL the back buffer is written four
+  // times before this line, SMAA's own passes among them. A no-op on a 16:9 back
+  // buffer and on any game whose matrix row declines.
+  letterboxApply(swapChain);
   return originalPresent(swapChain, syncInterval, flags);
 }
 
@@ -314,6 +321,10 @@ HRESULT STDMETHODCALLTYPE hookedCreateSwapChain(
     // fact the whole feature is built on. Both swap-chain routes do it, because
     // Ayesha takes this one and the other games have never been measured.
     ssaaNoteBackBuffer(*swapChain);
+    // Ungated, unlike the tag above: the bars are needed whether or not
+    // supersampling is on, and this is the only place the real back-buffer
+    // shape is known.
+    atfix::letterboxNoteSwapChain(*swapChain);
     hookPresent(*swapChain);
   }
   return result;
@@ -493,6 +504,7 @@ DLLEXPORT HRESULT __stdcall D3D11CreateDeviceAndSwapChain(
 
   if (SUCCEEDED(hr) && ppSwapChain && *ppSwapChain) {
     atfix::ssaaNoteBackBuffer(*ppSwapChain);
+    atfix::letterboxNoteSwapChain(*ppSwapChain);
     atfix::hookPresent(*ppSwapChain);
   }
 

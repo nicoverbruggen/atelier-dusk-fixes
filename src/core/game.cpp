@@ -120,6 +120,11 @@ const Descriptor& descriptor(Feature f) {
     // Also keyless, and for the same reason: a defect correction rather than a
     // setting. DUSK_TALK_ANCHOR=0 turns it off for a diagnostic run.
     /* TalkAnchorHold */  { "DUSK_TALK_ANCHOR", nullptr, nullptr },
+    // Keyless for the third time, and the reason is the same: a display that is
+    // not 16:9 showing a stretched picture is a defect, not a preference.
+    // DUSK_LETTERBOX=0 turns it off, which is the run that tells a doubled
+    // letterbox apart from an absent one.
+    /* Letterbox */       { "DUSK_LETTERBOX", nullptr, nullptr },
   };
   return table[static_cast<int>(f)];
 }
@@ -148,10 +153,10 @@ constexpr Support X = Support::OnByDefault;
 // deliberate "this game does not get it". Taking the extent from the
 // initializer instead makes each static_assert below fail loudly the next time
 // a Feature is added without extending every row.
-//                               Verfy Targt HiRes Cache Field Smaa  Ssaa  WMap  Logo  Movi  Typo  SysSv Promt PadRe Synth ShdMl
-constexpr Support kAyesha[]  = { O,    O,    X,    X,    X,    X,    O,    X,    O,    O,    U,    U,    U,    X,    U,    X,    X,    X };
-constexpr Support kEscha[]   = { U,    O,    U,    U,    U,    X,    O,    X,    O,    O,    X,    X,    U,    X,    X,    U,    U,    U };
-constexpr Support kShallie[] = { U,    O,    U,    U,    U,    X,    O,    U,    O,    O,    X,    X,    O,    X,    X,    U,    U,    U };
+//                               Verfy Targt HiRes Cache Field Smaa  Ssaa  WMap  Logo  Movi  Typo  SysSv Promt PadRe Synth ShdMl Pull  Talk  Lbox
+constexpr Support kAyesha[]  = { O,    O,    X,    X,    X,    X,    O,    X,    O,    O,    U,    U,    U,    X,    U,    X,    X,    X,    U };
+constexpr Support kEscha[]   = { U,    O,    U,    U,    U,    X,    O,    X,    O,    O,    X,    X,    U,    X,    X,    U,    U,    U,    X };
+constexpr Support kShallie[] = { U,    O,    U,    U,    U,    X,    O,    U,    O,    O,    X,    X,    O,    X,    X,    U,    U,    U,    X };
 
 constexpr std::size_t kColumns = static_cast<std::size_t>(Feature::Count);
 static_assert(std::size(kAyesha) == kColumns,  "Ayesha row is not one entry per Feature");

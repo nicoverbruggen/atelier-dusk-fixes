@@ -1195,6 +1195,11 @@ void ssaaCorrectCompositeViewport(ID3D11DeviceContext* context) {
           unsigned(observedHeight), " at ", int(viewport.TopLeftX), ",",
           int(viewport.TopLeftY));
   }
+  // NOT THE PLACE FOR THE LETTERBOX, established by measurement. Confining this
+  // viewport to the fitted rectangle drew the picture three times down the
+  // screen, because this function runs four times a frame on KTGL -- the
+  // composite, then SMAA's passes at Present -- and each reads what the previous
+  // wrote. The fit acts once, after the last of them; see core/letterbox.h.
   if (viewport.Width == float(destWidth) &&
       viewport.Height == float(destHeight) &&
       viewport.TopLeftX == 0.0f && viewport.TopLeftY == 0.0f)

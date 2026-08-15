@@ -12,6 +12,7 @@
 #include "ktgl.h"
 
 #include "control_prompt_fix.h"
+#include "letterbox_present.h"
 #include "scene_target.h"
 #include "loading_text_fix.h"
 #include "logo_skip.h"
@@ -152,6 +153,10 @@ bool initializeKtglFixes() {
     installKtglLogoSkip(id.base, *game);
     installKtglWorldMapFix(id.base, *game);
     atfix::installKtglSceneTarget();
+    // The frame fit. Core owns the shape question and this engine owns the
+    // pass, because the reason it needs one is a KTGL fact: the back buffer is
+    // written four times a frame here and once on the other engine.
+    atfix::installKtglLetterbox();
     // The pad rescan is engine-agnostic machinery with a per-executable address,
     // so core owns the mechanism and this module supplies the row. See
     // core/pad_rescan.h; the prologue is displacement-free for twelve bytes and

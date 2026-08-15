@@ -1324,7 +1324,10 @@ void ssaaFrameTick(IDXGISwapChain* swapChain) {
           " the back buffer, so the substitution never sees them");
   }
 
-  if (frame % 600 == 0)
+  // Verbose only. This is a periodic counter dump, not a decision or a
+  // failure, and at 600 frames it is the one line that can dominate a long
+  // session's log: a two-hour run produced roughly 2,300 of them.
+  if (verboseLogging() && frame % 600 == 0)
     log("SSAA compositeBinds=", std::dec, binds,
         " sceneSrvSubstitutions=", subs,
         " downscales=", g_downscales.load(std::memory_order_relaxed),

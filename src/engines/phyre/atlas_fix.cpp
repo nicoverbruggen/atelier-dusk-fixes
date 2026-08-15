@@ -29,6 +29,7 @@
 
 #include "atlas_fix.h"
 #include "phyre.h"
+#include "../../core/config.h"        // verboseLogging
 #include "../../core/hook_util.h"
 #include "../../core/log.h"
 #include "../../core/util.h"
@@ -479,8 +480,12 @@ void atlasFixFrameTick() {
 
   ++frameIndex;
 
-  if (cacheActive && (frameIndex == kCacheFirstReportFrame ||
-                      frameIndex % kCacheReportInterval == 0)) {
+  // The first report is unconditional: the hit rate is the shipping fix's
+  // headline measurement, and one line of it is what a bug report needs. The
+  // repeats are a periodic counter, so they follow verbose logging.
+  if (cacheActive &&
+      (frameIndex == kCacheFirstReportFrame ||
+       (atfix::verboseLogging() && frameIndex % kCacheReportInterval == 0))) {
     const uint64_t hits = atlasCacheHits.load(std::memory_order_relaxed);
     const uint64_t realLocks = atlasRealLocks.load(std::memory_order_relaxed);
     const uint64_t total = hits + realLocks;

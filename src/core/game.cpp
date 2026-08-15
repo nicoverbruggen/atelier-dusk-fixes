@@ -100,6 +100,18 @@ const Descriptor& descriptor(Feature f) {
                           { "DUSK_PAD_RESCAN",        nullptr, nullptr },
     /* SynthesisAnimationRate */
                           { "DUSK_SYNTH_RATE",        nullptr, nullptr },
+    // A valued knob rather than a switch, so no ini key here: shadow_res.cpp
+    // reads [Rendering] ShadowMultiplier itself, and 1 means off. Giving the
+    // row a key would have featureEnabled seed the literal "false" into an
+    // integer setting, which is the trap Supersampling documents above.
+    //
+    // Its matrix cell is DOCUMENTATION ONLY, as the Arland project's is:
+    // nothing resolves behaviour through featureEnabled for this row, so the
+    // cell says which games have the feature and the ini says whether it runs.
+    // Ayesha's cell reads OnByDefault because the shipped default.ini carries
+    // ShadowMultiplier = 2, the same reasoning and the same value as Arland.
+    /* ShadowMultiplier */
+                          { "DUSK_SHADOW_MULTIPLIER", nullptr, nullptr },
   };
   return table[static_cast<int>(f)];
 }
@@ -128,10 +140,10 @@ constexpr Support X = Support::OnByDefault;
 // deliberate "this game does not get it". Taking the extent from the
 // initializer instead makes each static_assert below fail loudly the next time
 // a Feature is added without extending every row.
-//                               Verfy Targt HiRes Cache Field Smaa  Ssaa  WMap  Logo  Movi  Typo  SysSv Promt PadRe Synth
-constexpr Support kAyesha[]  = { O,    O,    X,    X,    X,    X,    O,    X,    O,    O,    U,    U,    U,    X,    U };
-constexpr Support kEscha[]   = { U,    O,    U,    U,    U,    X,    O,    X,    O,    O,    X,    X,    U,    X,    X };
-constexpr Support kShallie[] = { U,    O,    U,    U,    U,    X,    O,    U,    O,    O,    X,    X,    O,    X,    X };
+//                               Verfy Targt HiRes Cache Field Smaa  Ssaa  WMap  Logo  Movi  Typo  SysSv Promt PadRe Synth ShdMl
+constexpr Support kAyesha[]  = { O,    O,    X,    X,    X,    X,    O,    X,    O,    O,    U,    U,    U,    X,    U,    X };
+constexpr Support kEscha[]   = { U,    O,    U,    U,    U,    X,    O,    X,    O,    O,    X,    X,    U,    X,    X,    U };
+constexpr Support kShallie[] = { U,    O,    U,    U,    U,    X,    O,    U,    O,    O,    X,    X,    O,    X,    X,    U };
 
 constexpr std::size_t kColumns = static_cast<std::size_t>(Feature::Count);
 static_assert(std::size(kAyesha) == kColumns,  "Ayesha row is not one entry per Feature");

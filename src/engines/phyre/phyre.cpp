@@ -16,6 +16,7 @@
 #include "field_physics.h"
 #include "logo_skip.h"
 #include "movie_skip.h"
+#include "shadow_tap.h"
 #include "scene_target.h"
 #include "worldmap_fix.h"
 #include "../../core/game.h"
@@ -143,6 +144,12 @@ bool initializePhyreFixes() {
       atfix::installLogoSkip(g_base, g_game->exeBuild);
     if (wantMovieSkip)
       atfix::installMovieSkip(g_base, g_game->exeBuild);
+
+    // The other half of the shadow-map enlargement, which core allocates and
+    // redirects but cannot finish: the filter width is stated in the engine's
+    // own code, so correcting it needs this module's addresses. It gates itself
+    // on the multiplier, which is why there is no `want` flag here.
+    atfix::installShadowTapScale(g_base, g_game->exeBuild);
 
     // Not a Phyre fix at all: the pad layer is Gust framework code shared by all
     // six DX ports, so core owns the mechanism and this module only supplies the

@@ -30,6 +30,7 @@
 #include "config.h"
 #include "game.h"
 #include "highres.h"
+#include "shadow_res.h"
 #include "scene_policy.h"
 #include "log.h"
 #include "supersample.h"
@@ -337,6 +338,12 @@ HRESULT STDMETHODCALLTYPE hookedCreateTexture2D(
         local.Height, " was refused (hr=0x", std::hex, uint32_t(hr),
         std::dec, "); returning the failure without an incompatible ",
         desc->Width, "x", desc->Height, " fallback");
+  // The shadow-map twin is created here rather than from a second device hook,
+  // because a vtable slot takes one hook and this one is already ours. It is
+  // passed the descriptor the GAME asked for: the twin is sized from the
+  // engine's own 1024 map, not from anything the resize above rewrote.
+  if (SUCCEEDED(hr) && texture && *texture)
+    shadowResNoteCreation(self, desc, initialData, *texture);
   return hr;
 }
 
@@ -375,6 +382,15 @@ void markRasterDirty(ID3D11DeviceContext* context) {
   const UINT dirty = 1;
   context->SetPrivateData(IID_DuskHighResRasterDirty, sizeof(dirty), &dirty);
 }
+
+}  // namespace
+
+void highResMarkRasterDirty(ID3D11DeviceContext* context) {
+  if (context)
+    markRasterDirty(context);
+}
+
+namespace {
 
 bool takeRasterDirty(ID3D11DeviceContext* context) {
   UINT dirty = 0;

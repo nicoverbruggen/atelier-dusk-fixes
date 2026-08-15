@@ -14,6 +14,8 @@
 #include "smaa.h"
 #include "scene_policy.h"
 #include "scene_pass.h"
+#include "highres.h"
+#include "shadow_res.h"
 #include "supersample.h"
 
 namespace atfix {
@@ -138,6 +140,25 @@ void STDMETHODCALLTYPE hookedOMSetRenderTargets(
   // identification the whole supersampling rebuild rests on.
   ssaaNoteTargetsBound(self, numViews, views);
 
+  // The caster pass binds the shadow map depth-only; when a twin exists this
+  // hands the enlarged one over instead. Null means bind what the engine asked
+  // for, which is every bind that is not the shadow pass.
+  if (ID3D11DepthStencilView* twin =
+        shadowResRedirectDsv(depth, numViews, views)) {
+    // The surface under the viewport just changed size and nothing else will
+    // say so: the raster correction settles at a draw and only when a viewport
+    // or scissor submission marked it stale. Without this the casters draw
+    // into the top-left 1024x1024 of the enlarged map and the receiver samples
+    // the rest as undefined depth, which reads in game as no shadows at all.
+    highResMarkRasterDirty(self);
+    d3d11OriginalsFor(self).omSetRenderTargets(self, numViews, views, twin);
+    // After the bind, so RSGetViewports inside it reads the state this pass is
+    // actually about to draw with.
+    shadowResApplyCasterViewport(self);
+    twin->Release();
+    return;
+  }
+
   d3d11OriginalsFor(self).omSetRenderTargets(self, numViews, views, depth);
 }
 
@@ -160,6 +181,21 @@ void STDMETHODCALLTYPE hookedPSSetShaderResources(
     for (UINT i = 0; i < numViews; ++i)
       if (substituted[i] && substituted[i] != views[i])
         substituted[i]->Release();
+    return;
+  }
+
+  // The receiver samples the shadow map here. Substituting the twin's view is
+  // what puts the extra resolution on screen; it is a separate array from the
+  // supersampling one above because the two features can both be on and each
+  // owns its own decision.
+  ID3D11ShaderResourceView* shadowViews[kSsaaMaxSubstitutedViews];
+  if (shadowResSubstituteSrvs(numViews, views, shadowViews,
+                              kSsaaMaxSubstitutedViews)) {
+    d3d11OriginalsFor(self).psSetShaderResources(self, startSlot, numViews,
+                                                 shadowViews);
+    for (UINT i = 0; i < numViews; ++i)
+      if (shadowViews[i] && shadowViews[i] != views[i])
+        shadowViews[i]->Release();
     return;
   }
 

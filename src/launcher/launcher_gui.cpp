@@ -80,6 +80,7 @@ enum : int {
   IDC_OPENLAUNCHER,   // Koei Tecmo's own launcher
   IDC_OPENENV,        // Koei Tecmo's own settings editor
   IDC_PLAYVANILLA,    // the game with the mod turned off
+  IDC_SHADOW,         // [Rendering] ShadowMultiplier
   IDC_VERBOSE,        // [Diagnostics] VerboseLogging
   IDC_RESET,
   IDC_CLOSE,
@@ -144,6 +145,7 @@ struct Capabilities {
   // of a matrix cell, and check_default_ini.py compares the two game by game so
   // a future divergence is caught rather than silently written into the file.
   bool smaaOnByDefault;
+  bool shadowMultiplier;// [Rendering] ShadowMultiplier, Ayesha only
   bool skipLogos;       // [Startup] SkipLogos
   bool skipMovie;       // [Startup] SkipIntroMovie
 };
@@ -175,10 +177,10 @@ struct Capabilities {
 // OnByDefault for all three games, and remains explicit because a future matrix
 // change must also change what a fresh launcher writes.
 const Capabilities kCapabilities[kGameCount] = {
-  //             Ssaa   ScalesIni  Smaa  SmaaOn  Logos  Movie
-  /* Ayesha  */ { true,  false,     true, true,   true,  true },
-  /* Escha   */ { true,  true,      true, true,   true,  true },
-  /* Shallie */ { true,  true,      true, true,   true,  true },
+  //             Ssaa   ScalesIni  Smaa  SmaaOn  Shadow  Logos  Movie
+  /* Ayesha  */ { true,  false,     true, true,   true,   true,  true },
+  /* Escha   */ { true,  true,      true, true,   false,  true,  true },
+  /* Shallie */ { true,  true,      true, true,   false,  true,  true },
 };
 
 char g_iniPath[MAX_PATH] = {};       // dusk-fix.ini, in the game folder
@@ -245,6 +247,16 @@ const ComboItem kSharpenItems[] = {
 };
 const int kSharpenCount = 4;
 
+// ShadowMultiplier's 1/2/4/8 scale, 1 being off. The labels name what the
+// number means, since a bare "8" would say nothing beside plain-language rows.
+// The second column is the exact string written to the ini and must not change.
+// Word for word the Arland launcher's list, because it is the same setting.
+const ComboItem kShadowItems[] = {
+  { L"Normal (1024 map)", "1" }, { L"2x (2048 map)", "2" },
+  { L"4x (4096 map)",     "4" }, { L"8x (8192 map)", "8" },
+};
+const int kShadowCount = 4;
+
 // The ceiling the DLL clamps to, repeated here so the list never offers a
 // multiplier that would silently be reduced. See supersample.cpp.
 const unsigned kMaxRenderWidth = 7680;
@@ -288,6 +300,7 @@ HWND g_hSharpen = nullptr;
 HWND g_hOutline = nullptr;
 HWND g_hSkipLogos = nullptr, g_hSkipMovie = nullptr;
 HWND g_hSkipLauncher = nullptr;
+HWND g_hShadow = nullptr;
 HWND g_hVerbose = nullptr;
 HWND g_hStart = nullptr;
 HWND g_hRepoLink = nullptr;
@@ -960,6 +973,7 @@ struct UiState {
   bool skipLogos;
   bool skipMovie;
   bool skipLauncher;
+  int  shadow;
   bool verbose;
 
   bool operator == (const UiState& o) const {
@@ -968,7 +982,7 @@ struct UiState {
            sharpen == o.sharpen &&
            outline == o.outline && skipLogos == o.skipLogos &&
            skipMovie == o.skipMovie && skipLauncher == o.skipLauncher &&
-           verbose == o.verbose;
+           shadow == o.shadow && verbose == o.verbose;
   }
 };
 
@@ -985,6 +999,8 @@ UiState currentState() {
   state.skipLogos = isChecked(g_hSkipLogos);
   state.skipMovie = isChecked(g_hSkipMovie);
   state.skipLauncher = isChecked(g_hSkipLauncher);
+  state.shadow = g_hShadow
+    ? int(SendMessageW(g_hShadow, CB_GETCURSEL, 0, 0)) : 0;
   state.verbose = isChecked(g_hVerbose);
   return state;
 }
@@ -1137,6 +1153,17 @@ void loadFromIni() {
   setChecked(g_hSkipLauncher,
     iniBool(g_iniPath, "Launcher", "SkipLauncher", false));
 
+  // Blank means the DLL's own default of 2, which is the shipped setting.
+  // Selected by value so a hand-edited 3 lands on Normal rather than on
+  // whatever index 3 happens to be, and writing that back is what the DLL would
+  // have done with it anyway.
+  if (capabilities().shadowMultiplier) {
+    iniString(g_iniPath, "Rendering", "ShadowMultiplier", value, sizeof(value),
+              "2");
+    comboSelectByValue(g_hShadow, kShadowItems, kShadowCount,
+                       value[0] ? value : "2", 0);
+  }
+
   // [Diagnostics]: not gated on a capability, because the DLL reads it whatever
   // the game is.
   setChecked(g_hVerbose,
@@ -1218,6 +1245,10 @@ SaveOutcome saveToIni() {
   iniWriteBool(g_iniPath, "Launcher", "SkipLauncher",
     isChecked(g_hSkipLauncher));
 
+  if (capabilities().shadowMultiplier)
+    iniWrite("Rendering", "ShadowMultiplier",
+      comboValue(g_hShadow, kShadowItems, kShadowCount), g_iniPath);
+
   iniWriteBool(g_iniPath, "Diagnostics", "VerboseLogging",
     isChecked(g_hVerbose));
 
@@ -1279,6 +1310,11 @@ void resetToDefaults() {
   setChecked(g_hSkipLogos, false);
   setChecked(g_hSkipMovie, false);
   setChecked(g_hSkipLauncher, false);
+  // Normal, not the Arland launcher's 2x. This is opt-in here: it costs fill
+  // on a game that is already CPU-limited, and reset is for getting back to a
+  // known state rather than to a recommended one.
+  if (g_hShadow)
+    SendMessageW(g_hShadow, CB_SETCURSEL, 0, 0);
   setChecked(g_hVerbose, false);
   updateRenderResolution();
 }
@@ -2041,7 +2077,15 @@ void createControls(HWND w) {
         L"supersampling.");
     }
 
-    // The game's own, and present in all three titles' Setting.ini.
+    // The mod's own key in dusk-fix.ini, and Ayesha's alone: the KTGL games
+    // have no shadow-map twin, so the whole row is absent rather than disabled.
+    if (caps.shadowMultiplier) {
+      g_hShadow = mkCombo(w, 0, 0, 10, IDC_SHADOW);
+      comboFill(g_hShadow, kShadowItems, kShadowCount);
+      page.row(L"Shadow detail:", g_hShadow,
+        L"Larger shadow maps, which results in sharper shadow edges (less blocky shadows).");
+    }
+
     g_hOutline = mkCheck(w, L"Character outlines", 0, 0, 10, IDC_OUTLINE);
     page.checkRow(g_hOutline,
       L"The game's own outline rendering. Turn it off at higher resolutions.");

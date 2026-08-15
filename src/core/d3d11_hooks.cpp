@@ -13,6 +13,7 @@
 #include "highres.h"
 #include "log.h"
 #include "scene_pass.h"
+#include "shadow_res.h"
 #include "sharpen.h"
 #include "smaa.h"
 #include "scene_policy.h"
@@ -66,6 +67,18 @@ const ContextHookSpec kRasterHooks[] = {
 // The scene-pass set: the two bind points that carry the scene/UI boundary, the
 // sample the composite makes, and the close of a recorded list. Owned by
 // scene_pass.cpp, and wanted by whichever of SMAA and supersampling is on.
+// The shadow-map twin's one slot. Its other three interception points are
+// calls from detours the raster and scene-pass sets already own, because a slot
+// takes one hook. Owned by shadow_res.cpp.
+const ContextHookSpec kShadowResHooks[] = {
+  { 53, reinterpret_cast<void*>(&hookedClearDepthStencilView),
+    ORIGINAL_AT(clearDepthStencilView), "ClearDepthStencilView" },
+  { 47, reinterpret_cast<void*>(&hookedCopyResource),
+    ORIGINAL_AT(copyResource), "CopyResource" },
+  { 46, reinterpret_cast<void*>(&hookedCopySubresourceRegion),
+    ORIGINAL_AT(copySubresourceRegion), "CopySubresourceRegion" },
+};
+
 const ContextHookSpec kScenePassHooks[] = {
   { 33, reinterpret_cast<void*>(&hookedOMSetRenderTargets),
     ORIGINAL_AT(omSetRenderTargets), "OMSetRenderTargets" },
@@ -267,6 +280,9 @@ void d3d11InstallHooks(ID3D11Device* device, ID3D11DeviceContext* context) {
   if (smaaPreUiEnabled() || ssaaActive() || sharpenEnabled())
     append(kScenePassHooks,
            int(sizeof(kScenePassHooks) / sizeof(kScenePassHooks[0])));
+  if (shadowResWanted())
+    append(kShadowResHooks,
+           int(sizeof(kShadowResHooks) / sizeof(kShadowResHooks[0])));
 
   if (specCount && !context) {
     log("D3D11HOOKS: no immediate context available, so the context hooks"

@@ -91,6 +91,13 @@ using PFN_OMSetRenderTargets = void (STDMETHODCALLTYPE *) (
   ID3D11DepthStencilView*);
 using PFN_PSSetShaderResources = void (STDMETHODCALLTYPE *) (
   ID3D11DeviceContext*, UINT, UINT, ID3D11ShaderResourceView* const*);
+using PFN_ClearDepthStencilView = void (STDMETHODCALLTYPE *) (
+  ID3D11DeviceContext*, ID3D11DepthStencilView*, UINT, FLOAT, UINT8);
+using PFN_CopyResource = void (STDMETHODCALLTYPE *) (
+  ID3D11DeviceContext*, ID3D11Resource*, ID3D11Resource*);
+using PFN_CopySubresourceRegion = void (STDMETHODCALLTYPE *) (
+  ID3D11DeviceContext*, ID3D11Resource*, UINT, UINT, UINT, UINT,
+  ID3D11Resource*, UINT, const D3D11_BOX*);
 using PFN_FinishCommandList = HRESULT (STDMETHODCALLTYPE *) (
   ID3D11DeviceContext*, BOOL, ID3D11CommandList**);
 using PFN_OMSetRenderTargetsAndUnorderedAccessViews =
@@ -120,6 +127,9 @@ struct ContextOriginals {
   PFN_DrawIndexedInstanced drawIndexedInstanced = nullptr;
   PFN_OMSetRenderTargets omSetRenderTargets = nullptr;
   PFN_PSSetShaderResources psSetShaderResources = nullptr;
+  PFN_ClearDepthStencilView clearDepthStencilView = nullptr;
+  PFN_CopyResource copyResource = nullptr;
+  PFN_CopySubresourceRegion copySubresourceRegion = nullptr;
   PFN_FinishCommandList finishCommandList = nullptr;
   PFN_OMSetRenderTargetsAndUnorderedAccessViews
     omSetRenderTargetsAndUnorderedAccessViews = nullptr;

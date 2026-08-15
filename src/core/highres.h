@@ -58,6 +58,16 @@ void STDMETHODCALLTYPE hookedRSSetViewports(
 void STDMETHODCALLTYPE hookedRSSetScissorRects(
   ID3D11DeviceContext*, UINT, const D3D11_RECT*);
 void STDMETHODCALLTYPE hookedDraw(ID3D11DeviceContext*, UINT, UINT);
+
+// Re-evaluate the raster correction on this context at the next draw.
+//
+// The correction settles at a draw and only when something marked it dirty,
+// and the two things that do are a viewport and a scissor submission. Binding
+// a target does not, which is correct while every target keeps the size the
+// engine gave it. The shadow-map twin breaks that assumption: it substitutes a
+// larger surface under a viewport nobody re-submitted, so whoever makes that
+// substitution has to say the raster state is stale.
+void highResMarkRasterDirty(ID3D11DeviceContext* context);
 void STDMETHODCALLTYPE hookedDrawIndexed(
   ID3D11DeviceContext*, UINT, UINT, INT);
 void STDMETHODCALLTYPE hookedDrawInstanced(

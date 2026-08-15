@@ -120,6 +120,11 @@ std::atomic<bool> g_init{false};
 // every write to it is inside the guard. Same reason as g_passBroken in
 // supersample.cpp.
 std::atomic<bool> g_broken{false};
+// The shader compiler, loaded once from the frame tick by smaaPreload. Never
+// loaded from here: LoadLibrary inside a draw detour takes the loader lock on
+// whatever thread the engine is recording on, and this engine records on
+// several. sharpen.cpp carries the measured incident.
+HMODULE g_compiler = nullptr;
 std::atomic<bool> g_preUiProven{false};
 std::atomic<bool> g_doneThisFrame{false};
 // One resource tuple, used from both deferred pre-UI recording and the
@@ -201,8 +206,7 @@ bool compile(PFN_D3DCompile D3DCompile, const char* entry, const char* target,
 }
 
 bool initShared(ID3D11Device* dev) {
-  HMODULE comp = LoadLibraryA("d3dcompiler_47.dll");
-  if (!comp) comp = LoadLibraryA("d3dcompiler.dll");
+  HMODULE comp = g_compiler;
   if (!comp) { log("SMAA: no d3dcompiler"); return false; }
   auto D3DCompile = reinterpret_cast<PFN_D3DCompile>(
     GetProcAddress(comp, "D3DCompile"));
@@ -462,6 +466,18 @@ bool smaaRunPasses(ID3D11Device* dev, ID3D11DeviceContext* ctx,
   if (cd.SampleDesc.Count != 1)
     return false;
 
+  // Tested BEFORE the one-shot latch below. Every caller of the passes runs
+  // earlier in the frame than Present, so the first pass a session asks for can
+  // arrive before smaaPreload has run. Latching there would turn a one-frame
+  // wait into SMAA being off for the rest of the process.
+  if (!g_compiler) {
+    static std::atomic<bool> waited{false};
+    if (!waited.exchange(true, std::memory_order_relaxed))
+      log("SMAA: d3dcompiler is not loaded yet; the passes start on a later"
+          " frame");
+    return false;
+  }
+
   if (!g_init.exchange(true)) {
     if (!initShared(dev)) g_broken = true;
     else log("FIXES smaa=active size=", std::dec, cd.Width, "x", cd.Height,
@@ -557,6 +573,18 @@ bool smaaPreUiEnabled() {
     return !env || env[0] != '0';
   }();
   return enabled;
+}
+
+void smaaPreload() {
+  static bool attempted = false;
+  if (!smaaEnabled() || g_compiler || attempted)
+    return;
+  attempted = true;
+  g_compiler = LoadLibraryA("d3dcompiler_47.dll");
+  if (!g_compiler)
+    g_compiler = LoadLibraryA("d3dcompiler.dll");
+  if (!g_compiler)
+    log("SMAA: no d3dcompiler; the passes cannot be built");
 }
 
 bool smaaEnabled() {

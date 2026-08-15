@@ -33,6 +33,10 @@ namespace atfix {
 
 // Whether SMAA post-processing is enabled. Supported and on by default in all
 // three games; see the capability matrix in game.cpp.
+// Load the shader compiler from the frame tick rather than from a draw. See
+// smaa.cpp: doing it inside a draw detour deadlocks on the loader lock.
+void smaaPreload();
+
 bool smaaEnabled();
 
 // Whether the pre-UI path is wanted. On by default when SMAA is on, because it

@@ -56,6 +56,49 @@ namespace atfix {
 //
 // DUSK_FIELD_ENGINE_FIX turns it off.
 //
+// DUSK_FIELD_TRACE=<lines> is a diagnostic rather than a fix: it prints each
+// controller's position and its change since the previous frame, for that many
+// lines, then stops. The budget exists because the questions it answers need
+// consecutive frames, and an unbounded per-frame line fills the log in about a
+// second at 200 Hz. Frames where a character did not move print nothing.
+//
+// DUSK_FIELD_TALK_FREEZE=1 addresses the conversation shimmer: an NPC the
+// player has run into vibrates in place while the dialogue is open.
+//
+// WHAT CAUSES IT. The engine's physics world update walks every collision
+// object once a frame and pushes overlapping characters apart, writing both the
+// controller position and the scene node. The game's controller update then
+// re-asserts the position FROM that node. In free play this settles within a
+// frame or two, because the player yields and the overlap goes away. In the
+// talk state neither actor may move: the player is pinned and the NPC is held
+// at the conversation anchor, so the game re-creates the overlap every frame
+// and the physics undoes it every frame, at the display refresh rate.
+//
+// THE FIX cancels the physics half. The position is already read at both ends
+// of the controller update, so saving it at one end and restoring it at the
+// other undoes exactly what happened in between and nothing else.
+//
+// IT IS GATED ON THE ENGINE'S OWN STATE, not on the shape of the movement. An
+// earlier version inferred "a conversation is happening" from movement that
+// opposed the update's, and it was retuned five times without ever holding:
+// the thresholds that caught the defect also caught ordinary running, and the
+// ones that excluded running excluded most of the defect. Hooking
+// `clsFMStateTalk::update` replaces the whole question with an answer.
+//
+// DUSK_FIELD_WATCH=<n> goes one step further and names the code doing the
+// moving. It marks the page holding the position read-only and logs the
+// faulting instruction for up to n writes, as a module RVA that can be looked
+// up. It arms itself on whichever character shows the oscillation signature, so
+// it needs no timing against a conversation, and it disarms when the budget is
+// spent. Requires DUSK_FIELD_TRACE, which is what detects the signature.
+//
+// Expect it to be slow while armed: protection is per page, so every write to
+// any neighbouring field in the same 4 KB faults too.
+//
+// Read the delta rather than the position. A character oscillating shows the
+// same magnitude alternating sign; one drifting and being snapped back shows
+// small steps one way and a single large step against them.
+//
 // A resting stabilizer used to sit alongside the rescale, holding a character
 // that was grounded, horizontally still, and whose last move the resolver threw
 // away. The ground ray covers that case and more -- it reaches a character that

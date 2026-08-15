@@ -14,11 +14,13 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-#include <cmath>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <unordered_map>
+#include <utility>
 
 #include "field_physics.h"
 #include "../../core/config.h"        // verboseLogging
@@ -61,7 +63,24 @@ constexpr uintptr_t kAirTimerOffset = 0xb8;
 // the translate helper guards on [this+0x20] for the scene node.
 constexpr uintptr_t kQueryIfaceOffset = 0x98;
 constexpr uintptr_t kFootOffset = 0xb4;
+// Set to 1 by the controller update and cleared by the resolver, so at resolver
+// entry it answers "did this character's game side run this frame". A talking
+// NPC's does not, which is what makes it an exact gate for the conversation
+// participants and nobody else.
+// The resolver's own entry gate: zero means take the no-op path, which does a
+// small position fixup, clears kGameTickedOffset and returns without pushing.
 constexpr uintptr_t kNodeOffset = 0x20;
+// The scene node's own copy of the position. The resolver writes BOTH this and
+// the controller's, and the controller update then re-asserts its copy FROM
+// this one -- so the node is the authoritative half. Restoring only the
+// controller is undone within the same frame, which is exactly what a first
+// attempt at the freeze did: it logged the correct movement being cancelled and
+// changed nothing on screen.
+// The node's local transform: four rows of four floats, the last being the
+// translation kNodePosOffset points at. The whole matrix is snapshotted rather
+// than the translation alone because the actor writes all four rows in one go.
+constexpr uintptr_t kNodeMatrixOffset = 0x110;
+constexpr size_t kNodeMatrixSize = 64;
 constexpr uintptr_t kWrapperScene = 0x10;
 constexpr uintptr_t kWrapperDirty = 0x18;
 constexpr uint32_t kGroundedBit = 0x100;
@@ -87,10 +106,13 @@ struct FieldPhysicsAddrs {
   uintptr_t update;
   uintptr_t collisionResolver;
   uintptr_t moveThreshold;
+  // nspFM::clsFMStateTalk::update, vtable slot 2. Only the freeze uses it, and
+  // only to know whether a conversation is on screen this frame.
+  uintptr_t talkUpdate;
 };
 
-constexpr FieldPhysicsAddrs kAyeshaEn    { 0x739fa0, 0x738670, 0x1627f20 };
-constexpr FieldPhysicsAddrs kAyeshaMulti { 0x75c4a0, 0x75ab70, 0x17bf8e0 };
+constexpr FieldPhysicsAddrs kAyeshaEn    { 0x739fa0, 0x738670, 0x1627f20, 0x40e2f0 };
+constexpr FieldPhysicsAddrs kAyeshaMulti { 0x75c4a0, 0x75ab70, 0x17bf8e0, 0x42d310 };
 
 const FieldPhysicsAddrs* addressesFor(uint8_t exeBuild) {
   // Ayesha only. Escha & Logy and Shallie are on KTGL, are not mapped for this
@@ -418,7 +440,165 @@ void applyGraceHold(uintptr_t self) {
   std::memcpy(reinterpret_cast<void*>(self + kVelYOffset), &rest, sizeof(rest));
 }
 
+// Position trace. DUSK_FIELD_TRACE names a budget of lines; the trace stops
+// when it is spent, because the question it answers needs CONSECUTIVE frames
+// and an unbounded per-frame line would drown the log within a second.
+//
+// The delta is what to read, not the position: an oscillation shows as the same
+// magnitude alternating sign, a drift-and-snap shows as small steps one way and
+// one large step back. Both positions are printed anyway so the amplitude can
+// be had in world units rather than inferred from pixels.
+// ---- write watchpoint ------------------------------------------------------
+//
+// WHAT IT ANSWERS. The position trace says the character is moved between one
+// controller update and the next, but not by what. Following the call graph to
+// find out means chasing dispatch through stored pointers, several levels of
+// it. Catching the write itself names the instruction in one run instead.
+//
+// HOW. The page holding the position is made read-only, so any write to it
+// raises an access violation. A vectored handler records the faulting
+// instruction, restores the page, sets the trap flag so the write can complete,
+// and re-arms on the single-step that follows.
+//
+// WHAT IT COSTS. Protection is per page, so EVERY write to that page faults,
+// not only the one being hunted -- neighbouring fields in the same 4 KB share
+// the cost. That is why this is budgeted and self-disarming: it is a
+// measurement instrument, not something to leave running.
+//
+// WHY IT ARMS ITSELF. The controller to watch is the one oscillating, and which
+// one that is depends on who the player walked into. Rather than have someone
+// time an environment variable against a conversation, the trace watches for
+// its own signature -- a pre delta and a post delta of opposite sign in the
+// same frame, repeatedly -- and arms on the character showing it.
+
+// ---- between-update freeze -------------------------------------------------
+//
+// The measurement this exists to act on: during a conversation the collision
+// resolver runs from a call path OUTSIDE the controller update, moves the
+// character, and the update then moves it back. Neither yields, so the pair
+// repeats every frame and reads as a shimmer.
+//
+// Cancelling that costs no new hook. The position is already sampled at both
+// ends of the update, so saving it at the end of one and restoring it at the
+// start of the next undoes exactly the movement that happened in between, and
+// nothing else.
+//
+// IT IS GATED ON THE SIGNATURE, NOT ON THE CONVERSATION. Detecting the talk
+// state would need hooks into the field-map state machine; requiring the
+// between-update movement to OPPOSE the update's own movement, several frames
+// running, costs nothing and is narrower. A warp, a cutscene or a script moving
+// a character does not alternate with the controller frame after frame, so it
+// is left alone. This is why the freeze cannot strand a character somewhere the
+// game meant to put them.
+//
+// At worst a frame of the shimmer survives before the streak is established.
+
+
+// Set by the talk state's own per-frame update, so "is a conversation on
+// screen" is answered by the engine rather than guessed from movement. The
+// previous version inferred it from the shape of the motion and spent five
+// runs being retuned; a state that reports itself needs no thresholds.
+//
+// A timestamp rather than a flag because the order of the talk update and the
+// controller update within a frame is not known, and a stale flag would either
+// miss the first frames or hold past the last. Anything within the last tenth
+// of a second counts as still talking, which at this frame rate is generous in
+// both directions and self-clearing when the conversation ends.
+std::atomic<uint64_t> g_talkSeenMs{0};
+
+uintptr_t nodeOf(uintptr_t self) {
+  uintptr_t node = 0;
+  std::memcpy(&node, reinterpret_cast<const void*>(self + kNodeOffset),
+              sizeof(node));
+  return node;
+}
+
+bool conversationOnScreen() {
+  const uint64_t seen = g_talkSeenMs.load(std::memory_order_relaxed);
+  return seen != 0 && GetTickCount64() - seen <= 100;
+}
+
+// The engine's collision resolver. rcx is the controller and xmm1 a float; edx
+// and r8 are written before any read, so there are no other arguments, and it
+// returns nothing.
+
+// Byte-identical in both builds.
+
+using TalkUpdateProc = BYTE (STDMETHODCALLTYPE*)(uintptr_t, float);
+TalkUpdateProc originalTalkUpdate = nullptr;
+
+BYTE STDMETHODCALLTYPE tracedTalkUpdate(uintptr_t self, float dt) {
+  g_talkSeenMs.store(GetTickCount64(), std::memory_order_relaxed);
+  return originalTalkUpdate(self, dt);
+}
+
+// The prologue is byte-identical in both builds, so unlike most rows in this
+// module the window is shared rather than per-build.
+constexpr std::array<BYTE, 16> kTalkUpdateExpected = {
+  0x40, 0x53, 0x48, 0x83, 0xec, 0x30, 0x48, 0x8b,
+  0xd9, 0x0f, 0x29, 0x74, 0x24, 0x20, 0x48, 0x8b
+};
+
+bool talkAnchorEnabled() {
+  static const bool on = [] {
+    const bool wanted = featureSupport(Feature::TalkAnchorHold) !=
+                        Support::Unsupported &&
+                        featureEnabled(Feature::TalkAnchorHold);
+    log("FIXES talk_anchor=", wanted ? "on" : "off");
+    return wanted;
+  }();
+  return on;
+}
+
+// THE FIX. While a conversation is on screen, the controller update is not
+// allowed to move this character's scene node.
+//
+// The node has two writers and during a conversation they disagree every frame.
+// The actor writes the whole local transform -- the conversation anchor, where
+// the character is supposed to stand. The controller update writes the
+// translation from the controller's own position, and then re-reads its
+// position back out of the node. Whichever wrote last that frame is what gets
+// drawn, they alternate, and that is the shimmer.
+//
+// Both were found by watching writes to the node itself, after the position
+// trace, the resolver census and three earlier fixes all established what was
+// NOT doing it: the resolver displaces nobody during a conversation (measured,
+// both characters, peak 5e-07), and nothing moves the character between
+// updates. The movement is entirely inside the update, at the point where it
+// syncs with the node.
+//
+// The anchor is the one that should win: a character in a conversation stands
+// where the conversation puts them. So the update's contribution is taken away
+// by restoring what the node held before it ran.
+void restoreNodeAcrossUpdate(uintptr_t self, bool capture,
+                             std::array<float, 16>& matrix, bool& have) {
+  const uintptr_t node = nodeOf(self);
+  if (!node)
+    return;
+  const uintptr_t at = node + kNodeMatrixOffset;
+  if (capture) {
+    have = readableRange(at, kNodeMatrixSize);
+    if (have)
+      std::memcpy(matrix.data(), reinterpret_cast<const void*>(at),
+                  kNodeMatrixSize);
+    return;
+  }
+  if (have && writableRange(at, kNodeMatrixSize))
+    std::memcpy(reinterpret_cast<void*>(at), matrix.data(), kNodeMatrixSize);
+}
+
 void STDMETHODCALLTYPE tracedFieldUpdate(uintptr_t self, float dt) {
+  // First, before anything this function does. Comparing "pre" against the
+  // previous frame's "post" is what says whether the position moved while the
+  // controller was not looking: equal means the update itself moves it,
+  // different means something outside this path did.
+
+  std::array<float, 16> nodeMatrix{};
+  bool haveMatrix = false;
+  const bool holdNode = talkAnchorEnabled() && conversationOnScreen();
+  if (holdNode)
+    restoreNodeAcrossUpdate(self, true, nodeMatrix, haveMatrix);
+
   // Before the update, so the resolver this call drives reads the value meant
   // for this frame.
   applyThreshold(dt);
@@ -431,6 +611,23 @@ void STDMETHODCALLTYPE tracedFieldUpdate(uintptr_t self, float dt) {
   // After it, so the height is set for the position the character actually ends
   // the frame at. See the note above applyGroundRay.
   applyGroundRay(self);
+
+  if (holdNode && haveMatrix) {
+    restoreNodeAcrossUpdate(self, false, nodeMatrix, haveMatrix);
+    // The controller's own copy follows the node, since the update's last act
+    // was to read one from the other and leaving them apart would only move the
+    // disagreement somewhere else.
+    if (writableRange(self + kPosOffset, sizeof(float) * 3))
+      std::memcpy(reinterpret_cast<void*>(self + kPosOffset),
+                  nodeMatrix.data() + 12, sizeof(float) * 3);
+    static std::atomic<uint32_t> held{0};
+    const uint32_t n = held.fetch_add(1, std::memory_order_relaxed);
+    if (n == 0 || (verboseLogging() && n % 4096 == 0))
+      log("TALKANCHOR node held at the anchor (n=", std::dec,
+          n + 1, ")");
+  }
+
+
 }
 
 // Confirm the threshold really holds the shipped value, and make its page
@@ -461,6 +658,7 @@ bool prepareThreshold(BYTE* base, const FieldPhysicsAddrs& addrs,
 }  // namespace
 
 bool installFieldPhysics(BYTE* base, uint8_t exeBuild) {
+
   const bool wantFix = engineFixEnabled();
   const bool wantGrace = graceHoldEnabled();
   const GroundRayAddrs* rayAddrs =
@@ -544,6 +742,25 @@ bool installFieldPhysics(BYTE* base, uint8_t exeBuild) {
   } else {
     protection.commit();
   }
+  // Independent of everything above: the talk-state hook only reports whether a
+  // conversation is on screen, and the freeze is the only reader. A failure
+  // here leaves the rest of the module exactly as it was, so it declines on its
+  // own terms rather than taking the physics fixes down with it.
+  if (installed && talkAnchorEnabled()) {
+    BYTE* talk = base + addrs->talkUpdate;
+    if (!matches(talk, kTalkUpdateExpected)) {
+      log("TALKANCHOR talk-state prologue mismatch at 0x", std::hex,
+          addrs->talkUpdate, std::dec, "; the hold stays off");
+    } else if (!installMinHookDetour(talk,
+                 reinterpret_cast<void*>(&tracedTalkUpdate),
+                 reinterpret_cast<void**>(&originalTalkUpdate))) {
+      log("TALKANCHOR talk-state hook failed; the hold stays off");
+    } else {
+      log("FIXES talk_anchor=active, gated on the talk state at 0x", std::hex,
+          addrs->talkUpdate, std::dec);
+    }
+  }
+
   log("FIXES field_physics=", installed ? "active" : "failed",
       " engine_fix=", installed && g_moveThreshold ? 1 : 0,
       " grace_hold=", g_graceActive ? 1 : 0,

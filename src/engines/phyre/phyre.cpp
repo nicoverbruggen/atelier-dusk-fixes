@@ -17,6 +17,7 @@
 #include "logo_skip.h"
 #include "movie_skip.h"
 #include "shadow_tap.h"
+#include "field_collision_fix.h"
 #include "scene_target.h"
 #include "worldmap_fix.h"
 #include "../../core/game.h"
@@ -150,6 +151,11 @@ bool initializePhyreFixes() {
     // own code, so correcting it needs this module's addresses. It gates itself
     // on the multiplier, which is why there is no `want` flag here.
     atfix::installShadowTapScale(g_base, g_game->exeBuild);
+
+    // Clamps the character-separation depth at zero, so bodies that are
+    // already apart stop being pulled together. DUSK_COLLIDE_GAIN turns the
+    // same patch site into the diagnostic that demonstrates the defect.
+    atfix::installFieldCollision(g_base, g_game->exeBuild);
 
     // Not a Phyre fix at all: the pad layer is Gust framework code shared by all
     // six DX ports, so core owns the mechanism and this module only supplies the

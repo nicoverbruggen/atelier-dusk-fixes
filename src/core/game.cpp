@@ -112,6 +112,14 @@ const Descriptor& descriptor(Feature f) {
     // ShadowMultiplier = 2, the same reasoning and the same value as Arland.
     /* ShadowMultiplier */
                           { "DUSK_SHADOW_MULTIPLIER", nullptr, nullptr },
+    // No ini key on purpose: this is a defect correction that is simply on, so
+    // a line in default.ini would document a decision nobody has to make. The
+    // env override remains for a diagnostic run.
+    /* FieldCharacterPull */
+                          { "DUSK_CHARACTER_PULL", nullptr, nullptr },
+    // Also keyless, and for the same reason: a defect correction rather than a
+    // setting. DUSK_TALK_ANCHOR=0 turns it off for a diagnostic run.
+    /* TalkAnchorHold */  { "DUSK_TALK_ANCHOR", nullptr, nullptr },
   };
   return table[static_cast<int>(f)];
 }
@@ -141,9 +149,9 @@ constexpr Support X = Support::OnByDefault;
 // initializer instead makes each static_assert below fail loudly the next time
 // a Feature is added without extending every row.
 //                               Verfy Targt HiRes Cache Field Smaa  Ssaa  WMap  Logo  Movi  Typo  SysSv Promt PadRe Synth ShdMl
-constexpr Support kAyesha[]  = { O,    O,    X,    X,    X,    X,    O,    X,    O,    O,    U,    U,    U,    X,    U,    X };
-constexpr Support kEscha[]   = { U,    O,    U,    U,    U,    X,    O,    X,    O,    O,    X,    X,    U,    X,    X,    U };
-constexpr Support kShallie[] = { U,    O,    U,    U,    U,    X,    O,    U,    O,    O,    X,    X,    O,    X,    X,    U };
+constexpr Support kAyesha[]  = { O,    O,    X,    X,    X,    X,    O,    X,    O,    O,    U,    U,    U,    X,    U,    X,    X,    X };
+constexpr Support kEscha[]   = { U,    O,    U,    U,    U,    X,    O,    X,    O,    O,    X,    X,    U,    X,    X,    U,    U,    U };
+constexpr Support kShallie[] = { U,    O,    U,    U,    U,    X,    O,    U,    O,    O,    X,    X,    O,    X,    X,    U,    U,    U };
 
 constexpr std::size_t kColumns = static_cast<std::size_t>(Feature::Count);
 static_assert(std::size(kAyesha) == kColumns,  "Ayesha row is not one entry per Feature");

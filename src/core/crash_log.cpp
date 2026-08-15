@@ -293,9 +293,10 @@ void installCrashLogger() {
     }
     previousFilter = SetUnhandledExceptionFilter(&crashFilter);
     // Names the previous filter unconditionally, unlike the Arland original
-    // which hid it behind verbose logging. This project has no verbose switch,
-    // and the one line costs nothing next to knowing whether something else --
-    // Proton, a debugger, another mod -- already owned the filter.
+    // which hides it behind verbose logging. It runs once at startup, and
+    // knowing whether something else -- Proton, a debugger, another mod --
+    // already owned the filter is worth a line in every log, because a crash
+    // report that never arrives is explained by exactly that.
     log("FIXES crash_logging=active (previous filter=",
         reinterpret_cast<void*>(previousFilter), ")");
     return true;

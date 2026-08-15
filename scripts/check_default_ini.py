@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SECTIONS = ("Rendering", "Startup", "Interface", "Launcher")
+SECTIONS = ("Rendering", "Startup", "Interface", "Launcher", "Diagnostics")
 
 # Options the code reads that are deliberately kept out of default.ini. Empty
 # today: every option the code reads carries one shipped value that is correct

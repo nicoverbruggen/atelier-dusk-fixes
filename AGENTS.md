@@ -23,7 +23,7 @@ One `d3d11.dll` covers all three games. Do not split it per game or per engine: 
 
 Neither engine module may include the other's headers, and no address pack belongs in `src/core`. **Nor may `src/core` name an engine module.** Only `engine.cpp` may, and only to dispatch: it resolves the running executable and returns that engine's `SsaaPolicy` and `ScenePolicy`. Core asking one engine a question about the other is how Ayesha's pre-UI pass came to be gated on a KTGL module reporting itself idle, and how a decline meant for Ayesha was logged in KTGL's words.
 
-User-facing options go in `dusk-fix.ini` through the capability matrix's `Descriptor`; environment switches are diagnostics and must not be given an ini key. `default.ini` is the option surface: every user-facing key appears there with its default.
+User-facing options go in `dusk-fix.ini` through the capability matrix's `Descriptor`; environment switches are diagnostics and must not be given an ini key. `[Diagnostics] VerboseLogging` is the one diagnostic with a key, because it only decides how much the mod writes about itself and costs a user nothing to turn on when a bug report asks for it. A diagnostic that makes the game slower keeps its environment switch. `default.ini` is the option surface: every user-facing key appears there with its default.
 
 `default.ini` ships in the release archive, renamed to `dusk-fix.ini`, and repeats defaults that really live in `src/core/config.cpp` and `src/core/game.cpp`'s capability matrix. When you add, rename, remove or re-default an option, update `default.ini` in the same change.
 

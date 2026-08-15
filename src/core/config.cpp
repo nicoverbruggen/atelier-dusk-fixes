@@ -5,6 +5,7 @@
 #include <windows.h>
 
 #include <array>
+#include <cstdlib>
 #include <cstring>
 
 #include "config.h"
@@ -84,6 +85,18 @@ int duskConfigInt(const char* section, const char* key, int def) {
   return std::atoi(value);
 }
 
+// Read once and cached, so a call on a hot path costs a load. The environment
+// wins over the ini because it is the switch a developer sets for one run.
+bool verboseLogging() {
+  static const bool on = [] {
+    const char* env = std::getenv("DUSK_VERBOSE_LOG");
+    if (env)
+      return env[0] != '0';
+    return duskConfigBool("Diagnostics", "VerboseLogging", false);
+  }();
+  return on;
+}
+
 void logConfiguration() {
   const char* path = configPath();
   if (!path) {
@@ -154,6 +167,10 @@ void logConfiguration() {
   } else {
     log("Config:   DisplaySize = managed by the game on this engine");
   }
+
+  // Last, because it describes this log rather than the game. It also tells a
+  // reader of a quiet log whether the diagnostic lines are absent or just off.
+  log("Config:   VerboseLogging = ", verboseLogging() ? "on" : "off");
 }
 
 }  // namespace atfix

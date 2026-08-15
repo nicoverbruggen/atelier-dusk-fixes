@@ -32,8 +32,9 @@ namespace atfix {
 // short, so walking off a ledge misses it and falls normally.
 //
 // DUSK_FIELD_GROUND_RAY turns it off; DUSK_FIELD_GRACE_HOLD turns off the weaker
-// fallback covering frames where the ray finds no ground. DUSK_FIELD_RAY_STATS
-// logs why the ray did or did not correct, which is how a build gets re-checked.
+// fallback covering frames where the ray finds no ground. Verbose logging
+// ([Diagnostics] VerboseLogging) samples why the ray did or did not correct,
+// which is how a build gets re-checked.
 //
 // THE THRESHOLD RESCALE is a different defect that looks unrelated until it
 // bites: the collision resolver discards any frame in which the character moves

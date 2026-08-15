@@ -21,6 +21,7 @@
 #include <cstring>
 
 #include "field_physics.h"
+#include "../../core/config.h"        // verboseLogging
 #include "../../core/game.h"
 #include "../../core/log.h"
 #include "../../core/mem.h"
@@ -270,20 +271,13 @@ struct GroundRayCounts {
 };
 GroundRayCounts g_rayCounts = {};
 
-// A diagnostic, so an environment switch and no ini key.
-bool rayStatsEnabled() {
-  static const bool on = [] {
-    const char* value = std::getenv("DUSK_FIELD_RAY_STATS");
-    return value && value[0] != '0';
-  }();
-  return on;
-}
-
 bool applyGroundRay(uintptr_t self) {
   if (!g_groundRayActive || !controllerWritable(self))
     return false;
   ++g_rayCounts.calls;
-  if (rayStatsEnabled() && g_rayCounts.calls % 4000 == 0) {
+  // Sampled every 4000 calls rather than logged per call: at 200 Hz the ray
+  // runs once a frame, so an ungated line would be most of the log.
+  if (verboseLogging() && g_rayCounts.calls % 4000 == 0) {
     log("GROUNDRAY calls=", std::dec, g_rayCounts.calls,
         " applied=", g_rayCounts.applied,
         " notGround=", g_rayCounts.notGround,

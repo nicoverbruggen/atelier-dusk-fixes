@@ -9,8 +9,13 @@
 // notes, the same bottom button row, the same save-failure reporting. Someone
 // who has used one should not have to learn the other. Where Arland has a
 // control for a feature this mod does not have -- shadow detail, the UI font,
-// attack cut-ins, the developer views, verbose logging -- the row is simply
-// absent rather than present and inert.
+// attack cut-ins, the developer views -- the row is simply absent rather than
+// present and inert.
+//
+// Arland's verbose-logging checkbox also decides whether its Debug tab is on
+// the strip. There is no Debug tab here, because the controls Arland puts on
+// one (the developer views, the field-movement switches) are among the rows
+// this mod does not have, so the checkbox stands alone on About.
 //
 // Two differences are deliberate and are argued where they occur: how "Auto"
 // resolution is resolved (see loadFromIni), and what Reset returns the
@@ -75,6 +80,7 @@ enum : int {
   IDC_OPENLAUNCHER,   // Koei Tecmo's own launcher
   IDC_OPENENV,        // Koei Tecmo's own settings editor
   IDC_PLAYVANILLA,    // the game with the mod turned off
+  IDC_VERBOSE,        // [Diagnostics] VerboseLogging
   IDC_RESET,
   IDC_CLOSE,
   IDC_REPOLINK,
@@ -287,6 +293,7 @@ HWND g_hSharpen = nullptr;
 HWND g_hOutline = nullptr;
 HWND g_hSkipLogos = nullptr, g_hSkipMovie = nullptr;
 HWND g_hSkipLauncher = nullptr;
+HWND g_hVerbose = nullptr;
 HWND g_hStart = nullptr;
 HWND g_hRepoLink = nullptr;
 
@@ -958,13 +965,15 @@ struct UiState {
   bool skipLogos;
   bool skipMovie;
   bool skipLauncher;
+  bool verbose;
 
   bool operator == (const UiState& o) const {
     return resolution == o.resolution && windowMode == o.windowMode &&
            language == o.language && ssaa == o.ssaa && smaa == o.smaa &&
            sharpen == o.sharpen &&
            outline == o.outline && skipLogos == o.skipLogos &&
-           skipMovie == o.skipMovie && skipLauncher == o.skipLauncher;
+           skipMovie == o.skipMovie && skipLauncher == o.skipLauncher &&
+           verbose == o.verbose;
   }
 };
 
@@ -981,6 +990,7 @@ UiState currentState() {
   state.skipLogos = isChecked(g_hSkipLogos);
   state.skipMovie = isChecked(g_hSkipMovie);
   state.skipLauncher = isChecked(g_hSkipLauncher);
+  state.verbose = isChecked(g_hVerbose);
   return state;
 }
 
@@ -1132,6 +1142,11 @@ void loadFromIni() {
   setChecked(g_hSkipLauncher,
     iniBool(g_iniPath, "Launcher", "SkipLauncher", false));
 
+  // [Diagnostics]: not gated on a capability, because the DLL reads it whatever
+  // the game is.
+  setChecked(g_hVerbose,
+    iniBool(g_iniPath, "Diagnostics", "VerboseLogging", false));
+
   // Last, once every quality control holds its loaded value.
   updateRenderResolution();
   markSaved();
@@ -1208,6 +1223,9 @@ SaveOutcome saveToIni() {
   iniWriteBool(g_iniPath, "Launcher", "SkipLauncher",
     isChecked(g_hSkipLauncher));
 
+  iniWriteBool(g_iniPath, "Diagnostics", "VerboseLogging",
+    isChecked(g_hVerbose));
+
   // Flush the cache so each file is on disk before we report success.
   iniWrite(nullptr, nullptr, nullptr, g_iniPath);
   iniWrite(nullptr, nullptr, nullptr, g_settingsPath);
@@ -1268,6 +1286,7 @@ void resetToDefaults() {
   setChecked(g_hSkipLogos, false);
   setChecked(g_hSkipMovie, false);
   setChecked(g_hSkipLauncher, false);
+  setChecked(g_hVerbose, false);
   updateRenderResolution();
 }
 
@@ -2084,6 +2103,13 @@ void createControls(HWND w) {
     page.fullNote(
       L"Koei Tecmo's own settings editor and launcher, unmodified. The third "
       L"saves and starts the game with the mod turned off, changing nothing.");
+
+    // Verbose logging sits here rather than among the settings: it changes what
+    // the mod writes about itself, not what the game does.
+    page.heading(L"Diagnostics");
+    g_hVerbose = mkCheck(w, L"Verbose logging", 0, 0, 10, IDC_VERBOSE);
+    page.checkRow(g_hVerbose,
+      L"Extra detail in dusk-fix.log. Crash reports are always written.");
   }
 
   // Grow the window if the tallest page outran the space set aside for it.

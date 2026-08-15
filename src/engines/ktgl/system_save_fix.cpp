@@ -177,7 +177,14 @@ bool readSystemDataKind(uintptr_t self, bool& systemData) {
 //
 // Answers true whenever it cannot tell, so the protective behaviour is what an
 // unreadable path or an odd object falls back to.
-bool loadTargetHasContent(uintptr_t self) {
+// `shown` receives a UTF-8 rendering of the path this examined, for the log.
+// It is what makes the decision checkable from an ordinary session: a real save
+// path proves the field was read correctly, and anything else says the offset or
+// the moment is wrong. Without it, "allowed" and "could not read the path" look
+// identical in the log and in the outcome.
+bool loadTargetHasContent(uintptr_t self, char* shown, size_t shownBytes) {
+  if (shownBytes)
+    shown[0] = '\0';
   constexpr size_t kMaxChars = MAX_PATH;
   if (!readableRange(self + kLoadPath, sizeof(wchar_t) * kMaxChars))
     return true;
@@ -187,6 +194,13 @@ bool loadTargetHasContent(uintptr_t self) {
   path[kMaxChars] = L'\0';
   if (!path[0])
     return true;
+
+  // UTF-8, because a Steam library path can hold characters the ANSI code page
+  // cannot represent, and a mangled path in the log is a misleading answer
+  // rather than a missing one.
+  if (shownBytes)
+    WideCharToMultiByte(CP_UTF8, 0, path, -1, shown, int(shownBytes), nullptr,
+                        nullptr);
 
   WIN32_FILE_ATTRIBUTE_DATA info = {};
   if (!GetFileAttributesExW(path, GetFileExInfoStandard, &info))
@@ -236,19 +250,23 @@ void STDMETHODCALLTYPE tracedLoadStep(uintptr_t self) {
   std::memcpy(reinterpret_cast<void*>(self + kError), &error, sizeof(error));
   std::memcpy(reinterpret_cast<void*>(self + kCompleted), &clear, sizeof(clear));
 
-  const bool worthProtecting = systemData && loadTargetHasContent(self);
+  char shownPath[512] = {};
+  const bool worthProtecting =
+    systemData && loadTargetHasContent(self, shownPath, sizeof(shownPath));
+  const char* pathForLog = shownPath[0] ? shownPath : "<unreadable>";
   if (worthProtecting)
     g_systemDataUntrusted.store(true, std::memory_order_relaxed);
   const uint32_t n = g_loadsRepaired.fetch_add(1, std::memory_order_relaxed) + 1;
   if (systemData && worthProtecting) {
     log("SYSSAVE system-data load reported success having read 0 bytes --"
         " forced to the engine's read-failure state, and system-data saves"
-        " are now refused (n=", std::dec, n, ")");
+        " are now refused (n=", std::dec, n, ") path=", pathForLog);
   } else if (systemData) {
     log("SYSSAVE system-data load read 0 bytes and the file is empty or"
         " absent -- forced to the engine's read-failure state, but saves are"
         " ALLOWED: there is nothing here to protect, and refusing would leave"
-        " the file unwritable for good (n=", std::dec, n, ")");
+        " the file unwritable for good (n=", std::dec, n, ") path=",
+        pathForLog);
   } else {
     log("SYSSAVE GAMEDATA load reported success having read 0 bytes -- forced"
         " to the engine's read-failure state; live game data was not replaced"

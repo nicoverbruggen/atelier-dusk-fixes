@@ -127,7 +127,7 @@ ID3D11DepthStencilView* twinDsvFor(ID3D11DepthStencilView* hostDsv) {
 
 unsigned int shadowMapResolution() {
   static const unsigned int resolution = [] () -> unsigned int {
-    // 2 when the key is missing, matching the shipped default.ini and the
+    // 2 when the key is missing, matching what the launcher writes and the
     // Arland project. A player who deletes the key gets the feature, not the
     // vanilla path.
     const int multiplier = duskConfigInt("Rendering", "ShadowMultiplier", 2);

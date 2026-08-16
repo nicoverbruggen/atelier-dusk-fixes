@@ -108,13 +108,13 @@ const Descriptor& descriptor(Feature f) {
     // Its matrix cell is DOCUMENTATION ONLY, as the Arland project's is:
     // nothing resolves behaviour through featureEnabled for this row, so the
     // cell says which games have the feature and the ini says whether it runs.
-    // Ayesha's cell reads OnByDefault because the shipped default.ini carries
-    // ShadowMultiplier = 2, the same reasoning and the same value as Arland.
+    // Ayesha's cell reads OnByDefault because shadowMapResolution() reads a
+    // missing key as 2, the same reasoning and the same value as Arland.
     /* ShadowMultiplier */
                           { "DUSK_SHADOW_MULTIPLIER", nullptr, nullptr },
     // No ini key on purpose: this is a defect correction that is simply on, so
-    // a line in default.ini would document a decision nobody has to make. The
-    // env override remains for a diagnostic run.
+    // a key would document a decision nobody has to make. The env override
+    // remains for a diagnostic run.
     /* FieldCharacterPull */
                           { "DUSK_CHARACTER_PULL", nullptr, nullptr },
     // Also keyless, and for the same reason: a defect correction rather than a

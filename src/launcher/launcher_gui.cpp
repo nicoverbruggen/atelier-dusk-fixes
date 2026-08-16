@@ -1254,7 +1254,7 @@ void loadFromIni() {
   setChecked(g_hSkipLauncher,
     iniBool(g_iniPath, "Launcher", "SkipLauncher", fallback.skipLauncher));
 
-  // Blank means the DLL's own default of 2, which is the shipped setting.
+  // Blank means the DLL's own default of 2, from shadowMapResolution().
   // Selected by value so a hand-edited 3 lands on Normal rather than on
   // whatever index 3 happens to be, and writing that back is what the DLL would
   // have done with it anyway.

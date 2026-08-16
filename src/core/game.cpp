@@ -154,7 +154,7 @@ constexpr Support X = Support::OnByDefault;
 // initializer instead makes each static_assert below fail loudly the next time
 // a Feature is added without extending every row.
 //                               Verfy Targt HiRes Cache Field Smaa  Ssaa  WMap  Logo  Movi  Typo  SysSv Promt PadRe Synth ShdMl Pull  Talk  Lbox
-constexpr Support kAyesha[]  = { O,    O,    X,    X,    X,    X,    O,    X,    O,    O,    U,    U,    U,    X,    U,    X,    X,    X,    U };
+constexpr Support kAyesha[]  = { O,    O,    X,    X,    X,    X,    O,    X,    O,    O,    U,    U,    U,    X,    X,    X,    X,    X,    U };
 constexpr Support kEscha[]   = { U,    O,    U,    U,    U,    X,    O,    X,    O,    O,    X,    X,    U,    X,    X,    U,    U,    U,    X };
 constexpr Support kShallie[] = { U,    O,    U,    U,    U,    X,    O,    U,    O,    O,    X,    X,    O,    X,    X,    U,    U,    U,    X };
 

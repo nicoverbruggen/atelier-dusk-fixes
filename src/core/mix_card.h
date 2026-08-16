@@ -46,14 +46,24 @@
 // SCOPE. The idiom occurs exactly ONCE per executable -- verified against the
 // constant pair across all six games; the other hits read the same address as a
 // packed `mulps`/`divps` vector lane (NTSC-rate math) rather than a scalar
-// accumulator. The function itself is present in all ten builds of all six
+// accumulator. The function itself is present in all twelve builds of all six
 // games with a byte-identical prologue and identical 0x83 size, so one expected
-// window covers everything and this is an Arland work item too.
+// window covers everything.
+//
+// `Card` is Gust framework code rather than either engine's, which is why the
+// correction lives in core and why all three Dusk games install it:
+// `engines/ktgl/ktgl.cpp` supplies the four KTGL rows and
+// `engines/phyre/phyre.cpp` Ayesha's two. The Arland mod carries the same
+// correction over the other six builds.
 //
 // The container is deliberately pumped TWICE per frame while the synthesis
 // state is running -- once from the game mode and once from the state itself,
 // in both KTGL games. That is shipped behaviour at 60 Hz; this fix preserves it,
-// because it only ever decides whether the engine's own tick is due.
+// because it only ever decides whether the engine's own tick is due. Ayesha was
+// never counted the same way, and the fix does not depend on the count for that
+// same reason. It has the same shape around the pump: `Card::Update` is in no
+// vtable and has one static caller, `MixDemoCard::Update`, which calls it first
+// and then publishes to the UI node.
 namespace atfix {
 
 // One executable's row. Supplied by the engine module, because address packs do

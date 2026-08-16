@@ -21,6 +21,7 @@
 #include "scene_target.h"
 #include "worldmap_fix.h"
 #include "../../core/game.h"
+#include "../../core/mix_card.h"
 #include "../../core/pad_notify_trace.h"
 #include "../../core/pad_rescan.h"
 #include "../../core/log.h"
@@ -44,6 +45,13 @@ using atfix::log;
 // hooked unlock is a jmp stub whose 16-byte window contains a rel32
 // displacement; the render and lock windows are build-independent and live
 // beside their hooks in atlas_fix.cpp.
+//
+// mixCardUpdateRva was derived by searching each build for the pump's own idiom,
+// `cvttss2si ebx, xmm1` followed by the five-byte alignment NOP that stands where
+// its pre-test belongs: `find-bytes <exe> f30f2cd90f1f440000` returns exactly one
+// occurrence in each, inside a 0x83-byte function whose accumulator is
+// `[rcx+0x820]` and whose two constants are the 1/59.94 and 59.94 bit patterns.
+// See core/mix_card.h for what the function does and what the correction is.
 constexpr PhyreGame kGames[] = {
   { "Atelier_Ayesha_EN.exe", 0x984df4,
     0x74bd90, 0x581420, 0x581460,
@@ -52,6 +60,7 @@ constexpr PhyreGame kGames[] = {
     0x584fb0,
     { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b,
       0xd9, 0x48, 0x8b, 0x0d, 0x80, 0x51, 0x4e, 0x01 },
+    0x3a8b50,
     BuildEnglish },
   { "Atelier_Ayesha.exe", 0x9a9604,
     0x76e290, 0x5a3920, 0x5a3960,
@@ -60,6 +69,7 @@ constexpr PhyreGame kGames[] = {
     0x5a74b0,
     { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b,
       0xd9, 0x48, 0x8b, 0x0d, 0xf8, 0xa8, 0x65, 0x01 },
+    0x3bd820,
     BuildMultilingual },
 };
 
@@ -111,9 +121,11 @@ bool initializePhyreFixes() {
       atfix::featureEnabled(atfix::Feature::SkipStartupLogos);
     const bool wantMovieSkip =
       atfix::featureEnabled(atfix::Feature::SkipIntroMovie);
+    const bool wantSynthRate =
+      atfix::featureEnabled(atfix::Feature::SynthesisAnimationRate);
     const bool wantAddressFix =
       wantCache || wantVerify || wantField || wantWorldMap || wantLogoSkip ||
-      wantMovieSkip;
+      wantMovieSkip || wantSynthRate;
     if (wantAddressFix) {
       // ALREADY_INITIALIZED is a success here. DllMain initializes MinHook for
       // the window-background fix, which has to be in place before the game
@@ -163,6 +175,16 @@ bool initializePhyreFixes() {
     // flag here.
     atfix::installPadRescanBackoff(g_base,
       { g_game->padCreateWrapperRva, g_game->padCreateExpected });
+
+    // Also not a Phyre fix: `Card` is Gust framework code rather than either
+    // engine's, so the same bottom-tested pump ships in all six games and core
+    // owns the correction. Its prologue is byte-identical in all twelve builds,
+    // so unlike the pad wrapper above this window is shared rather than per-row.
+    // See core/mix_card.h. It gates itself on its own feature.
+    atfix::installMixCardFix(g_base,
+      { g_game->mixCardUpdateRva,
+        { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74,
+          0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x30, 0xf3 } });
 
     // Observes the rescan's other half and installs nothing: it asks whether a
     // controller arriving under Proton is announced to this process, which is

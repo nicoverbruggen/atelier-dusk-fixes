@@ -21,9 +21,11 @@
 
 namespace atfix {
 
-// Per-executable descriptor for the Phyre text path: the executable identity
-// plus the RVAs of the three hooked entry points. Every row was derived
-// separately; do not change an RVA here without re-deriving it.
+// Per-executable descriptor for the two Ayesha builds: the executable identity
+// plus every RVA a fix installed from this module needs. The first three are the
+// text path; the rest belong to fixes core owns and this module supplies the row
+// for. Every row was derived separately; do not change an RVA here without
+// re-deriving it.
 //
 // atlasUnlockRva names the two-instruction *stub* at lock+0x40, not the
 // implementation behind it. Both are mapped; the stub is hooked so the hook
@@ -43,6 +45,7 @@ struct PhyreGame {
   // rip-relative operand, so the window is per-row like unlockExpected.
   uintptr_t padCreateWrapperRva;
   std::array<BYTE, 16> padCreateExpected;
+  uintptr_t mixCardUpdateRva;     // Card::Update, the synthesis pump (core/mix_card.h)
   uint8_t exeBuild;
 };
 

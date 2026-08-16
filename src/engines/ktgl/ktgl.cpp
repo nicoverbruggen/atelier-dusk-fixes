@@ -171,8 +171,8 @@ bool initializeKtglFixes() {
     // because it starts a thread, which the loader lock forbids.
     atfix::startPadNotifyTrace();
 
-    // The synthesis pump's prologue is byte-identical in all ten builds of all
-    // six games, so unlike the pad wrapper this window is shared rather than
+    // The synthesis pump's prologue is byte-identical in all twelve builds of
+    // all six games, so unlike the pad wrapper this window is shared rather than
     // per-row. See core/mix_card.h.
     atfix::installMixCardFix(id.base,
       { game->mixCardUpdateRva,

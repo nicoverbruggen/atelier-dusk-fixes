@@ -79,6 +79,17 @@ struct KtglGame {
   // -- the -1 is what crashed the first attempt. Escha keeps it at 0xc0 and
   // Shallie at 0x40.
   uint32_t ipuHideOffset;
+  // The slope hold (field_slope_fix.h). Two hooked functions plus the address
+  // it reads and the address it compares against. The character update's
+  // prologue is shared by a game's two builds but differs between Escha and
+  // Shallie, and the collision step's window carries a per-build rip
+  // displacement from its twelfth byte, so both windows are per-row.
+  uintptr_t charaUpdateRva;
+  std::array<BYTE, 16> charaUpdateExpected;
+  uintptr_t moveCollideRva;
+  std::array<BYTE, 16> moveCollideExpected;
+  uintptr_t applyDeltaRva;
+  uintptr_t brainUserVtableRva;
 
   uint8_t exeBuild;
 };

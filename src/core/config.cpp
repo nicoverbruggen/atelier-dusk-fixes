@@ -152,6 +152,7 @@ void logConfiguration() {
     { Feature::SystemSaveGuard,  "SystemSaveGuard" },
     { Feature::PadRescanBackoff, "PadRescanBackoff" },
     { Feature::SynthesisAnimationRate, "SynthesisAnimationRate" },
+    { Feature::FieldSlopeHold,   "FieldSlopeHold" },
   };
   for (const auto& row : kSwitches) {
     if (featureSupport(row.feature) == Support::Unsupported)

@@ -32,7 +32,8 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SECTIONS = ("Rendering", "Startup", "Interface", "Launcher", "Diagnostics")
+SECTIONS = ("Rendering", "Startup", "Interface", "Launcher", "Diagnostics",
+            "Debug")
 
 # The launcher's argument for each game, in capability-matrix row order.
 GAMES = ("ayesha", "escha", "shallie")
@@ -50,6 +51,10 @@ GAMES = ("ayesha", "escha", "shallie")
 #                      so this is a decision that the option is not for players,
 #                      not a note that its control has not been written yet.
 NOT_WRITTEN_AT_DEFAULT: dict[tuple[str, str], str] = {
+    ("Debug", "SlopeHold"):
+        "exposed on the Debug page as a disable, and written only when it is"
+        " ticked. The fix is on as shipped, so the default state writes no key."
+        " The page itself is only on the tab strip when verbose logging is on",
     ("Rendering", "DisplayWidth"):
         "exposed as the resolution control, and written only when that is not"
         " Auto. Auto is the default",

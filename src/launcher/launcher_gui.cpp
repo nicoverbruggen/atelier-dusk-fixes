@@ -83,6 +83,7 @@ enum : int {
   IDC_PLAYVANILLA,    // the game with the mod turned off
   IDC_SHADOW,         // [Rendering] ShadowMultiplier
   IDC_VERBOSE,        // [Diagnostics] VerboseLogging
+  IDC_SLOPEHOLD,      // [Debug] SlopeHold, Escha only
   IDC_RESET,
   IDC_CLOSE,
   IDC_REPOLINK,
@@ -93,7 +94,11 @@ enum : int {
 const wchar_t* const kRepositoryUrl =
   L"https://github.com/nicoverbruggen/atelier-dusk-fixes";
 
-const int kPageCount = 3;   // General, Graphics, About
+// Four pages, but Debug is only inserted into the tab strip when verbose
+// logging is on -- its controls are always created, just unreachable. This
+// is Arland's arrangement, and Dusk gained the tab when it gained its first
+// field-movement switch.
+const int kPageCount = 4;   // General, Graphics, Debug, About
 
 // ---- the games -------------------------------------------------------------
 
@@ -149,6 +154,7 @@ struct Capabilities {
   bool shadowMultiplier;// [Rendering] ShadowMultiplier, Ayesha only
   bool skipLogos;       // [Startup] SkipLogos
   bool skipMovie;       // [Startup] SkipIntroMovie
+  bool slopeHold;       // [Debug] SlopeHold, Escha only
 };
 
 // `ssaaScalesGameIni` is where the two engines' supersampling differs, and the
@@ -178,10 +184,10 @@ struct Capabilities {
 // OnByDefault for all three games, and remains explicit because a future matrix
 // change must also change what a fresh launcher writes.
 const Capabilities kCapabilities[kGameCount] = {
-  //             Ssaa   ScalesIni  Smaa  SmaaOn  Shadow  Logos  Movie
-  /* Ayesha  */ { true,  false,     true, true,   true,   true,  true },
-  /* Escha   */ { true,  true,      true, true,   false,  true,  true },
-  /* Shallie */ { true,  true,      true, true,   false,  true,  true },
+  //             Ssaa   ScalesIni  Smaa  SmaaOn  Shadow  Logos  Movie  Slope
+  /* Ayesha  */ { true,  false,     true, true,   true,   true,  true,  false },
+  /* Escha   */ { true,  true,      true, true,   false,  true,  true,  true  },
+  /* Shallie */ { true,  true,      true, true,   false,  true,  true,  false },
 };
 
 char g_iniPath[MAX_PATH] = {};       // dusk-fix.ini, in the game folder
@@ -193,7 +199,8 @@ int g_game = -1;                     // index into kGames, -1 when none found
 
 Capabilities capabilities() {
   if (g_game < 0 || g_game >= kGameCount)
-    return Capabilities{ false, false, false, false, false, false };
+    return Capabilities{ false, false, false, false, false, false, false,
+                         false };
   return kCapabilities[g_game];
 }
 
@@ -303,8 +310,22 @@ HWND g_hSkipLogos = nullptr, g_hSkipMovie = nullptr;
 HWND g_hSkipLauncher = nullptr;
 HWND g_hShadow = nullptr;
 HWND g_hVerbose = nullptr;
+HWND g_hSlopeHold = nullptr;
 HWND g_hStart = nullptr;
 HWND g_hRepoLink = nullptr;
+
+// Adds or removes the Debug entry on the tab strip. Defined with the rest of
+// the tab handling; declared here because resetToDefaults and WM_COMMAND both
+// need it earlier.
+void syncDebugTab(bool show);
+
+// Which page a tab-strip position shows. Debug sits at position 2, ahead of
+// About; when it is hidden, About takes that slot while keeping its own page.
+int pageForTab(int tabIndex) {
+  const bool debugShown =
+    g_hTabs && SendMessageW(g_hTabs, TCM_GETITEMCOUNT, 0, 0) == kPageCount;
+  return (debugShown || tabIndex < 2) ? tabIndex : tabIndex + 1;
+}
 
 HWND g_pageCtrls[kPageCount][40] = {};
 int  g_pageCount[kPageCount] = {};
@@ -1068,6 +1089,7 @@ struct Defaults {
   bool        skipMovie;    // [Startup] SkipIntroMovie
   bool        skipLauncher; // [Launcher] SkipLauncher
   bool        verbose;      // [Diagnostics] VerboseLogging
+  bool        slopeHold;    // [Debug] SlopeHold
   const char* fullScreen;   // [Window] FullScreen, in the game's own file
   bool        outline;      // [Graphics] Outline, likewise
 };
@@ -1084,6 +1106,9 @@ Defaults defaults() {
   d.skipMovie = false;
   d.skipLauncher = false;
   d.verbose = false;
+  // On where the game has it, which is the matrix cell in src/core/game.cpp.
+  // The checkbox is a disable, so Reset clears it rather than setting it.
+  d.slopeHold = capabilities().slopeHold;
   // Fullscreen is what the game itself defaults to, and every resolution this
   // window offers was reported by the display, so a fresh install always lands
   // in a mode it can show.
@@ -1270,6 +1295,13 @@ void loadFromIni() {
   setChecked(g_hVerbose,
     iniBool(g_iniPath, "Diagnostics", "VerboseLogging", fallback.verbose));
 
+  // [Debug] SlopeHold, and the control is its inverse: the row asks whether to
+  // DISABLE the fix, so a missing key -- the shipped state -- leaves it clear.
+  if (capabilities().slopeHold) {
+    setChecked(g_hSlopeHold,
+      !iniBool(g_iniPath, "Debug", "SlopeHold", fallback.slopeHold));
+  }
+
   // Last, once every quality control holds its loaded value.
   updateRenderResolution();
   markSaved();
@@ -1361,6 +1393,13 @@ SaveOutcome saveToIni() {
   iniWriteBool(g_iniPath, "Diagnostics", "VerboseLogging",
     isChecked(g_hVerbose));
 
+  // Written only when the box is ticked. Leaving the key out at the default
+  // keeps a correction off the file a player reads, which is what every other
+  // defect fix in this mod does; ticking it is the one case worth recording.
+  if (capabilities().slopeHold)
+    iniWrite("Debug", "SlopeHold", isChecked(g_hSlopeHold) ? "0" : nullptr,
+             g_iniPath);
+
   // Flush the cache so each file is on disk before we report success.
   iniWrite(nullptr, nullptr, nullptr, g_iniPath);
   iniWrite(nullptr, nullptr, nullptr, g_settingsPath);
@@ -1425,6 +1464,8 @@ void resetToDefaults() {
   if (g_hShadow)
     comboSelectByValue(g_hShadow, kShadowItems, kShadowCount, d.shadow, 0);
   setChecked(g_hVerbose, d.verbose);
+  setChecked(g_hSlopeHold, false);
+  syncDebugTab(false);
   updateRenderResolution();
 }
 
@@ -1847,6 +1888,35 @@ void showPage(int page) {
     repaintUnder(g_hTabs);
 }
 
+void syncDebugTab(bool show) {
+  if (!g_hTabs)
+    return;
+  const int count = (int)SendMessageW(g_hTabs, TCM_GETITEMCOUNT, 0, 0);
+  bool changed = false;
+  if (show && count == kPageCount - 1) {
+    TCITEMW tab = {};
+    tab.mask = TCIF_TEXT;
+    tab.pszText = (LPWSTR)L"Debug";
+    SendMessageW(g_hTabs, TCM_INSERTITEMW, 2, (LPARAM)&tab);
+    changed = true;
+  } else if (!show && count == kPageCount) {
+    // Leaving the selection on a page that is about to vanish would show an
+    // empty sheet, so step back to General first.
+    if ((int)SendMessageW(g_hTabs, TCM_GETCURSEL, 0, 0) == 2) {
+      SendMessageW(g_hTabs, TCM_SETCURSEL, 0, 0);
+      showPage(0);
+    }
+    SendMessageW(g_hTabs, TCM_DELETEITEM, 2, 0);
+    changed = true;
+  }
+  // Adding or removing an entry makes the tab control repaint its whole client
+  // area, page included -- and the page contents are siblings sitting on top of
+  // it rather than its children, so nothing invalidates them and they are
+  // simply erased. The page has to be put back explicitly.
+  if (changed)
+    showPage(pageForTab((int)SendMessageW(g_hTabs, TCM_GETCURSEL, 0, 0)));
+}
+
 // ---- layout ----------------------------------------------------------------
 //
 // Controls are stacked by a cursor instead of being placed at hand-picked
@@ -2054,8 +2124,11 @@ void createControls(HWND w) {
   SetWindowSubclass(g_hTabs, TabProc, 0, 0);
   TCITEMW tab = {};
   tab.mask = TCIF_TEXT;
-  const wchar_t* pageNames[kPageCount] = { L"General", L"Graphics", L"About" };
-  for (int i = 0; i < kPageCount; ++i) {
+  // Debug is deliberately absent here. It is inserted at position 2 by
+  // syncDebugTab once the loaded settings say verbose logging is on, so a player
+  // who has never turned that on never sees it.
+  const wchar_t* pageNames[3] = { L"General", L"Graphics", L"About" };
+  for (int i = 0; i < 3; ++i) {
     tab.pszText = (LPWSTR)pageNames[i];
     SendMessageW(g_hTabs, TCM_INSERTITEMW, i, (LPARAM)&tab);
   }
@@ -2201,10 +2274,29 @@ void createControls(HWND w) {
 
   }
 
-  // ---------------- page 2: About ----------------
-  // What is installed, where it came from, and what it is not.
+  // ---------------- page 2: Debug ----------------
+  // Reachable only with verbose logging on (see syncDebugTab). Its controls are
+  // built whatever the strip shows, so nothing here depends on the tab existing.
   {
     Layout page(w, 2);
+    if (capabilities().slopeHold) {
+      page.heading(L"Field movement");
+      g_hSlopeHold = mkCheck(w, L"Disable the slope drift fix", 0, 0, 10,
+                             IDC_SLOPEHOLD);
+      page.checkRow(g_hSlopeHold,
+        L"The game slides a standing character down slopes, on PC and on "
+        L"console alike, and faster the higher the frame rate. The fix removes "
+        L"that drift and nothing else. Tick this to compare against the game "
+        L"as it shipped.");
+    } else {
+      page.label(L"Nothing to configure for this game.");
+    }
+  }
+
+  // ---------------- page 3: About ----------------
+  // What is installed, where it came from, and what it is not.
+  {
+    Layout page(w, 3);
     wchar_t installed[160];
     wsprintfW(installed, L"Mod version: %s", modVersion());
     page.label(installed);
@@ -2368,6 +2460,8 @@ LRESULT CALLBACK WndProc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CREATE:
       createControls(w);
       loadFromIni();
+      // After the load, so the strip matches the setting the file carried in.
+      syncDebugTab(isChecked(g_hVerbose));
       applyGameIcon(w);
       return 0;
 
@@ -2381,7 +2475,8 @@ LRESULT CALLBACK WndProc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
       }
       if (header && header->hwndFrom == g_hTabs &&
           header->code == TCN_SELCHANGE) {
-        showPage((int)SendMessageW(g_hTabs, TCM_GETCURSEL, 0, 0));
+        showPage(pageForTab(
+          (int)SendMessageW(g_hTabs, TCM_GETCURSEL, 0, 0)));
         return 0;
       }
       break;
@@ -2417,6 +2512,12 @@ LRESULT CALLBACK WndProc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
     }
 
     case WM_COMMAND:
+      // Verbose logging is what puts the Debug tab on the strip, the same way
+      // the Arland window does it.
+      if (HIWORD(wp) == BN_CLICKED && LOWORD(wp) == IDC_VERBOSE) {
+        syncDebugTab(isChecked(g_hVerbose));
+        return 0;
+      }
       // The supersampling list is computed from the selected resolution, so it
       // has to follow every change to it -- and the note under the list has to
       // follow every change to the list, which is why the multiplier is here

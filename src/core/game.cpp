@@ -125,6 +125,14 @@ const Descriptor& descriptor(Feature f) {
     // DUSK_LETTERBOX=0 turns it off, which is the run that tells a doubled
     // letterbox apart from an absent one.
     /* Letterbox */       { "DUSK_LETTERBOX", nullptr, nullptr },
+    // Keyed, and on the Debug page rather than among the settings, which is
+    // the one place this table's rule about corrections bends. It is a defect
+    // correction and so not a preference -- but it changes how a character
+    // stands on terrain, which is the kind of thing a player might want to see
+    // without for a moment, and the Arland window already carries its field
+    // switches the same way. The key is absent at the default and written only
+    // when someone turns the fix off.
+    /* FieldSlopeHold */  { "DUSK_SLOPE_HOLD", "Debug", "SlopeHold" },
   };
   return table[static_cast<int>(f)];
 }
@@ -153,10 +161,10 @@ constexpr Support X = Support::OnByDefault;
 // deliberate "this game does not get it". Taking the extent from the
 // initializer instead makes each static_assert below fail loudly the next time
 // a Feature is added without extending every row.
-//                               Verfy Targt HiRes Cache Field Smaa  Ssaa  WMap  Logo  Movi  Typo  SysSv Promt PadRe Synth ShdMl Pull  Talk  Lbox
-constexpr Support kAyesha[]  = { O,    O,    X,    X,    X,    X,    O,    X,    O,    O,    U,    U,    U,    X,    X,    X,    X,    X,    U };
-constexpr Support kEscha[]   = { U,    O,    U,    U,    U,    X,    O,    X,    O,    O,    X,    X,    U,    X,    X,    U,    U,    U,    X };
-constexpr Support kShallie[] = { U,    O,    U,    U,    U,    X,    O,    U,    O,    O,    X,    X,    O,    X,    X,    U,    U,    U,    X };
+//                               Verfy Targt HiRes Cache Field Smaa  Ssaa  WMap  Logo  Movi  Typo  SysSv Promt PadRe Synth ShdMl Pull  Talk  Lbox  Slope
+constexpr Support kAyesha[]  = { O,    O,    X,    X,    X,    X,    O,    X,    O,    O,    U,    U,    U,    X,    X,    X,    X,    X,    U,    U };
+constexpr Support kEscha[]   = { U,    O,    U,    U,    U,    X,    O,    X,    O,    O,    X,    X,    U,    X,    X,    U,    U,    U,    X,    X };
+constexpr Support kShallie[] = { U,    O,    U,    U,    U,    X,    O,    U,    O,    O,    X,    X,    O,    X,    X,    U,    U,    U,    X,    U };
 
 constexpr std::size_t kColumns = static_cast<std::size_t>(Feature::Count);
 static_assert(std::size(kAyesha) == kColumns,  "Ayesha row is not one entry per Feature");

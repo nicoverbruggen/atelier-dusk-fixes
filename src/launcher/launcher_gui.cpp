@@ -143,8 +143,8 @@ struct Capabilities {
   // false here would show shipped-on SMAA as off and then write that off into
   // dusk-fix.ini, turning the feature off on a fresh install. The column now
   // reads true for every game, which is not a reason to drop it: it is a copy
-  // of a matrix cell, and check_default_ini.py compares the two game by game so
-  // a future divergence is caught rather than silently written into the file.
+  // of a matrix cell, and check_option_surface.py compares the two game by game
+  // so a future divergence is caught rather than silently written to the file.
   bool smaaOnByDefault;
   bool shadowMultiplier;// [Rendering] ShadowMultiplier, Ayesha only
   bool skipLogos;       // [Startup] SkipLogos
@@ -1037,6 +1037,61 @@ UiState g_savedState;
 void markSaved() { g_savedState = currentState(); }
 bool hasUnsavedChanges() { return !(currentState() == g_savedState); }
 
+// Every default this window has, for the game it is running beside.
+//
+// Two callers read it: loadFromIni, when a key is missing from the file, and
+// resetToDefaults, when the user asks for a known state. They carried separate
+// literals in separate idioms until the two disagreed. Reset sent
+// ShadowMultiplier to 1 while a missing key meant 2 to both loadFromIni and
+// src/core/shadow_res.cpp, so pressing Reset turned the shadow fix off and
+// nothing said so. One struct read twice cannot drift that way.
+//
+// Capability-driven values stay capability-driven: `smaa` is the running game's
+// own matrix cell rather than a flat true, so this does not become a second
+// copy of the matrix.
+//
+// TWO THINGS ARE DELIBERATELY ABSENT.
+//
+// [Launcher] AutoResolution, because loadFromIni's fallback for it is not a
+// default at all: it is "Auto unless the game's own file already holds a size",
+// and flattening it to true would let opening this window replace a resolution
+// the user had chosen. Reset does go to Auto, which is why only Reset names it.
+//
+// [Lang] Language, because it is not tuning that can be wrong. Reset leaves it
+// alone; see resetToDefaults.
+struct Defaults {
+  bool        smaa;         // [Rendering] SMAA
+  const char* sharpen;      // [Rendering] Sharpen
+  const char* ssaa;         // [Rendering] Supersampling
+  const char* shadow;       // [Rendering] ShadowMultiplier
+  bool        skipLogos;    // [Startup] SkipLogos
+  bool        skipMovie;    // [Startup] SkipIntroMovie
+  bool        skipLauncher; // [Launcher] SkipLauncher
+  bool        verbose;      // [Diagnostics] VerboseLogging
+  const char* fullScreen;   // [Window] FullScreen, in the game's own file
+  bool        outline;      // [Graphics] Outline, likewise
+};
+
+Defaults defaults() {
+  Defaults d = {};
+  d.smaa = capabilities().smaaOnByDefault;
+  d.sharpen = "0";
+  d.ssaa = "100";
+  // What a missing key means to src/core/shadow_res.cpp. Reset has to agree
+  // with it, or Reset is how a player turns the shadow fix off by accident.
+  d.shadow = "2";
+  d.skipLogos = false;
+  d.skipMovie = false;
+  d.skipLauncher = false;
+  d.verbose = false;
+  // Fullscreen is what the game itself defaults to, and every resolution this
+  // window offers was reported by the display, so a fresh install always lands
+  // in a mode it can show.
+  d.fullScreen = "1";
+  d.outline = true;   // on as the game shipped
+  return d;
+}
+
 void loadFromIni() {
   // ---- the game's own Setting.ini
   //
@@ -1118,19 +1173,21 @@ void loadFromIni() {
     !savedFitsDisplay ||
     iniBool(g_iniPath, "Launcher", "AutoResolution", !(width && height)));
 
+  const Defaults fallback = defaults();
+
   char value[16] = {};
-  // Fullscreen when the game's own file has not been written yet. Exclusive
-  // fullscreen flips straight to the display instead of asking the compositor
-  // for anything, and every resolution offered above is one the display itself
-  // reported, so the mode a fresh install lands in is always one it can show.
-  iniString(g_settingsPath, "Window", "FullScreen", value, sizeof(value), "1");
+  // Exclusive fullscreen flips straight to the display instead of asking the
+  // compositor for anything.
+  iniString(g_settingsPath, "Window", "FullScreen", value, sizeof(value),
+            fallback.fullScreen);
   comboSelectByValue(g_hWinMode, kWindowModeItems, kWindowModeCount, value, 1);
 
   iniString(g_settingsPath, "Lang", "Language", value, sizeof(value), "2");
   comboSelectByValue(g_hLang, kLangItems, kLangCount, value, 1);
 
   setChecked(g_hOutline,
-    GetPrivateProfileIntA("Graphics", "Outline", 1, g_settingsPath) != 0);
+    GetPrivateProfileIntA("Graphics", "Outline", fallback.outline ? 1 : 0,
+                          g_settingsPath) != 0);
 
   // ---- the mod's dusk-fix.ini
   //
@@ -1147,11 +1204,11 @@ void loadFromIni() {
   if (capabilities().smaa) {
     // The fallback is the running game's own matrix cell, not a flat false: on
     // a fresh install this window reads the key before anything has written it.
-    setChecked(g_hSmaa, iniBool(g_iniPath, "Rendering", "SMAA",
-      capabilities().smaaOnByDefault));
+    setChecked(g_hSmaa, iniBool(g_iniPath, "Rendering", "SMAA", fallback.smaa));
     if (g_hSharpen) {
       char value[16] = {};
-      iniString(g_iniPath, "Rendering", "Sharpen", value, sizeof(value), "0");
+      iniString(g_iniPath, "Rendering", "Sharpen", value, sizeof(value),
+                fallback.sharpen);
       // Matched by number and rounded to the nearest preset, not by string.
       // The key is a percentage the DLL reads, so an ini can hold a value no
       // preset names -- hand-edited, or written by DUSK_SHARPEN. Falling back
@@ -1170,7 +1227,7 @@ void loadFromIni() {
   }
   if (capabilities().supersampling) {
     iniString(g_iniPath, "Rendering", "Supersampling", value, sizeof(value),
-      "100");
+      fallback.ssaa);
     const int percent = atoi(value);
     int index = 0;
     for (int i = 0; i < kSsaaCount; ++i) {
@@ -1188,13 +1245,14 @@ void loadFromIni() {
 
   // [Startup]: both off by default, and gated separately.
   if (capabilities().skipLogos)
-    setChecked(g_hSkipLogos, iniBool(g_iniPath, "Startup", "SkipLogos", false));
+    setChecked(g_hSkipLogos,
+      iniBool(g_iniPath, "Startup", "SkipLogos", fallback.skipLogos));
   if (capabilities().skipMovie)
     setChecked(g_hSkipMovie,
-      iniBool(g_iniPath, "Startup", "SkipIntroMovie", false));
+      iniBool(g_iniPath, "Startup", "SkipIntroMovie", fallback.skipMovie));
 
   setChecked(g_hSkipLauncher,
-    iniBool(g_iniPath, "Launcher", "SkipLauncher", false));
+    iniBool(g_iniPath, "Launcher", "SkipLauncher", fallback.skipLauncher));
 
   // Blank means the DLL's own default of 2, which is the shipped setting.
   // Selected by value so a hand-edited 3 lands on Normal rather than on
@@ -1202,15 +1260,15 @@ void loadFromIni() {
   // have done with it anyway.
   if (capabilities().shadowMultiplier) {
     iniString(g_iniPath, "Rendering", "ShadowMultiplier", value, sizeof(value),
-              "2");
+              fallback.shadow);
     comboSelectByValue(g_hShadow, kShadowItems, kShadowCount,
-                       value[0] ? value : "2", 0);
+                       value[0] ? value : fallback.shadow, 0);
   }
 
   // [Diagnostics]: not gated on a capability, because the DLL reads it whatever
   // the game is.
   setChecked(g_hVerbose,
-    iniBool(g_iniPath, "Diagnostics", "VerboseLogging", false));
+    iniBool(g_iniPath, "Diagnostics", "VerboseLogging", fallback.verbose));
 
   // Last, once every quality control holds its loaded value.
   updateRenderResolution();
@@ -1342,31 +1400,31 @@ void resetToDefaults() {
     addResolution(width, height);
   refillResolutions(width, height, true);
 
-  SendMessageW(g_hWinMode, CB_SETCURSEL, 1, 0);   // fullscreen, as it defaults
-  setChecked(g_hOutline, true);                   // on as the game shipped
+  const Defaults d = defaults();
 
-  // Supersampling goes off rather than to a recommended setting: reset is for
-  // getting back to a known state, and a reset that quietly switched it on
-  // would cost frame rate that nobody asked to spend -- on the weakest machine
-  // running this, which is where reset is most likely to be reached for. It is
-  // OptIn in every row of the matrix, so off IS its default.
-  //
-  // SMAA goes to the running game's own default. It is currently on for all
-  // three, and keeping the value capability-driven prevents Reset from drifting
-  // if those defaults ever diverge.
-  setChecked(g_hSmaa, capabilities().smaaOnByDefault);
+  comboSelectByValue(g_hWinMode, kWindowModeItems, kWindowModeCount,
+                     d.fullScreen, 1);
+  setChecked(g_hOutline, d.outline);
+
+  // Supersampling and Sharpen go off rather than to a recommended setting:
+  // reset is for getting back to a known state, and a reset that quietly
+  // switched them on would cost frame rate that nobody asked to spend, on the
+  // weakest machine running this, which is where reset is most likely to be
+  // reached for. Both are OptIn in every row of the matrix, so off IS default.
+  setChecked(g_hSmaa, d.smaa);
   if (g_hSharpen)
-    SendMessageW(g_hSharpen, CB_SETCURSEL, 0, 0);
+    comboSelectByValue(g_hSharpen, kSharpenItems, kSharpenCount, d.sharpen, 0);
   setSsaaIndex(0);
-  setChecked(g_hSkipLogos, false);
-  setChecked(g_hSkipMovie, false);
-  setChecked(g_hSkipLauncher, false);
-  // Normal, not the Arland launcher's 2x. This is opt-in here: it costs fill
-  // on a game that is already CPU-limited, and reset is for getting back to a
-  // known state rather than to a recommended one.
+  setChecked(g_hSkipLogos, d.skipLogos);
+  setChecked(g_hSkipMovie, d.skipMovie);
+  setChecked(g_hSkipLauncher, d.skipLauncher);
+  // 2x, which is what a missing key means to the DLL. This used to be Normal on
+  // the argument that reset should not switch a cost on; that made Reset the
+  // one way to turn the shadow fix off without asking for it, since every other
+  // route to a fresh file gives 2.
   if (g_hShadow)
-    SendMessageW(g_hShadow, CB_SETCURSEL, 0, 0);
-  setChecked(g_hVerbose, false);
+    comboSelectByValue(g_hShadow, kShadowItems, kShadowCount, d.shadow, 0);
+  setChecked(g_hVerbose, d.verbose);
   updateRenderResolution();
 }
 
@@ -2494,6 +2552,62 @@ LRESULT CALLBACK WndProc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
   return DefWindowProcW(w, msg, wp, lp);
 }
 
+// ---- writing the defaults out ----------------------------------------------
+
+// `--write-defaults <game> <path>` writes one game's defaults to an ini and
+// exits without showing the window.
+//
+// It is here for CI. No ini ships, so the values a user meets before the DLL has
+// ever run are this window's own fallbacks, and the only honest way to check
+// them is to make the window produce them and read the result. A checker that
+// read a table of defaults out of this file instead would agree with itself
+// while the window did something else.
+//
+// The game is named rather than detected: a runner has no game installed, and
+// the defaults differ per game, so all three are asked for in turn.
+const wchar_t* const kGameArguments[kGameCount] = {
+  L"ayesha", L"escha", L"shallie",
+};
+
+// -1 when the name is not one of the three.
+int gameFromArgument(const wchar_t* name) {
+  for (int i = 0; i < kGameCount; ++i)
+    if (lstrcmpiW(name, kGameArguments[i]) == 0)
+      return i;
+  return -1;
+}
+
+// Fills g_game, g_gameName, g_iniPath and g_settingsPath from the command line,
+// and reports whether this is a headless run. An ordinary launch touches none of
+// them and goes on to hunt for the game folder as before.
+//
+// g_settingsPath gets a sibling of the output rather than being left empty:
+// saveToIni writes the game's own file too, and an empty path there is not a
+// no-op, it is a write to WIN.INI.
+bool adoptHeadlessRequest() {
+  int count = 0;
+  wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &count);
+  if (!argv)
+    return false;
+
+  bool headless = false;
+  if (count == 4 && lstrcmpiW(argv[1], L"--write-defaults") == 0) {
+    const int game = gameFromArgument(argv[2]);
+    if (game >= 0 &&
+        WideCharToMultiByte(CP_ACP, 0, argv[3], -1, g_iniPath, MAX_PATH,
+                            nullptr, nullptr) > 0) {
+      g_game = game;
+      g_gameName = kGames[game].name;
+      lstrcpynA(g_settingsPath, g_iniPath, MAX_PATH);
+      lstrcatA(g_settingsPath, ".game-settings");
+      headless = true;
+    }
+  }
+
+  LocalFree(argv);
+  return headless;
+}
+
 }  // namespace
 
 int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int show) {
@@ -2521,7 +2635,12 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int show) {
   // version opened the window anyway and reported the problem in a message box,
   // which left a settings window on screen that could not start anything and
   // whose Save wrote into a folder no game reads.
-  if (!resolveGameFolder()) {
+  // A headless run names its game and its output file, so both the hunt for a
+  // game folder and the seeding below are skipped: there is no game beside a
+  // runner, and the file being written is a report rather than a game's config.
+  const bool headless = adoptHeadlessRequest();
+
+  if (!headless && !resolveGameFolder()) {
     MessageBoxW(nullptr,
       L"No Atelier Dusk game was found in this folder.\n\n"
       L"Put dusk-fix-launcher.exe in the game's installation folder, beside "
@@ -2536,7 +2655,8 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int show) {
   // launcher-made file and a DLL-made one are the same file. Only a failure to
   // write it is worth stopping for, and that is a real problem the user can act
   // on.
-  if (GetFileAttributesA(g_iniPath) == INVALID_FILE_ATTRIBUTES &&
+  if (!headless &&
+      GetFileAttributesA(g_iniPath) == INVALID_FILE_ATTRIBUTES &&
       !seedIniDefaults()) {
     MessageBoxW(nullptr,
       L"dusk-fix.ini is missing and could not be created in this folder.\n\n"
@@ -2588,6 +2708,20 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int show) {
     style, x, y, frameWidth, frameHeight, nullptr, nullptr, instance, nullptr);
   if (!window)
     return 1;
+
+  // Reset fills every control with its default and Save writes them out, which
+  // is the pair the Reset button runs. The window stays hidden and no message
+  // loop starts, so this returns as soon as the file is on disk.
+  //
+  // Only the ini half is required. There is no game beside a runner, so the
+  // game's own settings file cannot be written, and that failure says nothing
+  // about the defaults being reported.
+  if (headless) {
+    resetToDefaults();
+    const SaveOutcome outcome = saveToIni();
+    DestroyWindow(window);
+    return outcome.ini ? 0 : 1;
+  }
 
   ShowWindow(window, show);
   UpdateWindow(window);

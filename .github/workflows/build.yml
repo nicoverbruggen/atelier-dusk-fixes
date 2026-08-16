@@ -34,6 +34,11 @@ jobs:
       - run: meson compile -C build64
       - name: Check d3d11 proxy exports
         run: python scripts/check_exports.py build64/d3d11.dll
+      # No ini ships, so the launcher is the option surface. This runs it once
+      # per game and compares what it writes against src/. It has to be here
+      # rather than in the packaging job: it runs a Windows executable.
+      - name: Check option surface
+        run: python scripts/check_option_surface.py build64/dusk-fix-launcher.exe
       - name: Check proxy safety contracts
         run: python scripts/check_core_contract.py
       - name: Check asynchronous lifecycle contract
@@ -87,10 +92,6 @@ jobs:
           path: dist
       - name: Check version
         run: python3 scripts/read_version.py VERSION
-      # default.ini ships to users and repeats defaults that live in src/, so
-      # check it before packaging rather than spending a separate runner on it.
-      - name: Check shipped configuration defaults
-        run: python3 scripts/check_default_ini.py
       - name: Check launcher contract
         run: python3 scripts/check_launcher_contract.py
       - name: Check transactional mutation contract
@@ -102,12 +103,9 @@ jobs:
           mkdir -p dist/dusk-fix/LICENSES
           cp vendor/minhook/LICENSE.txt dist/dusk-fix/LICENSES/MinHook.txt
           cp vendor/smaa/LICENSE.txt dist/dusk-fix/LICENSES/SMAA.txt
-          # Shipped under its final name so the archive extracts straight into
-          # the game directory with nothing to rename.
-          cp default.ini dist/dusk-fix.ini
           cd dist
           zip -r ../dusk-fix.zip \
-            d3d11.dll dusk-fix-launcher.exe msimg32.dll dusk-fix.ini dusk-fix
+            d3d11.dll dusk-fix-launcher.exe msimg32.dll dusk-fix
       - uses: actions/upload-artifact@v7
         with:
           name: dusk-fix

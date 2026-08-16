@@ -88,11 +88,8 @@ stage="$out/stage"
 rm -rf "$stage"
 mkdir -p "$stage/dusk-fix/LICENSES"
 
-# Shipped under its final name so the archive extracts straight into the game
-# directory with nothing to rename.
 cp "$repo/build64/d3d11.dll" "$repo/build64/dusk-fix-launcher.exe" \
    "$repo/build32/msimg32.dll" "$stage/"
-cp "$repo/default.ini" "$stage/dusk-fix.ini"
 cp "$repo/README.md" "$repo/LICENSE" "$stage/dusk-fix/"
 # Named for what they cover: LICENSE points at them and there is no vendor/
 # tree in the archive.
@@ -103,7 +100,7 @@ build_version="$(python3 "$repo/scripts/read_version.py" "$repo/VERSION")"
 archive="$out/dusk-fix-$build_version.zip"
 rm -f "$archive"
 ( cd "$stage" && zip -qr "$archive" \
-    d3d11.dll dusk-fix-launcher.exe msimg32.dll dusk-fix.ini dusk-fix )
+    d3d11.dll dusk-fix-launcher.exe msimg32.dll dusk-fix )
 rm -rf "$stage"
 
 echo

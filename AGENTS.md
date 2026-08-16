@@ -23,11 +23,13 @@ One `d3d11.dll` covers all three games. Do not split it per game or per engine: 
 
 Neither engine module may include the other's headers, and no address pack belongs in `src/core`. **Nor may `src/core` name an engine module.** Only `engine.cpp` may, and only to dispatch: it resolves the running executable and returns that engine's `SsaaPolicy` and `ScenePolicy`. Core asking one engine a question about the other is how Ayesha's pre-UI pass came to be gated on a KTGL module reporting itself idle, and how a decline meant for Ayesha was logged in KTGL's words.
 
-User-facing options go in `dusk-fix.ini` through the capability matrix's `Descriptor`; environment switches are diagnostics and must not be given an ini key. `[Diagnostics] VerboseLogging` is the one diagnostic with a key, because it only decides how much the mod writes about itself and costs a user nothing to turn on when a bug report asks for it. A diagnostic that makes the game slower keeps its environment switch. `default.ini` is the option surface: every user-facing key appears there with its default.
+User-facing options go in `dusk-fix.ini` through the capability matrix's `Descriptor`; environment switches are diagnostics and must not be given an ini key. `[Diagnostics] VerboseLogging` is the one diagnostic with a key, because it only decides how much the mod writes about itself and costs a user nothing to turn on when a bug report asks for it. A diagnostic that makes the game slower keeps its environment switch.
 
-`default.ini` ships in the release archive, renamed to `dusk-fix.ini`, and repeats defaults that really live in `src/core/config.cpp` and `src/core/game.cpp`'s capability matrix. When you add, rename, remove or re-default an option, update `default.ini` in the same change.
+**No ini ships. The mod writes its own.** `configPath()` creates `dusk-fix.ini` when it is absent and seeds `[Launcher] SkipLauncher`; every other key is seeded lazily by the read that wants it, with the capability matrix's default for the game actually running. The settings launcher then writes the file whenever the user saves. A shipped file could not do better: it would carry one set of values for three games, including keys a given game ignores.
 
-`scripts/check_default_ini.py` enforces this and runs in CI: it checks that every option the code reads is documented, that nothing documented is unread, that the literal defaults agree, and that the launcher's own fallbacks agree too — the launcher keeps a separate copy of every default, and one that drifts does not just display the wrong value, it writes it back on the next Save. An option deliberately kept out of `default.ini` goes in the allowlist at the top of that script rather than being dropped from the check. The allowlist is empty today, and the bar for adding to it is that no single shipped value could be correct for all three games. `SMAA` was there for that reason until it became on by default everywhere, at which point it gained a `default.ini` line and left the allowlist.
+That makes the launcher the option surface. A key the launcher does not offer is reachable only by someone who already knows its name, so adding an option means adding its control, and the default a user sees before the DLL has ever run is the launcher's own fallback rather than anything in the repository.
+
+An option may still be deliberately ini-only, and some are: Shallie's `[Interface] SteadyControlPrompt` and `HideControlPrompt` are set by hand or not at all. What that costs is discoverability, so it is a decision rather than an omission, and `scripts/check_option_surface.py` holds the list with the reason for each. Drifting into it is the thing to avoid: a key read behind a condition never appears for the user who leaves that feature off, and nobody has to decide anything for it to happen.
 
 This is the sibling of `../atelier-arland-fixes`. Read that repository's `AGENTS.md` first: its architecture (d3d11 proxy, capability matrix, hook idioms) is the template for this project.
 
@@ -53,7 +55,7 @@ The everyday style is already right: half of all comment blocks are three lines 
 
 **Do not trim by the ruler.** Length finds candidates. It does not judge them. A long block that is entirely about the thing its file implements is doing its job.
 
-The only user-facing documents are `README.md`, which lists what the mod does per game, and `default.ini`, which lists what can be set.
+The only user-facing document is `README.md`, which lists what the mod does per game. What can be set is the settings launcher, not a file.
 
 ## Game copies
 

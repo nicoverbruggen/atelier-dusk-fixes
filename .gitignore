@@ -6,3 +6,6 @@
 /dusk-fix.log
 *.log
 /HANDOFF.md
+
+# Python bytecode from running the scripts/ checks locally.
+__pycache__/

@@ -97,6 +97,34 @@ bool verboseLogging() {
   return on;
 }
 
+// Keys retired along with the features they configured.
+//
+// They are left exactly where they are. The file belongs to whoever owns the
+// game, and quietly editing it is a poor way to explain that a setting went
+// away; a line in the log is a better one, and the log is what a bug report
+// already carries. So these are ignored, once, out loud.
+//
+// A player's ini outlives the code that read it.
+//
+// ADD TO THIS IN THE SAME CHANGE that removes an option.
+struct RetiredKey { const char* section; const char* key; };
+constexpr RetiredKey kRetiredKeys[] = {
+  { "Interface", "PadRescanBackoff" },      // now keyless: a fix, not a setting
+  { "Rendering", "SupersamplingSharpen" },
+};
+
+void warnRetiredKeys(const char* path) {
+  for (const RetiredKey& retired : kRetiredKeys) {
+    char value[8] = { };
+    GetPrivateProfileStringA(retired.section, retired.key, "\x01", value,
+      sizeof(value), path);
+    if (value[0] == '\x01')
+      continue;
+    log("Config: ignored [", retired.section, "] ", retired.key,
+      " -- retired, this key does nothing");
+  }
+}
+
 void logConfiguration() {
   const char* path = configPath();
   if (!path) {
@@ -104,6 +132,8 @@ void logConfiguration() {
         " are in force");
     return;
   }
+  // Before the lines below, so a reader meets the warning first.
+  warnRetiredKeys(path);
   log("Config: ", path);
   // Reported per feature rather than by dumping the file, so these lines say
   // what is in force after environment overrides and the capability matrix.

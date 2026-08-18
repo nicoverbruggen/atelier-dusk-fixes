@@ -46,6 +46,10 @@ struct PhyreGame {
   uintptr_t padCreateWrapperRva;
   std::array<BYTE, 16> padCreateExpected;
   uintptr_t mixCardUpdateRva;     // Card::Update, the synthesis pump (core/mix_card.h)
+  // `mov ecx, 0x1f4` feeding the worker's idle Sleep (worker_idle_sleep.h). One
+  // hit per executable for that six-byte sequence, so there is nothing to
+  // choose between; the six bytes are checked again at install.
+  uintptr_t workerIdleSleepRva;
   uint8_t exeBuild;
 };
 

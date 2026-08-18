@@ -16,6 +16,7 @@
 #include "movie_skip.h"
 #include "shadow_tap.h"
 #include "field_collision_fix.h"
+#include "worker_idle_sleep.h"
 #include "scene_target.h"
 #include "worldmap_fix.h"
 #include "../../core/game.h"
@@ -59,6 +60,7 @@ constexpr PhyreGame kGames[] = {
     { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b,
       0xd9, 0x48, 0x8b, 0x0d, 0x80, 0x51, 0x4e, 0x01 },
     0x3a8b50,
+    0x28a6c1,
     BuildEnglish },
   { "Atelier_Ayesha.exe", 0x9a9604,
     0x76e290, 0x5a3920, 0x5a3960,
@@ -68,6 +70,7 @@ constexpr PhyreGame kGames[] = {
     { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b,
       0xd9, 0x48, 0x8b, 0x0d, 0xf8, 0xa8, 0x65, 0x01 },
     0x3bd820,
+    0x2926f1,
     BuildMultilingual },
 };
 
@@ -166,6 +169,11 @@ bool initializePhyreFixes() {
     // already apart stop being pulled together. DUSK_COLLIDE_GAIN turns the
     // same patch site into the diagnostic that demonstrates the defect.
     atfix::installFieldCollision(g_base, g_game->exeBuild);
+
+    // Shortens the idle poll of the worker a scene transition joins, which is
+    // most of what a transition costs. Gates itself on the bytes at its row's
+    // address and on its own environment switch.
+    atfix::installWorkerIdleSleep(g_base, g_game->workerIdleSleepRva);
 
     // Not a Phyre fix at all: the pad layer is Gust framework code shared by all
     // six DX ports, so core owns the mechanism and this module only supplies the

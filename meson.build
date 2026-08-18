@@ -95,6 +95,7 @@ else
     'src/engines/phyre/worldmap_fix.cpp',
     'src/engines/phyre/shadow_tap.cpp',
     'src/engines/phyre/field_collision_fix.cpp',
+    'src/engines/phyre/worker_idle_sleep.cpp',
     'src/engines/ktgl/ktgl.cpp',
     'src/engines/ktgl/letterbox_present.cpp',
     'src/engines/ktgl/loading_text_fix.cpp',

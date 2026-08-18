@@ -130,6 +130,11 @@ const Descriptor& descriptor(Feature f) {
     // without for a moment, and the Arland window already carries its field
     // switches the same way. The key is absent at the default and written only
     // when someone turns the fix off.
+    // Keyless, and valued rather than boolean: the switch also carries the
+    // millisecond count, so worker_idle_sleep.cpp reads it directly and this
+    // cell only says which games have the worker at all.
+    /* WorkerIdleSleep */
+                          { "DUSK_WORKER_IDLE_SLEEP", nullptr, nullptr },
     /* FieldSlopeHold */  { "DUSK_SLOPE_HOLD", "Debug", "SlopeHold" },
   };
   return table[static_cast<int>(f)];
@@ -159,10 +164,10 @@ constexpr Support X = Support::OnByDefault;
 // deliberate "this game does not get it". Taking the extent from the
 // initializer instead makes each static_assert below fail loudly the next time
 // a Feature is added without extending every row.
-//                               Verfy Targt HiRes Cache Field Smaa  Ssaa  WMap  Logo  Movi  Typo  SysSv PadRe Synth ShdMl Pull  Talk  Lbox  Slope
-constexpr Support kAyesha[]  = { O,    O,    X,    X,    X,    X,    O,    X,    O,    O,    U,    U,    X,    X,    X,    X,    X,    U,    U };
-constexpr Support kEscha[]   = { U,    O,    U,    U,    U,    X,    O,    X,    O,    O,    X,    X,    X,    X,    U,    U,    U,    X,    X };
-constexpr Support kShallie[] = { U,    O,    U,    U,    U,    X,    O,    U,    O,    O,    X,    X,    X,    X,    U,    U,    U,    X,    U };
+//                               Verfy Targt HiRes Cache Field Smaa  Ssaa  WMap  Logo  Movi  Typo  SysSv PadRe Synth ShdMl Pull  Talk  Lbox  Idle  Slope
+constexpr Support kAyesha[]  = { O,    O,    X,    X,    X,    X,    O,    X,    O,    O,    U,    U,    X,    X,    X,    X,    X,    U,    X,    U };
+constexpr Support kEscha[]   = { U,    O,    U,    U,    U,    X,    O,    X,    O,    O,    X,    X,    X,    X,    U,    U,    U,    X,    U,    X };
+constexpr Support kShallie[] = { U,    O,    U,    U,    U,    X,    O,    U,    O,    O,    X,    X,    X,    X,    U,    U,    U,    X,    U,    U };
 
 constexpr std::size_t kColumns = static_cast<std::size_t>(Feature::Count);
 static_assert(std::size(kAyesha) == kColumns,  "Ayesha row is not one entry per Feature");

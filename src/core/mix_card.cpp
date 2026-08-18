@@ -40,7 +40,6 @@ float bitsToFloat(uint32_t bits) {
   return value;
 }
 
-const float kStep = bitsToFloat(0x3C88AB86u);
 const float kRate = bitsToFloat(0x426FC28Fu);
 
 // A guard against inheriting drift rather than a behaviour change. Running

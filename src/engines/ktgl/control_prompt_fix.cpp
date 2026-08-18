@@ -5,7 +5,6 @@
 #include <windows.h>
 
 #include <array>
-#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -32,8 +31,6 @@ DrawProc originalDraw = nullptr;
 // makes the ease step the whole remaining distance, so a pane lands on its
 // target in one frame. Passing MORE would be pointless: the clamp caps it here.
 constexpr float kInstantDt = 0.1f;
-
-std::atomic<uint32_t> g_updates{0};
 
 // Two distinct requests hide in "remove it", and they want different code, so
 // there are two settings rather than one tri-state. Keeping both as plain
@@ -65,7 +62,6 @@ void STDMETHODCALLTYPE tracedUpdate(uintptr_t self, float dt) {
   // on screen and wedges Draw permanently off.
   const Mode m = mode();
   originalUpdate(self, m == Mode::Off ? dt : kInstantDt);
-  g_updates.fetch_add(1, std::memory_order_relaxed);
 }
 
 void STDMETHODCALLTYPE tracedDraw(uintptr_t self) {

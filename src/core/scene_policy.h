@@ -14,9 +14,8 @@
 // draw into the surface the interface is about to be drawn into, which their
 // own module identifies. Neither moment means anything on the other engine.
 //
-// Before this header, core asked KTGL. `scene_pass.cpp` gated Ayesha's pass on
-// `!ktglPreUiActive()`, `main.cpp` called `ktglPreUiFrameTick()` in every
-// process, and `d3d11_hooks.cpp` decided whether to install the draw detours
+// Before this header, core called `ktglPreUiFrameTick()` in every process, and
+// `d3d11_hooks.cpp` decided whether to install the draw detours
 // with `highRes.rasterCorrection || ssaaConfigured()` -- a PhyreEngine
 // condition -- and then logged the decision as a KTGL one. On Ayesha that line
 // printed "supersampling is on" in a session where supersampling was off.

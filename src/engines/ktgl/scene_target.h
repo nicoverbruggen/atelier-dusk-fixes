@@ -69,7 +69,6 @@ struct ID3D11Texture2D* ktglPreUiNoteDraw(ID3D11DeviceContext* context);
 // this through ScenePolicy::afterDraw.
 void ktglPreUiAfterDraw(ID3D11DeviceContext* context);
 void ktglPreUiFrameTick();
-bool ktglPreUiActive();
 
 // Wiring for d3d11_hooks.cpp: the four draw slots this feature owns.
 void STDMETHODCALLTYPE hookedPreUiDraw(ID3D11DeviceContext*, UINT, UINT);

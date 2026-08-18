@@ -221,21 +221,6 @@ thread_local bool t_inPass = false;
 
 }  // namespace
 
-// Whether this engine's pre-UI anchor is in charge of the frame.
-//
-// The transition-based call in scene_pass.cpp has to stand down when it is.
-// Both go through smaaApplySceneColor, which claims the frame with a
-// once-per-frame latch, and the transition fires EARLIER -- so with both live
-// the anchor was called on every frame and refused on every frame, and the only
-// symptom was that nothing looked different.
-bool ktglPreUiActive() {
-  // Either pass keeps the anchor alive: sharpening does not need the smoothing
-  // to have run, and turning edge smoothing off must not silently take the
-  // sharpening with it.
-  return g_installed.load(std::memory_order_relaxed) &&
-         (smaaPreUiEnabled() || sharpenEnabled());
-}
-
 void ktglPreUiNoteTargets(ID3D11DeviceContext* context, unsigned int numViews,
                           ID3D11RenderTargetView* const* views) {
   // INERT UNLESS THIS ENGINE INSTALLED IT. These two are called from the shared

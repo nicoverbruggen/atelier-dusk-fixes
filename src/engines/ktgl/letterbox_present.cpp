@@ -8,7 +8,6 @@
 #include <d3d11.h>
 
 #include <atomic>
-#include <cstdint>
 #include <cstring>
 
 #include "letterbox_present.h"

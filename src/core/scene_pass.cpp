@@ -7,7 +7,6 @@
 #include <d3d11.h>
 
 #include <atomic>
-#include <cstdlib>
 
 #include "log.h"
 #include "d3d11_hooks.h"

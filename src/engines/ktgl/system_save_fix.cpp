@@ -7,7 +7,6 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 
 #include "system_save_fix.h"

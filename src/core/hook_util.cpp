@@ -6,7 +6,6 @@
 
 #include <psapi.h>
 
-#include <cstdint>
 #include <cstring>
 
 #include "hook_util.h"

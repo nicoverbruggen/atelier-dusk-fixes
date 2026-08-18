@@ -15,10 +15,10 @@
 // own module identifies. Neither moment means anything on the other engine.
 //
 // Before this header, core called `ktglPreUiFrameTick()` in every process, and
-// `d3d11_hooks.cpp` decided whether to install the draw detours
-// with `highRes.rasterCorrection || ssaaConfigured()` -- a PhyreEngine
-// condition -- and then logged the decision as a KTGL one. On Ayesha that line
-// printed "supersampling is on" in a session where supersampling was off.
+// `d3d11_hooks.cpp` decided whether to install the draw detours with
+// `highRes.rasterCorrection || ssaaConfigured()` -- a PhyreEngine condition --
+// and then logged the decision as a KTGL one. On Ayesha that line printed
+// "supersampling is on" in a session where supersampling was off.
 //
 // PULLED, NOT PUSHED, for the same reason as SsaaPolicy: the first caller is a
 // D3D11 hook that can run before any engine module has initialized, so a policy

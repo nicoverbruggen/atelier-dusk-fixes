@@ -15,12 +15,9 @@
 #include <windows.h>
 
 #include <array>
-#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <unordered_map>
-#include <utility>
 
 #include "field_physics.h"
 #include "../../core/config.h"        // verboseLogging

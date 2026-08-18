@@ -14,7 +14,7 @@ Split by engine, because the trilogy spans two and they share nothing a fix can 
 
   Rendering features may still need one engine-specific decision each. Keep it out of core: `src/core/scene_pass.h` takes a `SceneTargetTest` callback for "which bind is the scene", and each engine supplies its own — `src/engines/phyre/scene_target.cpp` for Ayesha, `src/engines/ktgl/scene_target.cpp` for Escha & Logy and Shallie. Core declines and says so in the log when no engine has registered one, which is now a fallback rather than the state any shipped game is in. Both SMAA's pre-UI pass and supersampling depend on that one answer.
 - `src/engines/phyre/` — Ayesha (PhyreEngine, old MSVC CRT). Arland ports live here: the atlas cache, field physics, and the scene-target rule.
-- `src/engines/ktgl/` — Escha & Logy and Shallie (KTGL, UCRT). Fingerprinting and the engine-specific address fixes, including loading text, startup flow, save integrity, world-map movement and Shallie's control prompt. Each detour or patch is gated by the recognized executable row and its own expected-byte window.
+- `src/engines/ktgl/` — Escha & Logy and Shallie (KTGL, UCRT). Fingerprinting and the engine-specific address fixes, including loading text, startup flow, save integrity and world-map movement. Each detour or patch is gated by the recognized executable row and its own expected-byte window.
 
   Plural on purpose. `src/core/engine.{h,cpp}` is the **dispatch layer** — it resolves which engine this process is and forwards to one module. `src/engines/` holds the modules it forwards to. Singular for the dispatcher, plural for the implementations.
 - `src/launcher/` — both launcher pieces, neither of which is an engine module and neither of which shares code with the game DLL: `launcher_gui.cpp` is the 64-bit `dusk-fix-launcher.exe` settings window, and `launcher_proxy.cpp` is the 32-bit `msimg32.dll` the games' own front-ends load. They agree on ini key names and nothing else.
@@ -29,7 +29,7 @@ User-facing options go in `dusk-fix.ini` through the capability matrix's `Descri
 
 That makes the launcher the option surface. A key the launcher does not offer is reachable only by someone who already knows its name, so adding an option means adding its control, and the default a user sees before the DLL has ever run is the launcher's own fallback rather than anything in the repository.
 
-An option may still be deliberately ini-only, and some are: Shallie's `[Interface] SteadyControlPrompt` and `HideControlPrompt` are set by hand or not at all. What that costs is discoverability, so it is a decision rather than an omission, and `scripts/check_option_surface.py` holds the list with the reason for each. Drifting into it is the thing to avoid: a key read behind a condition never appears for the user who leaves that feature off, and nobody has to decide anything for it to happen.
+An option may still be deliberately ini-only. What that costs is discoverability, so it is a decision rather than an omission, and `scripts/check_option_surface.py` holds the list with the reason for each. Drifting into it is the thing to avoid: a key read behind a condition never appears for the user who leaves that feature off, and nobody has to decide anything for it to happen.
 
 This is the sibling of `../atelier-arland-fixes`. Read that repository's `AGENTS.md` first: its architecture (d3d11 proxy, capability matrix, hook idioms) is the template for this project.
 

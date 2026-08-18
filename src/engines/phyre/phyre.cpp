@@ -8,8 +8,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-#include <cstring>
-
 #include "phyre.h"
 
 #include "atlas_fix.h"

@@ -61,14 +61,6 @@ NOT_WRITTEN_AT_DEFAULT: dict[tuple[str, str], str] = {
     ("Rendering", "DisplayHeight"):
         "exposed as the resolution control, and written only when that is not"
         " Auto. Auto is the default",
-    ("Interface", "SteadyControlPrompt"):
-        "not exposed at all, on purpose. Shallie's control-prompt hold is set"
-        " by hand or not at all. The startup log resolves the feature on"
-        " Shallie, which seeds the key, so it is in the file after one run",
-    ("Interface", "HideControlPrompt"):
-        "not exposed at all, on purpose, and the second half of the same"
-        " choice. Seeded once SteadyControlPrompt is on, which is when it"
-        " starts meaning anything",
 }
 
 # Keys where the launcher and the code differ on purpose, because they are not

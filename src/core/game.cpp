@@ -94,8 +94,6 @@ const Descriptor& descriptor(Feature f) {
                                                  "Startup", "SkipIntroMovie" },
     /* LoadingTextTypo */ { "DUSK_LOADING_TEXT",      nullptr, nullptr },
     /* SystemSaveGuard */ { "DUSK_SYSTEM_SAVE",        nullptr, nullptr },
-    /* ControlPromptHold */
-                          { "DUSK_CONTROL_PROMPT", "Interface", "SteadyControlPrompt" },
     /* PadRescanBackoff */
                           { "DUSK_PAD_RESCAN",        nullptr, nullptr },
     /* SynthesisAnimationRate */
@@ -161,10 +159,10 @@ constexpr Support X = Support::OnByDefault;
 // deliberate "this game does not get it". Taking the extent from the
 // initializer instead makes each static_assert below fail loudly the next time
 // a Feature is added without extending every row.
-//                               Verfy Targt HiRes Cache Field Smaa  Ssaa  WMap  Logo  Movi  Typo  SysSv Promt PadRe Synth ShdMl Pull  Talk  Lbox  Slope
-constexpr Support kAyesha[]  = { O,    O,    X,    X,    X,    X,    O,    X,    O,    O,    U,    U,    U,    X,    X,    X,    X,    X,    U,    U };
-constexpr Support kEscha[]   = { U,    O,    U,    U,    U,    X,    O,    X,    O,    O,    X,    X,    U,    X,    X,    U,    U,    U,    X,    X };
-constexpr Support kShallie[] = { U,    O,    U,    U,    U,    X,    O,    U,    O,    O,    X,    X,    O,    X,    X,    U,    U,    U,    X,    U };
+//                               Verfy Targt HiRes Cache Field Smaa  Ssaa  WMap  Logo  Movi  Typo  SysSv PadRe Synth ShdMl Pull  Talk  Lbox  Slope
+constexpr Support kAyesha[]  = { O,    O,    X,    X,    X,    X,    O,    X,    O,    O,    U,    U,    X,    X,    X,    X,    X,    U,    U };
+constexpr Support kEscha[]   = { U,    O,    U,    U,    U,    X,    O,    X,    O,    O,    X,    X,    X,    X,    U,    U,    U,    X,    X };
+constexpr Support kShallie[] = { U,    O,    U,    U,    U,    X,    O,    U,    O,    O,    X,    X,    X,    X,    U,    U,    U,    X,    U };
 
 constexpr std::size_t kColumns = static_cast<std::size_t>(Feature::Count);
 static_assert(std::size(kAyesha) == kColumns,  "Ayesha row is not one entry per Feature");

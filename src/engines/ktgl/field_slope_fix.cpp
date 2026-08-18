@@ -7,7 +7,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
-#include <cstring>
 
 #include "field_slope_fix.h"
 #include "../../core/game.h"

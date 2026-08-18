@@ -54,7 +54,6 @@ enum class Feature : uint8_t {
   SkipIntroMovie,   // any game: skip the movie played on the way to the title
   LoadingTextTypo,  // Escha & Logy, Shallie: "Loadning" -> "Loading"
   SystemSaveGuard,  // KTGL: reject zero-byte loads; protect failed system loads
-  ControlPromptHold,// Shallie: the control-hint panel stops replaying its slide
   PadRescanBackoff, // any game: rate-limit the controller rescan (unmeasured)
   SynthesisAnimationRate, // any game: synthesis cards tick at 59.94 Hz
   ShadowMultiplier,       // Ayesha: higher-resolution shadow map (valued: 1/2/4/8)

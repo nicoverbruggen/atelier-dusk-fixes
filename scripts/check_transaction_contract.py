@@ -12,7 +12,6 @@ HOOK_CPP = (ROOT / "src" / "core" / "hook_util.cpp").read_text()
 D3D = (ROOT / "src" / "core" / "d3d11_hooks.cpp").read_text()
 FIELD = (ROOT / "src" / "engines" / "phyre" / "field_physics.cpp").read_text()
 PROTECTION = (ROOT / "src" / "core" / "protection_transaction.h").read_text()
-PROMPT = (ROOT / "src" / "engines" / "ktgl" / "control_prompt_fix.cpp").read_text()
 MAIN = (ROOT / "src" / "core" / "main.cpp").read_text()
 GAME_H = (ROOT / "src" / "core" / "game.h").read_text()
 MESON = (ROOT / "meson.build").read_text()
@@ -89,13 +88,6 @@ def main():
                 "Present installation latches before the whole set is enabled")
         require("poisoned" in present,
                 "Present installation does not quarantine an incomplete rollback")
-
-        require("matches(draw, kDrawExpected)" in PROMPT,
-                "control-prompt Draw hook lacks a verified prologue")
-        require("HookTransaction transaction" in PROMPT and
-                PROMPT.count("transaction.create(") >= 2 and
-                "transaction.enableAll()" in PROMPT,
-                "control-prompt Hide is not one two-hook transaction")
     except (OSError, ValueError) as exc:
         print(f"transaction contract check failed: {exc}", file=sys.stderr)
         return 1

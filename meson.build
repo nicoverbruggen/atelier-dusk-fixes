@@ -106,7 +106,6 @@ else
     'src/engines/ktgl/worldmap_fix.cpp',
     'src/engines/ktgl/system_save_fix.cpp',
     'src/engines/ktgl/window_size.cpp',
-    'src/engines/ktgl/control_prompt_fix.cpp',
     'src/engines/ktgl/field_slope_fix.cpp',
     'vendor/minhook/src/hde/hde64.c',
     'vendor/minhook/src/hook.c',

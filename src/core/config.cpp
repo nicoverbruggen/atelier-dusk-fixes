@@ -178,16 +178,6 @@ void logConfiguration() {
   log("Config:   Sharpen = ",
       static_cast<unsigned int>(sharpenAmount() * 100.0f + 0.5f), "%");
 
-  if (featureSupport(Feature::ControlPromptHold) == Support::Unsupported) {
-    log("Config:   ControlPrompt = unsupported on this game");
-  } else if (!featureEnabled(Feature::ControlPromptHold)) {
-    log("Config:   ControlPrompt = original animation");
-  } else {
-    log("Config:   ControlPrompt = ",
-        duskConfigBool("Interface", "HideControlPrompt", false)
-          ? "hidden" : "steady");
-  }
-
   if (currentEngine() == Engine::Ktgl) {
     const int width = duskConfigInt("Rendering", "DisplayWidth", 0);
     const int height = duskConfigInt("Rendering", "DisplayHeight", 0);

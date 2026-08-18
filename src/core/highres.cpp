@@ -23,7 +23,6 @@
 
 #include <atomic>
 #include <cstdint>
-#include <cstdlib>
 #include <string>
 #include <unordered_map>
 

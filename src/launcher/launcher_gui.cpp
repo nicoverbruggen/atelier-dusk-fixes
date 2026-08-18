@@ -1063,9 +1063,9 @@ bool hasUnsavedChanges() { return !(currentState() == g_savedState); }
 // Two callers read it: loadFromIni, when a key is missing from the file, and
 // resetToDefaults, when the user asks for a known state. They carried separate
 // literals in separate idioms until the two disagreed. Reset sent
-// ShadowMultiplier to 1 while a missing key meant 2 to both loadFromIni and
-// src/core/shadow_res.cpp, so pressing Reset turned the shadow fix off and
-// nothing said so. One struct read twice cannot drift that way.
+// ShadowMultiplier to 1 while a missing key left the multiplier on, to both
+// loadFromIni and src/core/shadow_res.cpp, so pressing Reset turned the shadow
+// fix off and nothing said so. One struct read twice cannot drift that way.
 //
 // Capability-driven values stay capability-driven: `smaa` is the running game's
 // own matrix cell rather than a flat true, so this does not become a second
@@ -1101,7 +1101,7 @@ Defaults defaults() {
   d.ssaa = "100";
   // What a missing key means to src/core/shadow_res.cpp. Reset has to agree
   // with it, or Reset is how a player turns the shadow fix off by accident.
-  d.shadow = "2";
+  d.shadow = "4";
   d.skipLogos = false;
   d.skipMovie = false;
   d.skipLauncher = false;

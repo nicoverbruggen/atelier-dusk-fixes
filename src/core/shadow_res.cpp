@@ -127,10 +127,13 @@ ID3D11DepthStencilView* twinDsvFor(ID3D11DepthStencilView* hostDsv) {
 
 unsigned int shadowMapResolution() {
   static const unsigned int resolution = [] () -> unsigned int {
-    // 2 when the key is missing, matching what the launcher writes and the
+    // 4 when the key is missing, matching what the launcher writes and the
     // Arland project. A player who deletes the key gets the feature, not the
-    // vanilla path.
-    const int multiplier = duskConfigInt("Rendering", "ShadowMultiplier", 2);
+    // vanilla path. 2048 is too small to correct the blocky edges at the
+    // resolutions this mod renders at; 8192 costs 512 MiB of video memory for
+    // the twin pair against 128 here, so it stays a choice rather than the
+    // default.
+    const int multiplier = duskConfigInt("Rendering", "ShadowMultiplier", 4);
     if (multiplier == 2 || multiplier == 4 || multiplier == 8)
       return 1024u * unsigned(multiplier);
     return 1024u;   // any other value is the vanilla path, byte for byte

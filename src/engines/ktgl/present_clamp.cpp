@@ -174,6 +174,9 @@ bool compositeViewportSize(ID3D11DeviceContext*, unsigned int* width,
 
 }  // namespace
 
+// This decides whether the KTGL supersampling clamp route runs at all. Only the
+// DUSK_PRESENT_CLAMP environment override is optional; deleting this function
+// deletes the feature, which is not what its switch's name suggests.
 bool ktglPresentClampEnabled() {
   static const bool on = [] {
     // The env switch forces it on for an experiment on any engine.

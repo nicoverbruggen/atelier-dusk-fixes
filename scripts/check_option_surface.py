@@ -163,35 +163,43 @@ def parse_matrix():
     differing between them.
     """
     text = (ROOT / "src" / "core" / "game.cpp").read_text(encoding="utf-8")
+    # Descriptor rows carry their Feature's name in a comment, and support rows
+    # name their Feature outright, so the two are paired BY NAME rather than by
+    # position. The previous form paired them by index across two separate
+    # tables, which is the drift the support table was reshaped to remove.
     rows = re.findall(
+        r'/\*\s*(\w+)\s*\*/\s*'
         r'\{\s*"(DUSK_[A-Z_0-9]+)",\s*(?:"(\w+)"|nullptr),\s*(?:"(\w+)"|nullptr)\s*\}',
         text,
     )
-    grids = [
-        [c.strip() for c in m.split(",") if c.strip()]
-        for m in re.findall(r"constexpr Support k\w+\[\]\s*=\s*\{([^}]*)\}", text)
-    ]
-    grids = [g for g in grids if g and all(c in ("X", "O", "U") for c in g)]
-    if len(grids) != len(GAMES) or len({len(g) for g in grids}) != 1:
+    support = re.findall(
+        r"\{\s*Feature::(\w+),\s*Ayesha\(([XOU])\),\s*Escha\(([XOU])\),"
+        r"\s*Shallie\(([XOU])\)\s*\}",
+        text,
+    )
+    if not rows or len(support) != len(rows):
+        return None
+    cells = {name: (a, e, s) for name, a, e, s in support}
+    if len(cells) != len(support):
         return None
 
     per_game = [{} for _ in GAMES]
-    columns = {}
-    for index, (env, section, key) in enumerate(rows):
-        if index >= len(grids[0]):
-            continue
-        columns[env] = index
+    by_env = {}
+    for feature, env, section, key in rows:
+        if feature not in cells:
+            return None
+        by_env[env] = cells[feature]
         if not section or not key:
             continue
-        for game, grid in enumerate(grids):
-            per_game[game][(section, key)] = grid[index]
+        for game in range(len(GAMES)):
+            per_game[game][(section, key)] = cells[feature][game]
 
     for entry, env in KEYLESS_ROWS.items():
-        index = columns.get(env)
-        if index is None:
+        cell = by_env.get(env)
+        if cell is None:
             return None
-        for game, grid in enumerate(grids):
-            per_game[game][entry] = grid[index]
+        for game in range(len(GAMES)):
+            per_game[game][entry] = cell[game]
     return per_game
 
 

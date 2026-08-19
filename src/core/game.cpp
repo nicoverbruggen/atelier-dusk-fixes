@@ -70,7 +70,7 @@ const Descriptor& descriptor(Feature f) {
   static const Descriptor table[static_cast<int>(Feature::Count)] = {
     /* AtlasVerify     */ { "DUSK_ATLAS_VERIFY",      nullptr, nullptr },
     /* TargetCensus    */ { "DUSK_TARGET_CENSUS",     nullptr, nullptr },
-    /* HighRes         */ { "DUSK_HIGHRES",           nullptr, nullptr },
+    /* HighResRendering */ { "DUSK_HIGHRES",           nullptr, nullptr },
     /* AtlasCache      */ { "DUSK_ATLAS_CACHE",       nullptr, nullptr },
     /* FieldEngineFix  */ { "DUSK_FIELD_ENGINE_FIX",  nullptr, nullptr },
     /* Smaa            */ { "DUSK_SMAA",     "Rendering", "SMAA" },
@@ -136,11 +136,7 @@ const Descriptor& descriptor(Feature f) {
     /* WorkerIdleSleep */
                           { "DUSK_WORKER_IDLE_SLEEP", nullptr, nullptr },
     /* FieldSlopeHold */  { "DUSK_SLOPE_HOLD", "Debug", "SlopeHold" },
-    // Keyless and valued, the same shape as WorkerIdleSleep above: the switch
-    // carries the millisecond count and present_throttle.cpp reads it directly,
-    // so this cell only says which games are missing the throttle. A defect
-    // correction rather than a preference, and one whose correct value the
-    // engine states itself.
+    // Same shape as WorkerIdleSleep above; the record is in present_throttle.h.
     /* MinimizedThrottle */
                           { "DUSK_MINIMIZED_THROTTLE", nullptr, nullptr },
   };
@@ -164,33 +160,68 @@ constexpr Support X = Support::OnByDefault;
 // switch, DUSK_<FEATURE>=0, which is what an A/B or a bug report wants. See the
 // note on Descriptor above for why a correction does not become a setting.
 //
-// The rows are three separate arrays of DEDUCED extent rather than one
-// `[3][Count]` block, and that is deliberate. With the width declared, a short
-// row is not an error: the trailing entries are value-initialized and
-// Unsupported is the zero value, so a row that has lost a column reads as a
-// deliberate "this game does not get it". Taking the extent from the
-// initializer instead makes each static_assert below fail loudly the next time
-// a Feature is added without extending every row.
-//                               Verfy Targt HiRes Cache Field Smaa  Ssaa  WMap  Logo  Movi  Typo  SysSv PadRe Synth ShdMl Pull  Talk  Lbox  Idle  Slope
-constexpr Support kAyesha[]  = { O,    O,    X,    X,    X,    X,    O,    X,    O,    O,    U,    U,    X,    X,    X,    X,    X,    U,    X,    U,    U };
-constexpr Support kEscha[]   = { U,    O,    U,    U,    U,    X,    O,    X,    O,    O,    X,    X,    X,    X,    U,    U,    U,    X,    U,    X,    X };
-constexpr Support kShallie[] = { U,    O,    U,    U,    U,    X,    O,    U,    O,    O,    X,    X,    X,    X,    U,    U,    U,    X,    U,    U,    X };
+// One row per Feature. Each row names its Feature, and each cell names the game
+// it answers for -- and the three games are DISTINCT TYPES, so putting Escha's
+// answer in Shallie's column does not compile.
+//
+// The previous form was three bare positional arrays under a hand-maintained
+// list of abbreviated column names. Nothing checked that list against the
+// columns, and by the time this replaced it, it carried twenty names over
+// twenty-one columns.
+struct AyeshaCell  { Support value; };
+struct EschaCell   { Support value; };
+struct ShallieCell { Support value; };
 
-constexpr std::size_t kColumns = static_cast<std::size_t>(Feature::Count);
-static_assert(std::size(kAyesha) == kColumns,  "Ayesha row is not one entry per Feature");
-static_assert(std::size(kEscha) == kColumns,   "Escha row is not one entry per Feature");
-static_assert(std::size(kShallie) == kColumns, "Shallie row is not one entry per Feature");
+constexpr AyeshaCell  Ayesha(Support s)  { return { s }; }
+constexpr EschaCell   Escha(Support s)   { return { s }; }
+constexpr ShallieCell Shallie(Support s) { return { s }; }
 
-constexpr const Support* kMatrix[3] = { kAyesha, kEscha, kShallie };
+struct SupportRow {
+  Feature feature;
+  AyeshaCell ayesha;
+  EschaCell escha;
+  ShallieCell shallie;
+};
 
-int titleRow(Title t) {
-  switch (t) {
-    case Title::Ayesha:  return 0;
-    case Title::Escha:   return 1;
-    case Title::Shallie: return 2;
-    default: return -1;
+constexpr SupportRow kSupport[] = {
+  { Feature::AtlasVerify,            Ayesha(O), Escha(U), Shallie(U) },
+  { Feature::TargetCensus,           Ayesha(O), Escha(O), Shallie(O) },
+  { Feature::HighResRendering,       Ayesha(X), Escha(U), Shallie(U) },
+  { Feature::AtlasCache,             Ayesha(X), Escha(U), Shallie(U) },
+  { Feature::FieldEngineFix,         Ayesha(X), Escha(U), Shallie(U) },
+  { Feature::Smaa,                   Ayesha(X), Escha(X), Shallie(X) },
+  { Feature::Supersampling,          Ayesha(O), Escha(O), Shallie(O) },
+  { Feature::WorldMapCursor,         Ayesha(X), Escha(X), Shallie(U) },
+  { Feature::SkipStartupLogos,       Ayesha(O), Escha(O), Shallie(O) },
+  { Feature::SkipIntroMovie,         Ayesha(O), Escha(O), Shallie(O) },
+  { Feature::LoadingTextTypo,        Ayesha(U), Escha(X), Shallie(X) },
+  { Feature::SystemSaveGuard,        Ayesha(U), Escha(X), Shallie(X) },
+  { Feature::PadRescanBackoff,       Ayesha(X), Escha(X), Shallie(X) },
+  { Feature::SynthesisAnimationRate, Ayesha(X), Escha(X), Shallie(X) },
+  { Feature::ShadowMultiplier,       Ayesha(X), Escha(U), Shallie(U) },
+  { Feature::FieldCharacterPull,     Ayesha(X), Escha(U), Shallie(U) },
+  { Feature::TalkAnchorHold,         Ayesha(X), Escha(U), Shallie(U) },
+  { Feature::Letterbox,              Ayesha(U), Escha(X), Shallie(X) },
+  { Feature::WorkerIdleSleep,        Ayesha(X), Escha(U), Shallie(U) },
+  { Feature::FieldSlopeHold,         Ayesha(U), Escha(X), Shallie(U) },
+  { Feature::MinimizedThrottle,      Ayesha(U), Escha(X), Shallie(X) },
+};
+
+static_assert(std::size(kSupport) == static_cast<std::size_t>(Feature::Count),
+              "the support table is not one row per Feature");
+
+// Every row must sit at its own Feature's index. That is what lets the lookup
+// index directly, and what catches a row inserted or moved without its
+// neighbours -- the failure the old positional form could not see.
+constexpr bool supportRowsInEnumOrder() {
+  for (std::size_t i = 0; i < std::size(kSupport); ++i) {
+    if (static_cast<std::size_t>(kSupport[i].feature) != i)
+      return false;
   }
+  return true;
 }
+static_assert(supportRowsInEnumOrder(),
+              "a support row is not at its own Feature's index");
 
 }  // namespace
 
@@ -226,10 +257,13 @@ const char* titleName(Title t) {
 }
 
 Support featureSupport(Feature f) {
-  const int row = titleRow(currentTitle());
-  if (row < 0)
-    return Support::Unsupported;
-  return kMatrix[row][static_cast<int>(f)];
+  const SupportRow& row = kSupport[static_cast<std::size_t>(f)];
+  switch (currentTitle()) {
+    case Title::Ayesha:  return row.ayesha.value;
+    case Title::Escha:   return row.escha.value;
+    case Title::Shallie: return row.shallie.value;
+    default:             return Support::Unsupported;
+  }
 }
 
 bool featureEnabled(Feature f) {

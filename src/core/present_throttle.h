@@ -31,8 +31,16 @@
 // the sibling engine's own number, 33 ms, rather than inventing a rate.
 //
 // 33 ms is a THROTTLE, NOT A STOP. The game still renders about 30 frames a
-// second while hidden, which is exactly what the four PhyreEngine games do
-// today. Anything driven from the frame loop keeps running, only slower.
+// second while hidden. Anything driven from the frame loop keeps running, only
+// slower.
+//
+// That figure is measured on both sides rather than taken from the constant.
+// Ayesha runs the engine's own throttle with this correction disabled -- its
+// matrix cell is Unsupported, so nothing here sleeps for it -- and reports 28
+// to 29 fps hidden against 156 visible. Escha with this correction reports 28,
+// flat across fifteen samples, against 620 without it. The two agree because
+// they are the same 33 ms, which is the point: this restores the sibling
+// behaviour rather than choosing a rate of its own.
 //
 // WHY BOTH SIGNALS. The HRESULT alone was enough in every measurement, but
 // every one of those ran through DXVK, and DXVK's occlusion reporting is its

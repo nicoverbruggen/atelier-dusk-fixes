@@ -73,6 +73,7 @@ else
     'src/core/d3d11_hooks.cpp',
     'src/core/highres.cpp',
     'src/core/letterbox.cpp',
+  'src/core/present_throttle.cpp',
     'src/core/mix_card.cpp',
     'src/core/pad_rescan.cpp',
     'src/core/pad_notify_trace.cpp',

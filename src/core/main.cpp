@@ -29,6 +29,7 @@
 #include "sharpen.h"
 #include "smaa.h"
 #include "letterbox.h"
+#include "present_throttle.h"
 #include "supersample.h"
 #include "supersample_policy.h"
 #include "util.h"
@@ -177,7 +178,12 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* swapChain,
   // times before this line, SMAA's own passes among them. A no-op on a 16:9 back
   // buffer and on any game whose matrix row declines.
   letterboxApply(swapChain);
-  return originalPresent(swapChain, syncInterval, flags);
+  const HRESULT result = originalPresent(swapChain, syncInterval, flags);
+  // Last of everything, after the frame has gone: pace the loop when it went
+  // nowhere. KTGL dropped the throttle PhyreEngine carries; see
+  // present_throttle.h.
+  presentThrottleAfterPresent(swapChain, result);
+  return result;
 }
 
 // The engine resizes its own swap chain during device init, so clamping only at

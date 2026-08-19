@@ -23,6 +23,7 @@ Corrective fixes are enabled by default wherever they apply. Options that delibe
 | Fixed some typos                           |   —    |      ✓       |    ✓    |
 | Fixed "system data" corruption bug         |   —    |      ✓       |    ✓    |
 | Correct picture shape on non-16:9 displays |   —    |      ✓       |    ✓    |
+| Lower GPU use while minimized              |   —    |      ✓       |    ✓    |
 | Optional startup logo and intro-movie skip |   ✓    |      ✓       |    ✓    |
 | Various game-specific bug fixes            |   ✓    |      ✓       |    ✓    |
 | Local crash logging                        |   ✓    |      ✓       |    ✓    |

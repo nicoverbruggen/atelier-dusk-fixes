@@ -716,9 +716,15 @@ void STDMETHODCALLTYPE hookedDrawIndexedInstanced(
   scenePolicy().afterDraw(self);
 }
 
+// Defined below, beside noteSwapChainSize, which is the other place it runs.
+void seedMainSizeFromSwapChain();
+
 HighResWants highResResolveWants() {
   g_fixEnabled = featureEnabled(Feature::HighResRendering);
   g_censusEnabled = featureEnabled(Feature::TargetCensus);
+  // g_fixEnabled is only true from here on, so a swap chain reported before
+  // this point was seen with the seed still gated off. Retry it now.
+  seedMainSizeFromSwapChain();
   return HighResWants{ g_fixEnabled || g_censusEnabled, g_fixEnabled };
 }
 
@@ -767,10 +773,49 @@ bool highResSwapChainSize(unsigned int* width, unsigned int* height) {
   return unpackSize(g_swapSize.load(std::memory_order_acquire), width, height);
 }
 
+// Called from BOTH orderings on purpose. The two device entry points record the
+// swap size and install the hooks in opposite orders -- D3D11CreateDevice
+// installs first and the factory hook reports the chain later, while
+// D3D11CreateDeviceAndSwapChain reports the chain before it installs -- so
+// whichever of the two facts arrives second is the one that completes this.
+void seedMainSizeFromSwapChain() {
+  if (!g_fixEnabled)
+    return;
+  const uint64_t swap = g_swapSize.load(std::memory_order_acquire);
+  if (!swap)
+    return;
+  unsigned int width = 0;
+  unsigned int height = 0;
+  unpackSize(swap, &width, &height);
+  uint64_t noMainSize = 0;
+  if (g_mainSize.compare_exchange_strong(noMainSize, swap,
+        std::memory_order_release, std::memory_order_relaxed))
+    log("HIGHRES: main render size ", std::dec, width, "x", height,
+        " (from the swap chain)");
+}
+
 void noteSwapChainSize(unsigned int width, unsigned int height,
                        unsigned int format, unsigned int refreshNumerator,
                        unsigned int refreshDenominator, bool windowed) {
   g_swapSize.store(packSize(width, height), std::memory_order_release);
+  // Record the main size here rather than waiting to recognise it from a
+  // texture. looksLikeMainTarget already treats "matches the swap chain" as the
+  // definition of the main target, so this is not a new judgement, it is the
+  // same answer written down as soon as it is known. Until g_mainSize is set,
+  // highResSceneSize returns false and every target created meanwhile is
+  // classified against nothing and silently left at its original size.
+  //
+  // It also stops the loose fallback below deciding anything once the real
+  // answer exists. That fallback takes any depth-stencil of at least 1920x1080
+  // whose shape is exactly 16:9, which the engine's own hard-coded 1080p target
+  // satisfies, so a session where the main target was never recognised would
+  // adopt 1080p as the main size and scale the whole scene against it.
+  //
+  // Safe on the only game that runs this: HighResRendering is Ayesha's row
+  // alone and Letterbox is Unsupported there, so the rendered picture always
+  // fills the swap chain. On the KTGL games, where a letterboxed frame is
+  // smaller than the chain it sits in, this module is not enabled at all.
+  seedMainSizeFromSwapChain();
   static bool logged = false;
   if (logged)
     return;

@@ -60,7 +60,7 @@ enum class Feature : uint8_t {
   FieldCharacterPull,     // Ayesha: stop character separation pulling bodies together
   TalkAnchorHold,         // Ayesha: hold a talking character at its conversation anchor
   Letterbox,              // KTGL: render 16:9 and bar the rest on a non-16:9 display
-  WorkerIdleSleep,        // Ayesha: shorten the idle poll a scene transition joins
+  WorkerIdleSleep,        // shorten the idle poll a transition joins; off everywhere
   FieldSlopeHold,         // KTGL: hold a standing player still on a slope
   MinimizedThrottle,      // KTGL: pace the render loop while the window is hidden
   Count,

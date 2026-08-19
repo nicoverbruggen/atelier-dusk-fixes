@@ -37,6 +37,27 @@
 // AYESHA ONLY IN THIS PROJECT, because the worker is PhyreEngine's. Searching
 // for the six-byte `mov ecx, 0x1f4 / call` sequence returns exactly one hit in
 // each of the four PhyreEngine executables and zero in Escha and Shallie.
+//
+// TURNED OFF FOR AYESHA on 2026-08-19, so the whole row is now Unsupported and
+// nothing in this project installs it. Ayesha stuttered intermittently in play
+// with it on, and the stutters stopped in the session after it was withdrawn.
+// Nothing else differs between those two builds -- the shaders, the passes and
+// their preloads are identical, and the only change is the capability cell that
+// stops this detour installing -- so the shader-compilation explanation that
+// was also on the table is eliminated by the comparison rather than left open.
+//
+// That is one session against an intermittent symptom, so it is a suspicion
+// rather than a finding. It is enough to withdraw on: the fix had never been
+// validated here in the first place, because unlike the three Arland games
+// Ayesha has no transition measurement at all, the Dusk project carrying no
+// drain instrumentation to make one.
+//
+// The Arland projects keep it, where it is measured on all three games and on
+// two platforms. Nothing about that is in question.
+//
+// To pick this up again: give Ayesha its cell back, and get a number first.
+// `DUSK_WORKER_IDLE_SLEEP` still overrides the milliseconds, so the code path
+// is intact and only the capability cell stands in the way.
 namespace atfix {
 
 // Installs the override. Declines, with a logged reason, when the feature is

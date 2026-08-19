@@ -202,7 +202,7 @@ constexpr SupportRow kSupport[] = {
   { Feature::FieldCharacterPull,     Ayesha(X), Escha(U), Shallie(U) },
   { Feature::TalkAnchorHold,         Ayesha(X), Escha(U), Shallie(U) },
   { Feature::Letterbox,              Ayesha(U), Escha(X), Shallie(X) },
-  { Feature::WorkerIdleSleep,        Ayesha(X), Escha(U), Shallie(U) },
+  { Feature::WorkerIdleSleep,        Ayesha(U), Escha(U), Shallie(U) },
   { Feature::FieldSlopeHold,         Ayesha(U), Escha(X), Shallie(U) },
   { Feature::MinimizedThrottle,      Ayesha(U), Escha(X), Shallie(X) },
 };

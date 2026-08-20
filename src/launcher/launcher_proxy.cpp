@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
 // 32-bit MSIMG32 proxy for the Dusk front-ends. Ported from the Arland project's
-// src/launcher/launcher_proxy.cpp, which is where every load-bearing decision below was
+// src/launcher/launcher_proxy.cpp, which is where every decision below was
 // learned; this file changes the names it matches on and nothing about the
 // mechanism.
 //
@@ -67,8 +67,8 @@ bool hostExeName(std::array<wchar_t, 32768>& path, const wchar_t** name) {
 // is what keeps the Steam session, the overlay and Steam Input attached either
 // way.
 //
-// Two things about *when* and *for how long* this happens are load-bearing, and
-// both were learned the hard way in the Arland project:
+// Two things decide whether this works, *when* it happens and *for how long*,
+// and both were learned the hard way in the Arland project:
 //
 //  - It must not happen in DllMain. This DLL is a static import of the
 //    launcher, so its process attach runs before the executable's entry point

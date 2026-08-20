@@ -588,7 +588,13 @@ void smaaPreload() {
 }
 
 bool smaaEnabled() {
-  return featureEnabled(Feature::Smaa);
+  // Cached, like every sibling in this tree. featureEnabled does an uncached
+  // getenv and, because this feature carries an ini key, a
+  // GetPrivateProfileStringA on every call -- and this is read three times a
+  // frame. smaaPreUiEnabled already latches this answer inside its own static,
+  // so caching here changes nothing about when the value is decided.
+  static const bool enabled = featureEnabled(Feature::Smaa);
+  return enabled;
 }
 
 bool smaaApplySceneColor(ID3D11DeviceContext* ctx, ID3D11Texture2D* scene) {

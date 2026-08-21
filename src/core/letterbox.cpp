@@ -158,7 +158,13 @@ bool letterboxApply(IDXGISwapChain* swapChain) {
 // them, and on Ayesha the frame came out correctly proportioned without it,
 // which is why that row is Unsupported.
 bool letterboxEnabled() {
-  return featureEnabled(Feature::Letterbox);
+  // Resolved once. letterboxPreload and letterboxApply both reach this from
+  // the hooked Present, so an uncached read is two trips through
+  // featureEnabled() per frame -- a getenv and a GetPrivateProfileString that
+  // also seeds the key when it is absent. The rule that hooks on the render
+  // thread touch neither is stated in engines/phyre/logo_skip.cpp.
+  static const bool enabled = featureEnabled(Feature::Letterbox);
+  return enabled;
 }
 
 bool letterboxActive() {

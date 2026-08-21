@@ -90,7 +90,11 @@ constexpr float kHoldEpsilon = 1.0e-6f;
 thread_local bool t_holdThisCharacter = false;
 
 bool fixEnabled() {
-  return featureEnabled(Feature::FieldSlopeHold);
+  // Resolved once. shouldHold runs per character per collision step, and hooks
+  // on that thread must not touch the ini or the environment; the rule is
+  // stated in ../phyre/logo_skip.cpp. featureEnabled() reaches both.
+  static const bool enabled = featureEnabled(Feature::FieldSlopeHold);
+  return enabled;
 }
 
 bool traceEnabled() {

@@ -34,7 +34,11 @@ std::atomic<int64_t> g_nextAttemptNanos{0};
 constexpr int64_t kBackoffNanos = 3'000'000'000;   // 3 s
 
 bool fixEnabled() {
-  return featureEnabled(Feature::PadRescanBackoff);
+  // Resolved once. tracedPadCreate runs on the engine's controller poll, and
+  // hooks on that thread must not touch the ini or the environment; the rule is
+  // stated in engines/phyre/logo_skip.cpp. featureEnabled() reaches both.
+  static const bool enabled = featureEnabled(Feature::PadRescanBackoff);
+  return enabled;
 }
 
 void* STDMETHODCALLTYPE tracedPadCreate(uintptr_t self) {

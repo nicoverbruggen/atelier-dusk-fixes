@@ -150,7 +150,12 @@ void showUnreadableSystemData() {
 }
 
 bool fixEnabled() {
-  return featureEnabled(Feature::SystemSaveGuard);
+  // Resolved once. All three detours below reach this per save or load step,
+  // and hooks on the engine thread must not touch the ini or the environment;
+  // the rule is stated in ../phyre/logo_skip.cpp. featureEnabled() reaches
+  // both, and a save step is the worst moment to add file I/O of our own.
+  static const bool enabled = featureEnabled(Feature::SystemSaveGuard);
+  return enabled;
 }
 
 // Load and save share this object. A false result means the discriminator could

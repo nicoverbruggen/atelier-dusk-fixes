@@ -50,7 +50,13 @@ const float kRate = bitsToFloat(0x426FC28Fu);
 constexpr float kDriftFloor = -1.0f;
 
 bool fixEnabled() {
-  return featureEnabled(Feature::SynthesisAnimationRate);
+  // Resolved once. This runs on the engine thread on every Card::Update, and
+  // hooks on that thread must not touch the ini or the environment; the rule
+  // is stated in engines/phyre/logo_skip.cpp. featureEnabled() reaches both --
+  // a getenv, then a GetPrivateProfileString that also seeds the key when it
+  // is absent -- so an uncached read here is file I/O per card update.
+  static const bool enabled = featureEnabled(Feature::SynthesisAnimationRate);
+  return enabled;
 }
 
 bool STDMETHODCALLTYPE tracedCardUpdate(uintptr_t self, float dt) {

@@ -108,7 +108,12 @@ const WorldMapAddrs* g_addrs = nullptr;
 thread_local float g_updateDt = 0.0f;
 
 bool fixEnabled() {
-  return featureEnabled(Feature::WorldMapCursor);
+  // Resolved once, as in the Arland original this was ported from. The mover
+  // runs on the engine thread every frame the world map is up, and hooks on
+  // that thread must not touch the ini or the environment; the rule is stated
+  // in logo_skip.cpp. featureEnabled() reaches both.
+  static const bool enabled = featureEnabled(Feature::WorldMapCursor);
+  return enabled;
 }
 
 float distance3(const Vec4& a, const Vec4& b) {

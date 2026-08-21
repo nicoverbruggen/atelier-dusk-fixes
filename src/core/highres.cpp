@@ -403,6 +403,32 @@ bool takeRasterDirty(ID3D11DeviceContext* context) {
 }
 
 
+// Every counter in this file is read only by highResFrameTick, which returns
+// immediately when the census is off, so none of them may do work in that case.
+// The gate is not redundant with the feature gates around it: the draw and
+// raster detours stay installed for the supersampling composite correction, so
+// on Escha & Logy and Shallie they run in a shipped build with both this fix
+// and the census off. An ungated increment there is per-draw work nothing reads.
+// sampleRaster below takes the same gate for the same reason.
+void censusCount(std::atomic<uint64_t>& counter) {
+  if (g_censusEnabled)
+    counter.fetch_add(1, std::memory_order_relaxed);
+}
+
+// The two counters that record a peak rather than a tally, sharing one CAS loop
+// because they were written twice and drifting copies of a retry loop is how a
+// memory order ends up different in one of them.
+template <typename T>
+void censusMax(std::atomic<T>& counter, T value) {
+  if (!g_censusEnabled)
+    return;
+  T previous = counter.load(std::memory_order_relaxed);
+  while (value > previous &&
+         !counter.compare_exchange_weak(previous, value,
+                                        std::memory_order_relaxed)) {
+  }
+}
+
 // The size of whatever is bound as render target 0, or depth-stencil if there
 // is no colour target. Nothing is assumed about which of the two is present.
 // Draws counted by the sample count of the target they landed on. This is the
@@ -434,14 +460,10 @@ bool boundTargetSize(ID3D11DeviceContext* context, UINT* width, UINT* height) {
       *height = desc.Height;
       found = true;
       if (desc.SampleDesc.Count > 1) {
-        g_drawsMultiSample.fetch_add(1, std::memory_order_relaxed);
-        uint64_t previous = g_maxBoundSamples.load(std::memory_order_relaxed);
-        while (desc.SampleDesc.Count > previous &&
-               !g_maxBoundSamples.compare_exchange_weak(previous,
-                 desc.SampleDesc.Count, std::memory_order_relaxed)) {
-        }
+        censusCount(g_drawsMultiSample);
+        censusMax(g_maxBoundSamples, uint64_t(desc.SampleDesc.Count));
       } else {
-        g_drawsSingleSample.fetch_add(1, std::memory_order_relaxed);
+        censusCount(g_drawsSingleSample);
       }
       texture->Release();
     }
@@ -478,11 +500,7 @@ std::atomic<uint64_t> g_targetLookupFails{0};
 std::atomic<uint32_t> g_maxRasterCount{0};
 
 void noteRasterCount(UINT count) {
-  uint32_t previous = g_maxRasterCount.load(std::memory_order_relaxed);
-  while (count > previous &&
-         !g_maxRasterCount.compare_exchange_weak(previous, count,
-                                                 std::memory_order_relaxed)) {
-  }
+  censusMax(g_maxRasterCount, uint32_t(count));
 }
 
 // The first few distinct (viewport, scissor, bound target) combinations, logged
@@ -538,7 +556,7 @@ void sampleRaster(const D3D11_VIEWPORT& viewport, const D3D11_RECT& scissor,
 void updateViewportScissor(ID3D11DeviceContext* context) {
   if (!takeRasterDirty(context))
     return;
-  g_updatesEntered.fetch_add(1, std::memory_order_relaxed);
+  censusCount(g_updatesEntered);
 
   UINT viewportCount = 1;
   UINT scissorCount = 1;
@@ -571,7 +589,7 @@ void updateViewportScissor(ID3D11DeviceContext* context) {
   const bool haveTarget = boundTargetSize(context, &targetWidth, &targetHeight);
   sampleRaster(viewport, scissor, targetWidth, targetHeight, haveTarget);
   if (!haveTarget) {
-    g_targetLookupFails.fetch_add(1, std::memory_order_relaxed);
+    censusCount(g_targetLookupFails);
     return;
   }
 
@@ -604,11 +622,11 @@ void updateViewportScissor(ID3D11DeviceContext* context) {
   const ContextOriginals& originals = d3d11OriginalsFor(context);
   if (rewroteViewport && originals.rsSetViewports) {
     originals.rsSetViewports(context, 1, &viewport);
-    g_viewportRewrites.fetch_add(1, std::memory_order_relaxed);
+    censusCount(g_viewportRewrites);
   }
   if (rewroteScissor && originals.rsSetScissorRects) {
     originals.rsSetScissorRects(context, 1, &scissor);
-    g_scissorRewrites.fetch_add(1, std::memory_order_relaxed);
+    censusCount(g_scissorRewrites);
   }
 }
 
@@ -628,7 +646,7 @@ void updateViewportScissor(ID3D11DeviceContext* context) {
 void STDMETHODCALLTYPE hookedRSSetViewports(
     ID3D11DeviceContext* self, UINT count, const D3D11_VIEWPORT* viewports) {
   d3d11OriginalsFor(self).rsSetViewports(self, count, viewports);
-  g_rsViewportCalls.fetch_add(1, std::memory_order_relaxed);
+  censusCount(g_rsViewportCalls);
   noteRasterCount(count);
   if (g_fixEnabled && count == 1)
     markRasterDirty(self);
@@ -637,7 +655,7 @@ void STDMETHODCALLTYPE hookedRSSetViewports(
 void STDMETHODCALLTYPE hookedRSSetScissorRects(
     ID3D11DeviceContext* self, UINT count, const D3D11_RECT* rects) {
   d3d11OriginalsFor(self).rsSetScissorRects(self, count, rects);
-  g_rsScissorCalls.fetch_add(1, std::memory_order_relaxed);
+  censusCount(g_rsScissorCalls);
   noteRasterCount(count);
   if (g_fixEnabled && count == 1)
     markRasterDirty(self);
@@ -648,7 +666,7 @@ void STDMETHODCALLTYPE hookedRSSetScissorRects(
 // once per raster change rather than once per draw.
 void STDMETHODCALLTYPE hookedDraw(
     ID3D11DeviceContext* self, UINT vertexCount, UINT startVertex) {
-  g_drawCalls.fetch_add(1, std::memory_order_relaxed);
+  censusCount(g_drawCalls);
   if (g_fixEnabled)
     updateViewportScissor(self);
   // The other engine's correction. Ayesha's is above and enlarges the viewport
@@ -665,7 +683,7 @@ void STDMETHODCALLTYPE hookedDraw(
 void STDMETHODCALLTYPE hookedDrawIndexed(
     ID3D11DeviceContext* self, UINT indexCount, UINT startIndex,
     INT baseVertex) {
-  g_drawCalls.fetch_add(1, std::memory_order_relaxed);
+  censusCount(g_drawCalls);
   if (g_fixEnabled)
     updateViewportScissor(self);
   // The other engine's correction. Ayesha's is above and enlarges the viewport
@@ -682,7 +700,7 @@ void STDMETHODCALLTYPE hookedDrawIndexed(
 void STDMETHODCALLTYPE hookedDrawInstanced(
     ID3D11DeviceContext* self, UINT vertexCountPerInstance, UINT instanceCount,
     UINT startVertex, UINT startInstance) {
-  g_drawCalls.fetch_add(1, std::memory_order_relaxed);
+  censusCount(g_drawCalls);
   if (g_fixEnabled)
     updateViewportScissor(self);
   // The other engine's correction. Ayesha's is above and enlarges the viewport
@@ -700,7 +718,7 @@ void STDMETHODCALLTYPE hookedDrawInstanced(
 void STDMETHODCALLTYPE hookedDrawIndexedInstanced(
     ID3D11DeviceContext* self, UINT indexCountPerInstance, UINT instanceCount,
     UINT startIndex, INT baseVertex, UINT startInstance) {
-  g_drawCalls.fetch_add(1, std::memory_order_relaxed);
+  censusCount(g_drawCalls);
   if (g_fixEnabled)
     updateViewportScissor(self);
   // The other engine's correction. Ayesha's is above and enlarges the viewport

@@ -76,7 +76,6 @@ else
   'src/core/present_throttle.cpp',
     'src/core/mix_card.cpp',
     'src/core/pad_rescan.cpp',
-    'src/core/pad_notify_trace.cpp',
     'src/core/scene_pass.cpp',
     'src/core/shadow_res.cpp',
     'src/core/sharpen.cpp',

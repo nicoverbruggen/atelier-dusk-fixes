@@ -21,7 +21,6 @@
 #include "worldmap_fix.h"
 #include "../../core/game.h"
 #include "../../core/mix_card.h"
-#include "../../core/pad_notify_trace.h"
 #include "../../core/pad_rescan.h"
 #include "../../core/log.h"
 #include "../../../vendor/minhook/include/MinHook.h"
@@ -191,13 +190,6 @@ bool initializePhyreFixes() {
       { g_game->mixCardUpdateRva,
         { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74,
           0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x30, 0xf3 } });
-
-    // Observes the rescan's other half and installs nothing: it asks whether a
-    // controller arriving under Proton is announced to this process, which is
-    // what would let the rescan be suppressed outright instead of rate-limited.
-    // Off unless DUSK_PAD_NOTIFY_TRACE is set. Here rather than in DllMain
-    // because it starts a thread, which the loader lock forbids.
-    atfix::startPadNotifyTrace();
 
     // Recognition, not whether an address-based option happened to be enabled,
     // is the contract with core: true authorizes the shared D3D fix surface.

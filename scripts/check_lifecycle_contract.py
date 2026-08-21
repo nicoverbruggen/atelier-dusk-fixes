@@ -43,7 +43,7 @@ def main():
         core = ROOT / "src" / "core"
         main_cpp = (core / "main.cpp").read_text()
         crash = (core / "crash_log.cpp").read_text()
-        pad = (core / "pad_notify_trace.cpp").read_text()
+        save = (ROOT / "src" / "engines" / "ktgl" / "system_save_fix.cpp").read_text()
         log_h = (core / "log.h").read_text()
         lifetime = (core / "module_lifetime.cpp").read_text()
         meson = (ROOT / "meson.build").read_text()
@@ -68,28 +68,19 @@ def main():
             "crash callback is published before the DLL is retained",
         )
 
-        start = function_body(
-            pad, "void startPadNotifyTrace()", "pad trace starter"
+        # The one thread this DLL still starts. The invariant is the same one the
+        # pad probe used to carry: pin the module before publishing a thread that
+        # can outlive an unload, and never join it under the loader lock.
+        notice = function_body(
+            save, "void showUnreadableSystemData()", "unreadable-system-data notice"
         )
         before(
-            start, "retainModuleForProcessLifetime()", "CreateThread(",
-            "pad worker is created before the DLL is retained",
+            notice, "retainModuleForProcessLifetime()", "CreateThread(",
+            "system-data notice thread is created before the DLL is retained",
         )
-        before(
-            start, "HANDLE thread = CreateThread(", "g_thread = thread;",
-            "pad worker handle is published before CreateThread succeeds",
-        )
-        if "g_started" in pad or "g_finished" in pad:
-            raise ValueError("pad lifecycle still uses poisonable/signal-only state")
-
-        stop = function_body(
-            pad, "void stopPadNotifyTrace()", "pad trace stopper"
-        )
-        if "WaitForSingleObject(thread, kStopWaitMillis)" not in stop:
-            raise ValueError("pad stop no longer joins the actual worker thread")
         dll_main = function_body(main_cpp, "BOOL WINAPI DllMain(", "DllMain")
-        if "stopPadNotifyTrace" in dll_main:
-            raise ValueError("DllMain waits for the pad worker under loader lock")
+        if "CreateThread(" in dll_main or "WaitForSingleObject(" in dll_main:
+            raise ValueError("DllMain starts or joins a thread under loader lock")
 
         if "WriteFile(" not in log_h or "FlushFileBuffers(" not in log_h:
             raise ValueError("crash logger is not direct-write and flushable")
@@ -109,7 +100,7 @@ def main():
     except (OSError, ValueError) as exc:
         return fail(str(exc))
 
-    print("lifecycle contract ok: retained callbacks, joined worker, crash-safe log")
+    print("lifecycle contract ok: retained callbacks, pinned notice thread, crash-safe log")
     return 0
 
 

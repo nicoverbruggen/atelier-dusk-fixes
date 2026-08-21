@@ -179,7 +179,7 @@ def main():
         registration = phyre_init.find("registerPhyreSceneTarget();")
         if registration < recognition.end():
             raise ValueError("Phyre scene policy is registered before exact recognition")
-        notify = phyre_init.find("startPadNotifyTrace();")
+        notify = phyre_init.find("installPadRescanBackoff(")
         success = phyre_init.rfind("return true;")
         if notify < 0 or success < notify:
             raise ValueError(
